@@ -1,0 +1,793 @@
+import bcrypt from 'bcryptjs';
+import {validationResult} from 'express-validator';
+import User from '../models/User.js';
+import Category from '../models/Category.js';
+import Dedication from '../models/Dedication.js';
+import Service from '../models/Service.js';
+import DedicationSample from '../models/DedicationSample.js';
+import {createAccessToken, createRefreshToken, verifyRefreshToken} from '../utils/token.js';
+import {uploadFile} from '../utils/uploadFile.js';
+import {uploadVideo} from '../utils/uploadFile.js';
+import {generateUniqueBaroniId} from '../utils/baroniIdGenerator.js';
+import {initializeUserCoins} from '../services/transactionService.js';
+import DedicationRequest from '../models/DedicationRequest.js';
+import Availability from '../models/Availability.js';
+import Appointment from '../models/Appointment.js';
+import ContactSupport from '../models/ContactSupport.js';
+import Transaction from '../models/Transaction.js';
+import LiveShowAttendance from '../models/LiveShowAttendance.js';
+import mongoose from 'mongoose';
+import { normalizeContact } from '../utils/normalizeContact.js';
+
+const sanitizeUser = (user) => ({
+  id: user._id,
+  baroniId: user.baroniId,
+  contact: user.contact,
+  email: user.email,
+  name: user.name,
+  pseudo: user.pseudo,
+  profilePic: user.profilePic,
+  preferredLanguage: user.preferredLanguage,
+  preferredCurrency: user.preferredCurrency,
+  country: user.country,
+  about: user.about,
+  location: user.location,
+  profession: user.profession,
+  role: user.role,
+  availableForBookings: user.availableForBookings,
+  appNotification: user.appNotification,
+  hidden: user.hidden,
+  coinBalance: user.coinBalance,
+});
+
+export const register = async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ success: false, errors: errors.array() });
+    }
+
+  const { contact, email, password, role, fcmToken } = req.body;
+  const normalizedContact = typeof contact === 'string' ? normalizeContact(contact) : contact;
+
+    // Check if we have either contact or email
+    if (!contact && !email) {
+      return res.status(400).json({
+        success: false,
+        message: 'Either contact number or email is required'
+      });
+    }
+
+    // If email is provided, password is required
+    if (normalizedContact && !password) {
+      return res.status(400).json({
+        success: false,
+        message: 'Password is required when registering with contact'
+      });
+    }
+
+    const normalizedEmail = email ? email.toLowerCase() : undefined;
+    const orQueries = [];
+    if (normalizedEmail) orQueries.push({ email: normalizedEmail });
+    if (normalizedContact) orQueries.push({ contact: normalizedContact });
+
+    const existing = orQueries.length ? await User.findOne({ $or: orQueries }) : null;
+    if (existing) {
+      return res.status(409).json({
+        success: false,
+        message: 'Email or contact already in use'
+      });
+    }
+
+  // Do not generate baroni ID at registration; Baroni ID is for stars only
+
+    // Hash password only if provided, otherwise set to nul
+    let hashedPassword = null;
+    if (password) {
+      const salt = await bcrypt.genSalt(10);
+      hashedPassword = await bcrypt.hash(password, salt);
+    }
+
+  const user = await User.create({
+      contact: normalizedContact,
+      email: normalizedEmail,
+      password: hashedPassword,
+      role,
+      fcmToken
+    });
+
+    // Initialize user with 1000 coins
+    await initializeUserCoins(user._id);
+
+    // Auto-login
+    // Start a new session version
+    user.sessionVersion = (typeof user.sessionVersion === 'number' ? user.sessionVersion : 0) + 1;
+    await user.save();
+
+    const accessToken = createAccessToken({ userId: user._id, sessionVersion: user.sessionVersion });
+    const refreshToken = createRefreshToken({ userId: user._id, sessionVersion: user.sessionVersion });
+
+    return res.status(201).json({
+      success: true,
+      message: 'Registered successfully',
+      data: sanitizeUser(user),
+      tokens: { accessToken, refreshToken }
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+export const login = async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ success: false, errors: errors.array() });
+    }
+
+    const { contact, email, isMobile } = req.body;
+    const normalizedContact = typeof contact === 'string' ? normalizeContact(contact) : contact;
+    let user;
+
+    if (isMobile) {
+      if (!normalizedContact) return res.status(400).json({ success: false, message: 'Contact is required for mobile login' });
+      if (normalizedContact && !req.body.password) {
+        return res.status(400).json({
+          success: false,
+          message: 'Password is required when login with contact'
+        });
+      }
+      user = await User.findOne({ contact: normalizedContact });
+    } else {
+      // Email login - allow login with just email when isMobile is false
+      if (!email) return res.status(400).json({ success: false, message: 'Email is required for email login' });
+      user = await User.findOne({ email: email.toLowerCase() });
+    }
+
+    if (!user) {
+      return res.status(401).json({ success: false, message: 'User not found' });
+    }
+
+    // For mobile login, password is required
+    if (isMobile) {
+      if (!user.password && user.contact) {
+        return res.status(401).json({ success: false, message: 'Invalid credentials' });
+      }
+
+      if (req.body.password) {
+        const ok = await bcrypt.compare(req.body.password, user.password);
+        if (!ok) {
+          return res.status(401).json({ success: false, message: 'Invalid credentials' });
+        }
+      }
+    } else {
+      // For email login, password is optional
+      if (req.body.password && user.password) {
+        const ok = await bcrypt.compare(req.body.password, user.password);
+        if (!ok) {
+          return res.status(401).json({ success: false, message: 'Invalid credentials' });
+        }
+      }
+    }
+
+    // Increment sessionVersion to invalidate tokens from other devices
+    user.sessionVersion = (typeof user.sessionVersion === 'number' ? user.sessionVersion : 0) + 1;
+    await user.save();
+
+    const accessToken = createAccessToken({ userId: user._id, sessionVersion: user.sessionVersion });
+    const refreshToken = createRefreshToken({ userId: user._id, sessionVersion: user.sessionVersion });
+    return res.json({ success: true, data: sanitizeUser(user), tokens: { accessToken, refreshToken } });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+
+export const completeProfile = async (req, res) => {
+  try {
+    const user = req.user;
+    if (!user?._id) return res.status(401).json({ success: false, message: 'Unauthorized' });
+
+    const { name, pseudo, preferredLanguage, preferredCurrency, country, email, contact, about, location, profession, profilePic, availableForBookings, appNotification, hidden } = req.body;
+    let { dedications, services, dedicationSamples } = req.body;
+
+
+    if (pseudo) {
+      const exists = await User.exists({ _id: { $ne: user._id }, pseudo });
+      if (exists) return res.status(409).json({ success: false, message: 'Pseudo already in use' });
+    }
+
+    if (email) user.email = email.toLowerCase();
+    if (contact) user.contact = contact;
+    if (name) user.name = name;
+    if (pseudo) user.pseudo = pseudo;
+    if (preferredLanguage) user.preferredLanguage = preferredLanguage;
+    if (preferredCurrency) user.preferredCurrency = preferredCurrency;
+    if (country) user.country = country;
+    if (about) user.about = about;
+    if (location) user.location = location;
+    if (profession) {
+      // Validate that profession category exists
+      const professionExists = await Category.exists({ _id: profession });
+      if (!professionExists) {
+        return res.status(404).json({ success: false, message: 'Profession category not found' });
+      }
+      user.profession = profession;
+    }
+
+    // Handle availableForBookings field (coerce string/values to boolean)
+    if (typeof availableForBookings !== 'undefined') {
+      const toBoolean = (value) => {
+        if (typeof value === 'boolean') return value;
+        if (typeof value === 'string') {
+          const normalized = value.trim().toLowerCase();
+          return ['true', '1', 'yes', 'on'].includes(normalized);
+        }
+        return Boolean(value);
+      };
+      user.availableForBookings = toBoolean(availableForBookings);
+    }
+
+    // Handle appNotification field (coerce string to boolean if needed)
+    if (typeof appNotification !== 'undefined') {
+      const toBoolean = (value) => {
+        if (typeof value === 'boolean') return value;
+        if (typeof value === 'string') {
+          const normalized = value.trim().toLowerCase();
+          return ['true', '1', 'yes', 'on'].includes(normalized);
+        }
+        return Boolean(value);
+      };
+      user.appNotification = toBoolean(appNotification);
+    }
+
+    // Handle hidden field (coerce string to boolean if needed)
+    if (typeof hidden !== 'undefined') {
+      const toBoolean = (value) => {
+        if (typeof value === 'boolean') return value;
+        if (typeof value === 'string') {
+          const normalized = value.trim().toLowerCase();
+          return ['true', '1', 'yes', 'on'].includes(normalized);
+        }
+        return Boolean(value);
+      };
+      user.hidden = toBoolean(hidden);
+    }
+
+    // Handle profile picture update
+    if (req.files && req.files.length > 0) {
+      const profilePicFile = req.files.find(file => file.fieldname === 'profilePic');
+      if (profilePicFile && profilePicFile.buffer) {
+        user.profilePic = await uploadFile(profilePicFile.buffer);
+      }
+    } else if (profilePic && typeof profilePic === 'string') {
+      // If profilePic is provided as a URL string, use it directly
+      user.profilePic = profilePic;
+    }
+
+    // Normalize dedications/services if provided as JSON strings
+    if (typeof dedications === 'string') {
+      try {
+        dedications = JSON.parse(dedications);
+      } catch (_e) {
+        return res.status(400).json({ success: false, message: 'Invalid JSON for dedications' });
+      }
+    }
+    if (typeof services === 'string') {
+      try {
+        services = JSON.parse(services);
+      } catch (_e) {
+        return res.status(400).json({ success: false, message: 'Invalid JSON for services' });
+      }
+    }
+    if (typeof dedicationSamples === 'string') {
+      try {
+        dedicationSamples = JSON.parse(dedicationSamples);
+      } catch (_e) {
+        return res.status(400).json({ success: false, message: 'Invalid JSON for dedicationSamples' });
+      }
+    }
+
+    // Allow non-fan users to optionally initialize dedications and services in complete profile
+    if (user.role !== 'fan') {
+      try {
+        if (Array.isArray(dedications)) {
+          const payload = dedications
+            .filter((d) => d && typeof d.type === 'string' && d.type.trim())
+            .map((d) => ({ type: d.type.trim(), price: Number(d.price) || 0, userId: user._id }));
+          if (payload.length) {
+            await Dedication.deleteMany({ userId: user._id });
+            await Dedication.insertMany(payload);
+          }
+        }
+        if (Array.isArray(services)) {
+          const payload = services
+            .filter((s) => s && typeof s.type === 'string' && s.type.trim())
+            .map((s) => ({ type: s.type.trim(), price: Number(s.price) || 0, userId: user._id }));
+          if (payload.length) {
+            await Service.deleteMany({ userId: user._id });
+            await Service.insertMany(payload);
+          }
+        }
+        if (Array.isArray(dedicationSamples)) {
+          const uploaded = [];
+          // Map provided files by index via fields dedicationSampleVideo[0], dedicationSampleVideo[1], ...
+          const sampleFiles = Array.isArray(req.files) ? req.files : [];
+          for (let i = 0; i < dedicationSamples.length; i += 1) {
+            const x = dedicationSamples[i];
+            if (!x || typeof x.type !== 'string' || !x.type.trim()) continue;
+            let videoUrl = typeof x.video === 'string' && x.video.trim() ? x.video.trim() : '';
+            if (!videoUrl) {
+              const fieldName = `dedicationSampleVideo[${i}]`;
+              const fileAtSameIndex = sampleFiles.find((f) => f.fieldname === fieldName);
+              if (fileAtSameIndex && fileAtSameIndex.buffer) videoUrl = await uploadVideo(fileAtSameIndex.buffer);
+            }
+            if (videoUrl) {
+              uploaded.push({
+                type: x.type.trim(),
+                video: videoUrl,
+                description: x.description ? x.description.trim() : undefined,
+                userId: user._id
+              });
+            }
+          }
+          if (uploaded.length) {
+            await DedicationSample.deleteMany({ userId: user._id });
+            await DedicationSample.insertMany(uploaded);
+          }
+        }
+      } catch (e) {
+        return res.status(400).json({ success: false, message: 'Invalid dedications/services payload' });
+      }
+    }
+
+    const updated = await user.save();
+    const updatedUser = await User.findById(updated._id).populate('profession');
+
+    let extra = {};
+    if (updatedUser.role === 'star' || updatedUser.role === 'admin') {
+      const [dedicationsRes, servicesRes, samplesRes] = await Promise.all([
+        Dedication.find({ userId: updatedUser._id }).sort({ createdAt: -1 }),
+        Service.find({ userId: updatedUser._id }).sort({ createdAt: -1 }),
+        DedicationSample.find({ userId: updatedUser._id }).sort({ createdAt: -1 }),
+      ]);
+      extra = {
+        dedications: dedicationsRes.map((d) => ({ id: d._id, type: d.type, price: d.price, userId: d.userId, createdAt: d.createdAt, updatedAt: d.updatedAt })),
+        services: servicesRes.map((s) => ({ id: s._id, type: s.type, price: s.price, userId: s.userId, createdAt: s.createdAt, updatedAt: s.updatedAt })),
+        dedicationSamples: samplesRes.map((x) => ({ id: x._id, type: x.type, video: x.video, description: x.description, userId: x.userId, createdAt: x.createdAt, updatedAt: x.updatedAt })),
+      };
+    }
+    return res.json({ success: true, message: 'Profile updated', data: { ...sanitizeUser(updatedUser), ...extra } });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+export const refresh = async (req, res) => {
+  try {
+    const { refreshToken } = req.body;
+    if (!refreshToken) {
+      return res.status(400).json({ success: false, message: 'Refresh token is required' });
+    }
+    const decoded = verifyRefreshToken(refreshToken);
+    const user = await User.findById(decoded.userId);
+    if (!user) {
+      return res.status(401).json({ success: false, message: 'Invalid or expired refresh token' });
+    }
+    if (typeof decoded.sessionVersion !== 'number' || decoded.sessionVersion !== user.sessionVersion) {
+      return res.status(401).json({ success: false, message: 'Unauthorized' });
+    }
+    const accessToken = createAccessToken({ userId: decoded.userId, sessionVersion: user.sessionVersion });
+    return res.json({ success: true, tokens: { accessToken } });
+  } catch (err) {
+    return res.status(401).json({ success: false, message: 'Invalid or expired refresh token' });
+  }
+};
+
+export const checkUser = async (req, res) => {
+  try {
+    const emailRaw = typeof req.body.email === 'string' ? req.body.email : '';
+    const contactRaw = typeof req.body.contact === 'string' ? req.body.contact : '';
+    const email = emailRaw.trim();
+    const contact = normalizeContact(contactRaw.trim());
+
+    if (!email && !contact) {
+      return res.status(400).json({ success: false, message: 'Either email or contact is required' });
+    }
+
+    const query = email ? { email: email.toLowerCase() } : { contact };
+    const exists = await User.exists(query);
+    return res.json({ success: true, exists: !!exists });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+export const forgotPassword = async (req, res) => {
+  try {
+    const { contact, newPassword } = req.body;
+    const normalizedContact = typeof contact === 'string' ? normalizeContact(contact) : contact;
+    if (!normalizedContact || !newPassword) {
+      return res.status(400).json({ success: false, message: 'Contact and newPassword are required' });
+    }
+    const user = await User.findOne({ contact: normalizedContact });
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+    const salt = await bcrypt.genSalt(10);
+    user.password = await bcrypt.hash(newPassword, salt);
+    user.passwordResetToken = undefined;
+    user.passwordResetExpires = undefined;
+    await user.save();
+    return res.json({ success: true, message: 'Password updated successfully' });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+export const resetPassword = async (req, res) => {
+  try {
+    const { token, newPassword } = req.body;
+    if (!token || !newPassword) {
+      return res.status(400).json({ success: false, message: 'Token and newPassword are required' });
+    }
+    const user = await User.findOne({
+      passwordResetToken: token,
+      passwordResetExpires: { $gt: new Date() },
+    });
+    if (!user) {
+      return res.status(400).json({ success: false, message: 'Invalid or expired token' });
+    }
+    const salt = await bcrypt.genSalt(10);
+    user.password = await bcrypt.hash(newPassword, salt);
+    user.passwordResetToken = undefined;
+    user.passwordResetExpires = undefined;
+    await user.save();
+    return res.json({ success: true, message: 'Password updated successfully' });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+
+export const me = async (req, res) => {
+  try {
+    if (!req.user?._id) {
+      return res.status(401).json({ success: false, message: 'Unauthorized' });
+    }
+    const user = await User.findById(req.user._id).populate('profession');
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+    let extra = {};
+
+    if (user.role === 'star' || user.role === 'admin') {
+      const [dedicationsRes, servicesRes, dedicationSamples] = await Promise.all([
+        Dedication.find({ userId: user._id }).sort({ createdAt: -1 }),
+        Service.find({ userId: user._id }).sort({ createdAt: -1 }),
+        DedicationSample.find({ userId: user._id }).sort({ createdAt: -1 }),
+      ]);
+      const allservices = [
+        ...dedicationsRes.map(d => ({ id: d._id, type: d.type, price: d.price, userId: d.userId, createdAt: d.createdAt, updatedAt: d.updatedAt, itemType: 'dedication' })),
+        ...servicesRes.map(s => ({ id: s._id, type: s.type, price: s.price, userId: s.userId, createdAt: s.createdAt, updatedAt: s.updatedAt, itemType: 'service' }))
+      ].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+      extra = {
+        allservices,
+        dedications: dedicationsRes.map((d) => ({ id: d._id, type: d.type, price: d.price, userId: d.userId, createdAt: d.createdAt, updatedAt: d.updatedAt })),
+        services: servicesRes.map((s) => ({ id: s._id, type: s.type, price: s.price, userId: s.userId, createdAt: s.createdAt, updatedAt: s.updatedAt })),
+        dedicationSamples: dedicationSamples.map((x) => ({ id: x._id, type: x.type, video: x.video, description: x.description, userId: x.userId, createdAt: x.createdAt, updatedAt: x.updatedAt })),
+      };
+    }
+
+    if (user.role === 'fan') {
+      // Get fan's transactions only
+      const transactions = await Transaction.find({ payerId: user._id })
+        .populate('receiverId', 'name pseudo profilePic role')
+        .sort({ createdAt: -1 })
+        .limit(20);
+
+      extra = {
+        transactions: transactions.map(txn => ({
+          id: txn._id,
+          type: txn.type,
+          receiver: txn.receiverId ? {
+            id: txn.receiverId._id,
+            name: txn.receiverId.name,
+            pseudo: txn.receiverId.pseudo,
+            profilePic: txn.receiverId.profilePic,
+            role: txn.receiverId.role
+          } : null,
+          amount: txn.amount,
+          description: txn.description,
+          paymentMode: txn.paymentMode,
+          status: txn.status,
+          metadata: txn.metadata,
+          createdAt: txn.createdAt
+        })),
+        transactionStats: {
+          totalTransactions: transactions.length,
+          totalSpent: transactions
+            .filter(txn => txn.status === 'completed')
+            .reduce((sum, txn) => sum + txn.amount, 0)
+        }
+      };
+    }
+
+    return res.json({ success: true, data: { ...sanitizeUser(user), ...extra } });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// Soft delete user account (mark as deleted)
+export const softDeleteAccount = async (req, res) => {
+  try {
+    const userId = req.user._id;
+
+    // Ensure user exists
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    // If already soft-deleted, return idempotent response
+    if (user.isDeleted) {
+      return res.json({ success: true, message: 'Account already marked for deletion', data: { deletedAt: user.deletedAt } });
+    }
+
+    // Check for active appointments, dedication requests, and live show attendances
+    const [activeAppointments, activeDedicationRequests, activeLiveShowAttendances] = await Promise.all([
+      // Check for active appointments (pending or approved)
+      Appointment.find({
+        $or: [
+          { fanId: userId, status: { $in: ['pending', 'approved'] } },
+          { starId: userId, status: { $in: ['pending', 'approved'] } }
+        ]
+      }),
+      // Check for active dedication requests (pending or approved)
+      DedicationRequest.find({
+        $or: [
+          { fanId: userId, status: { $in: ['pending', 'approved'] } },
+          { starId: userId, status: { $in: ['pending', 'approved'] } }
+        ]
+      }),
+      // Check for active live show attendances (pending or approved)
+      LiveShowAttendance.find({
+        fanId: userId,
+        status: { $in: ['pending', 'approved'] }
+      })
+    ]);
+
+    // If user has active commitments, prevent deletion
+    if (activeAppointments.length > 0 || activeDedicationRequests.length > 0 || activeLiveShowAttendances.length > 0) {
+      const pendingItems = [];
+
+      if (activeAppointments.length > 0) {
+        pendingItems.push(`${activeAppointments.length} active appointment(s)`);
+      }
+
+      if (activeDedicationRequests.length > 0) {
+        pendingItems.push(`${activeDedicationRequests.length} active dedication request(s)`);
+      }
+
+      if (activeLiveShowAttendances.length > 0) {
+        pendingItems.push(`${activeLiveShowAttendances.length} active live show attendance(s)`);
+      }
+
+      return res.status(400).json({
+        success: false,
+        message: `Cannot delete account. You have ${pendingItems.join(' and ')}. Please complete, cancel, or reject them first.`,
+        data: {
+          activeAppointments: activeAppointments.length,
+          activeDedicationRequests: activeDedicationRequests.length,
+          activeLiveShowAttendances: activeLiveShowAttendances.length,
+          totalPending: activeAppointments.length + activeDedicationRequests.length + activeLiveShowAttendances.length
+        }
+      });
+    }
+
+    // Soft delete the user (mark as deleted)
+    const deletedAt = new Date();
+    await User.findByIdAndUpdate(userId, {
+      isDeleted: true,
+      deletedAt
+    });
+
+    return res.json({
+      success: true,
+      message: 'Account marked for deletion successfully',
+      data: { deletedAt }
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// Toggle available for bookings status
+export const toggleAvailableForBookings = async (req, res) => {
+  try {
+    if (!req.user?._id) {
+      return res.status(401).json({ success: false, message: 'Unauthorized' });
+    }
+
+    const userId = req.user._id;
+    const { availableForBookings } = req.body;
+
+    // Coerce the value to boolean
+    const toBoolean = (value) => {
+      if (typeof value === 'boolean') return value;
+      if (typeof value === 'string') {
+        const normalized = value.trim().toLowerCase();
+        return ['true', '1', 'yes', 'on'].includes(normalized);
+      }
+      return Boolean(value);
+    };
+    const coerced = toBoolean(availableForBookings);
+
+    // Update the user's availableForBookings status
+    const updatedUser = await User.findByIdAndUpdate(
+      userId,
+      { availableForBookings: coerced },
+      { new: true }
+    ).select('-password -passwordResetToken -passwordResetExpires');
+
+    if (!updatedUser) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    return res.json({
+      success: true,
+      message: `Successfully ${coerced ? 'enabled' : 'disabled'} bookings availability`,
+      data: sanitizeUser(updatedUser)
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// Admin function to permanently delete a soft-deleted user
+export const permanentlyDeleteUser = async (req, res) => {
+  try {
+    if (!req.user?._id || req.user.role !== 'admin') {
+      return res.status(403).json({ success: false, message: 'Admin access required' });
+    }
+
+    const { userId } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({ success: false, message: 'Invalid user ID' });
+    }
+
+    // Get user to check if they are soft deleted
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    if (!user.isDeleted) {
+      return res.status(400).json({ success: false, message: 'User is not marked for deletion' });
+    }
+
+    // Clean up related data
+    try {
+      // Remove user from other users' favorites
+      await User.updateMany(
+        { favorites: userId },
+        { $pull: { favorites: userId } }
+      );
+
+      // If user is a star, clean up star-related data
+      if (user.role === 'star') {
+        await DedicationRequest.deleteMany({ starId: userId });
+
+        // Delete dedications
+        await Dedication.deleteMany({ userId });
+
+        // Delete services
+        await Service.deleteMany({ userId });
+
+        // Delete dedication samples
+        await DedicationSample.deleteMany({ userId });
+
+        // Delete availabilities
+        await Availability.deleteMany({ userId });
+
+        // Cancel/delete appointments where user is the star
+        await Appointment.updateMany(
+          { starId: userId, status: { $in: ['pending', 'confirmed'] } },
+          { status: 'cancelled', cancelledAt: new Date() }
+        );
+      }
+
+      // If user is a fan, clean up fan-related data
+      if (user.role === 'fan') {
+        // Delete dedication requests where user is the fan
+        await DedicationRequest.deleteMany({ fanId: userId });
+
+        // Cancel/delete appointments where user is the fan
+        await Appointment.updateMany(
+          { fanId: userId, status: { $in: ['pending', 'confirmed'] } },
+          { status: 'cancelled', cancelledAt: new Date() }
+        );
+      }
+
+      // Delete contact support tickets
+      await ContactSupport.deleteMany({ userId });
+
+    } catch (cleanupError) {
+      console.error('Error during cleanup:', cleanupError);
+      // Continue with deletion even if cleanup fails
+    }
+
+    // Permanently delete the user
+    await User.findByIdAndDelete(userId);
+
+    return res.json({
+      success: true,
+      message: 'User permanently deleted successfully',
+      data: { deletedAt: new Date(), userId }
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// Admin function to get all soft-deleted users
+export const getSoftDeletedUsers = async (req, res) => {
+  try {
+    if (!req.user?._id || req.user.role !== 'admin') {
+      return res.status(403).json({ success: false, message: 'Admin access required' });
+    }
+
+    const softDeletedUsers = await User.find({ isDeleted: true })
+      .select('-password -passwordResetToken -passwordResetExpires')
+      .sort({ deletedAt: -1 });
+
+    return res.json({
+      success: true,
+      count: softDeletedUsers.length,
+      data: softDeletedUsers
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// Update FCM token for push notifications
+export const updateFcmToken = async (req, res) => {
+  try {
+    if (!req.user?._id) {
+      return res.status(401).json({ success: false, message: 'Unauthorized' });
+    }
+
+    const userId = req.user._id;
+    const { fcmToken } = req.body;
+
+    if (!fcmToken || typeof fcmToken !== 'string') {
+      return res.status(400).json({
+        success: false,
+        message: 'FCM token is required and must be a string'
+      });
+    }
+
+    // Update the user's FCM token
+    const updatedUser = await User.findByIdAndUpdate(
+      userId,
+      { fcmToken },
+      { new: true }
+    ).select('-password -passwordResetToken -passwordResetExpires');
+
+    if (!updatedUser) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    return res.json({
+      success: true,
+      message: 'FCM token updated successfully',
+      data: sanitizeUser(updatedUser)
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+
