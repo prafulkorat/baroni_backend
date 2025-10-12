@@ -18,7 +18,7 @@ import ContactSupport from '../models/ContactSupport.js';
 import Transaction from '../models/Transaction.js';
 import LiveShowAttendance from '../models/LiveShowAttendance.js';
 import mongoose from 'mongoose';
-import { normalizeContact } from '../utils/normalizeContact.js';
+import { normalizeContact, removePlusPrefix } from '../utils/normalizeContact.js';
 import { generateUniqueAgoraKey } from '../utils/agoraKeyGenerator.js';
 import { createSanitizedUserResponse, sanitizeUserData } from '../utils/userDataHelper.js';
 import axios from 'axios';
@@ -53,16 +53,20 @@ export const sendOtpController = async (req, res) => {
                 .json({ ok: false, error: "numero (contact) is required" });
         }
 
-        numero = String(numero).trim().replace(/\s+/g, "");
+        // Normalize the contact number to ensure it has + prefix
+        const normalizedContact = normalizeContact(String(numero).trim());
+        
+        // Remove + prefix for OTP sending (gateway expects number without +)
+        const numeroForGateway = removePlusPrefix(normalizedContact);
 
-        const isIndian = /^(\+91|91)/.test(numero);
+        const isIndian = /^(\+91|91)/.test(normalizedContact);
 
         const otp = isIndian ? "123456" : generate6DigitOtp();
 
         const senderName = "Baroni";
         const corps = `Your verification code is ${otp}`;
 
-        const form = { numero, corps, senderName };
+        const form = { numero: numeroForGateway, corps, senderName };
         const gatewayUrl = "http://35.242.129.85:8190/send-message";
 
         const response = await axios.post(gatewayUrl, qs.stringify(form), {
@@ -70,10 +74,10 @@ export const sendOtpController = async (req, res) => {
             timeout: 10000,
         });
 
-        const token = jwt.sign({ numero, otp }, "this is you", { expiresIn: "5m" });
+        const token = jwt.sign({ numero: normalizedContact, otp }, "this is you", { expiresIn: "5m" });
 
         await Otp.create({
-            contact: numero,
+            contact: normalizedContact,
             otp,
             token,
             expiresAt: new Date(Date.now() + 15 * 60 * 1000),
@@ -386,12 +390,17 @@ export const completeProfile = async (req, res) => {
     if (about) user.about = about;
     if (location) user.location = location;
     if (profession) {
-      // Validate that profession category exists
-      const professionExists = await Category.exists({ _id: profession });
-      if (!professionExists) {
-        return res.status(404).json({ success: false, message: 'Profession category not found' });
+      try {
+        // Validate that profession category exists
+        const professionExists = await Category.exists({ _id: profession });
+        if (!professionExists) {
+          return res.status(404).json({ success: false, message: 'Profession category not found' });
+        }
+        user.profession = profession;
+      } catch (err) {
+        console.error('Profession validation error:', err);
+        return res.status(400).json({ success: false, message: 'Invalid profession ID format' });
       }
-      user.profession = profession;
     }
 
     // Handle availableForBookings field (coerce string/values to boolean)
@@ -435,9 +444,14 @@ export const completeProfile = async (req, res) => {
 
     // Handle profile picture update
     if (req.files && req.files.length > 0) {
-      const profilePicFile = req.files.find(file => file.fieldname === 'profilePic');
-      if (profilePicFile && profilePicFile.buffer) {
-        user.profilePic = await uploadFile(profilePicFile.buffer);
+      try {
+        const profilePicFile = req.files.find(file => file.fieldname === 'profilePic');
+        if (profilePicFile && profilePicFile.buffer) {
+          user.profilePic = await uploadFile(profilePicFile.buffer);
+        }
+      } catch (err) {
+        console.error('Profile picture upload error:', err);
+        return res.status(400).json({ success: false, message: 'Failed to upload profile picture' });
       }
     } else if (profilePic && typeof profilePic === 'string') {
       // If profilePic is provided as a URL string, use it directly
@@ -520,21 +534,46 @@ export const completeProfile = async (req, res) => {
       }
     }
 
-    const updated = await user.save();
-    const updatedUser = await User.findById(updated._id).populate('profession');
+    let updated, updatedUser;
+    try {
+      updated = await user.save();
+      updatedUser = await User.findById(updated._id).populate('profession');
+    } catch (err) {
+      console.error('User save error:', err);
+      if (err.code === 11000) {
+        // Duplicate key error
+        const field = Object.keys(err.keyValue)[0];
+        return res.status(409).json({ 
+          success: false, 
+          message: `${field} already exists`,
+          field: field
+        });
+      }
+      throw err; // Re-throw to be caught by outer catch
+    }
 
     let extra = {};
     if (updatedUser.role === 'star' || updatedUser.role === 'admin') {
-      const [dedicationsRes, servicesRes, samplesRes] = await Promise.all([
-        Dedication.find({ userId: updatedUser._id }).sort({ createdAt: -1 }),
-        Service.find({ userId: updatedUser._id }).sort({ createdAt: -1 }),
-        DedicationSample.find({ userId: updatedUser._id }).sort({ createdAt: -1 }),
-      ]);
-      extra = {
-        dedications: dedicationsRes.map((d) => ({ id: d._id, type: d.type, price: d.price, userId: d.userId, createdAt: d.createdAt, updatedAt: d.updatedAt })),
-        services: servicesRes.map((s) => ({ id: s._id, type: s.type, price: s.price, userId: s.userId, createdAt: s.createdAt, updatedAt: s.updatedAt })),
-        dedicationSamples: samplesRes.map((x) => ({ id: x._id, type: x.type, video: x.video, description: x.description, userId: x.userId, createdAt: x.createdAt, updatedAt: x.updatedAt })),
-      };
+      try {
+        const [dedicationsRes, servicesRes, samplesRes] = await Promise.all([
+          Dedication.find({ userId: updatedUser._id }).sort({ createdAt: -1 }),
+          Service.find({ userId: updatedUser._id }).sort({ createdAt: -1 }),
+          DedicationSample.find({ userId: updatedUser._id }).sort({ createdAt: -1 }),
+        ]);
+        extra = {
+          dedications: dedicationsRes.map((d) => ({ id: d._id, type: d.type, price: d.price, userId: d.userId, createdAt: d.createdAt, updatedAt: d.updatedAt })),
+          services: servicesRes.map((s) => ({ id: s._id, type: s.type, price: s.price, userId: s.userId, createdAt: s.createdAt, updatedAt: s.updatedAt })),
+          dedicationSamples: samplesRes.map((x) => ({ id: x._id, type: x.type, video: x.video, description: x.description, userId: x.userId, createdAt: x.createdAt, updatedAt: x.updatedAt })),
+        };
+      } catch (err) {
+        console.error('Error fetching user extra data:', err);
+        // Continue without extra data rather than failing the entire request
+        extra = {
+          dedications: [],
+          services: [],
+          dedicationSamples: []
+        };
+      }
     }
     return res.json({
       success: true,
@@ -545,7 +584,27 @@ export const completeProfile = async (req, res) => {
       }
     });
   } catch (err) {
-    return res.status(500).json({ success: false, message: err.message });
+    console.error('Complete profile error:', {
+      error: err.message,
+      stack: err.stack,
+      userId: req.user?._id,
+      body: req.body,
+      files: req.files?.length || 0
+    });
+    
+    // Return detailed error information for debugging
+    return res.status(500).json({ 
+      success: false, 
+      message: err.message || 'Internal server error',
+      error: process.env.NODE_ENV === 'development' ? {
+        name: err.name,
+        message: err.message,
+        stack: err.stack,
+        code: err.code,
+        keyValue: err.keyValue,
+        errors: err.errors
+      } : undefined
+    });
   }
 };
 

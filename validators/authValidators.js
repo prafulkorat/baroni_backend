@@ -7,7 +7,8 @@ export const registerValidator = [
     .customSanitizer((v) => {
       if (typeof v !== 'string') return v;
       const noSpaces = v.replace(/\s+/g, '');
-      return noSpaces.startsWith('+') ? noSpaces.slice(1) : noSpaces;
+      // Ensure the number starts with '+' for international format
+      return noSpaces.startsWith('+') ? noSpaces : `+${noSpaces}`;
     })
     .isMobilePhone('any', { strictMode: false })
     .withMessage('Invalid contact number format. Use international format, e.g. +22376299719'),
@@ -26,7 +27,8 @@ export const loginValidator = [
     .customSanitizer((v) => {
       if (typeof v !== 'string') return v;
       const noSpaces = v.replace(/\s+/g, '');
-      return noSpaces.startsWith('+') ? noSpaces.slice(1) : noSpaces;
+      // Ensure the number starts with '+' for international format
+      return noSpaces.startsWith('+') ? noSpaces : `+${noSpaces}`;
     })
     .isMobilePhone('any', { strictMode: false })
     .withMessage('Invalid contact number format. Use international format, e.g. +22376299719'),
@@ -50,7 +52,8 @@ export const completeProfileValidator = [
     .customSanitizer((v) => {
       if (typeof v !== 'string') return v;
       const noSpaces = v.replace(/\s+/g, '');
-      return noSpaces.startsWith('+') ? noSpaces.slice(1) : noSpaces;
+      // Ensure the number starts with '+' for international format
+      return noSpaces.startsWith('+') ? noSpaces : `+${noSpaces}`;
     })
     .isMobilePhone('any', { strictMode: false })
     .withMessage('Invalid contact number format. Use international format, e.g. +22376299719'),
@@ -69,7 +72,8 @@ export const checkUserValidator = [
     .customSanitizer((v) => {
       if (typeof v !== 'string') return v;
       const noSpaces = v.replace(/\s+/g, '');
-      return noSpaces.startsWith('+') ? noSpaces.slice(1) : noSpaces;
+      // Ensure the number starts with '+' for international format
+      return noSpaces.startsWith('+') ? noSpaces : `+${noSpaces}`;
     })
     .isMobilePhone('any', { strictMode: false })
     .withMessage('Invalid contact number format. Use international format, e.g. +22376299719')
