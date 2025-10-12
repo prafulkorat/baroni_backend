@@ -69,12 +69,12 @@ export const storeMessageValidator = [
                 }
 
                 // Enforce messaging: only fan can initiate to star; block others
-                if (!(sender.role === 'fan' && receiver.role === 'star')) {
-                    return res.status(400).json({
-                        success: false,
-                        message: 'Only fans can initiate conversations with stars'
-                    });
-                }
+                // if (!(sender.role === 'fan' && receiver.role === 'star')) {
+                //     return res.status(400).json({
+                //         success: false,
+                //         message: 'Only fans can initiate conversations with stars'
+                //     });
+                // }
             }
 
             next();
