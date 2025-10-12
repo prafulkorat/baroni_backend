@@ -10,6 +10,7 @@ export const AgoraRtmToken = async (req,res) => {
         const userAccount = String(agoraKey);
 
         const token = GenerateRtmAgoraToken(userAccount);
+        console.log('RTM token:', token);
         res.json({ token });
     } catch (error) {
         console.error('Error generating RTM token:', error);
