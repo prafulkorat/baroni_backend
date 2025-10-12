@@ -32,11 +32,9 @@
     "multer": "^2.0.2",
     "node-cron": "^3.0.3",
     "nodemailer": "^6.9.14",
+    "nodemon": "^3.1.7",
     "passport": "^0.7.0",
     "passport-apple": "2.0.0",
     "passport-google-oauth20": "^2.0.0"
-  },
-  "devDependencies": {
-    "nodemon": "^3.1.7"
   }
 }
