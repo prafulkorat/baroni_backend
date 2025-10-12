@@ -1,4 +1,5 @@
 import { validationResult } from 'express-validator';
+import { getFirstValidationError } from '../utils/validationHelper.js';
 import Config from '../models/Config.js';
 
 const sanitizeConfig = (cfg) => ({
@@ -14,7 +15,13 @@ const sanitizeConfig = (cfg) => ({
 export const getPublicConfig = async (_req, res) => {
   try {
     const cfg = await Config.getSingleton();
-    return res.json({ success: true, data: sanitizeConfig(cfg) });
+    return res.json({ 
+      success: true, 
+      message: 'Configuration retrieved successfully',
+      data: {
+        config: sanitizeConfig(cfg)
+      }
+    });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
@@ -24,7 +31,8 @@ export const upsertConfig = async (req, res) => {
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      return res.status(400).json({ success: false, errors: errors.array() });
+      const errorMessage = getFirstValidationError(errors);
+      return res.status(400).json({ success: false, message: errorMessage || 'Validation failed' });
     }
 
     const cfg = await Config.getSingleton();
@@ -57,7 +65,13 @@ export const upsertConfig = async (req, res) => {
     if (typeof nTestUser === 'boolean') cfg.isTestUser = nTestUser;
 
     const saved = await cfg.save();
-    return res.json({ success: true, data: sanitizeConfig(saved) });
+    return res.json({ 
+      success: true, 
+      message: 'Configuration updated successfully',
+      data: {
+        config: sanitizeConfig(saved)
+      }
+    });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }

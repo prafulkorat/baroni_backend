@@ -1,4 +1,5 @@
 import { validationResult } from 'express-validator';
+import { getFirstValidationError } from '../utils/validationHelper.js';
 import { 
   processPaymentCallback, 
   handlePaymentTimeout as processPaymentTimeout
@@ -12,10 +13,10 @@ export const handlePaymentCallback = async (req, res) => {
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
+      const errorMessage = getFirstValidationError(errors);
       return res.status(400).json({ 
         success: false, 
-        message: 'Invalid callback data',
-        errors: errors.array() 
+        message: errorMessage || 'Invalid callback data'
       });
     }
 
@@ -27,6 +28,7 @@ export const handlePaymentCallback = async (req, res) => {
       message: 'Payment callback processed successfully',
       data: result
     });
+
   } catch (err) {
     console.error('Error processing payment callback:', err);
     return res.status(500).json({ 

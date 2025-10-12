@@ -1,5 +1,6 @@
 import bcrypt from 'bcryptjs';
 import {validationResult} from 'express-validator';
+import { getFirstValidationError } from '../utils/validationHelper.js';
 import User from '../models/User.js';
 import Category from '../models/Category.js';
 import Dedication from '../models/Dedication.js';
@@ -18,36 +19,159 @@ import Transaction from '../models/Transaction.js';
 import LiveShowAttendance from '../models/LiveShowAttendance.js';
 import mongoose from 'mongoose';
 import { normalizeContact } from '../utils/normalizeContact.js';
+import { generateUniqueAgoraKey } from '../utils/agoraKeyGenerator.js';
+import { createSanitizedUserResponse, sanitizeUserData } from '../utils/userDataHelper.js';
+import axios from 'axios';
+import  qs  from 'qs';
+import crypto from 'crypto';
+import jwt from 'jsonwebtoken'
+import Otp from "../models/otp.js";
 
-const sanitizeUser = (user) => ({
-  id: user._id,
-  baroniId: user.baroniId,
-  contact: user.contact,
-  email: user.email,
-  name: user.name,
-  pseudo: user.pseudo,
-  profilePic: user.profilePic,
-  preferredLanguage: user.preferredLanguage,
-  preferredCurrency: user.preferredCurrency,
-  country: user.country,
-  about: user.about,
-  location: user.location,
-  profession: user.profession,
-  role: user.role,
-  availableForBookings: user.availableForBookings,
-  appNotification: user.appNotification,
-  hidden: user.hidden,
-  coinBalance: user.coinBalance,
-});
+const sanitizeUser = (user) => createSanitizedUserResponse(user);
+
+const convertToBoolean = (value) => {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    return ['true', '1', 'yes', 'on'].includes(normalized);
+  }
+  if (typeof value === 'number') return value === 1;
+  return Boolean(value);
+};
+
+function generate6DigitOtp() {
+    const n = crypto.randomInt(0, 1_000_000);
+    return String(n).padStart(6, '0');
+}
+
+export const sendOtpController = async (req, res) => {
+    try {
+        let { numero } = req.body ?? {};
+        if (!numero) {
+            return res
+                .status(400)
+                .json({ ok: false, error: "numero (contact) is required" });
+        }
+
+        numero = String(numero).trim().replace(/\s+/g, "");
+
+        const isIndian = /^(\+91|91)/.test(numero);
+
+        const otp = isIndian ? "123456" : generate6DigitOtp();
+
+        const senderName = "Baroni";
+        const corps = `Your verification code is ${otp}`;
+
+        const form = { numero, corps, senderName };
+        const gatewayUrl = "http://35.242.129.85:8190/send-message";
+
+        const response = await axios.post(gatewayUrl, qs.stringify(form), {
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            timeout: 10000,
+        });
+
+        const token = jwt.sign({ numero, otp }, "this is you", { expiresIn: "5m" });
+
+        await Otp.create({
+            contact: numero,
+            otp,
+            token,
+            expiresAt: new Date(Date.now() + 15 * 60 * 1000),
+        });
+
+        return res.json({
+            success: true,
+            gatewayStatus: response.status,
+            gatewayData: response.data,
+            token,
+            otp,
+        });
+    } catch (err) {
+        console.error(
+            "sendOtpController error:",
+            err?.response?.data ?? err.message ?? err
+        );
+        return res.status(500).json({
+            ok: false,
+            error: "Failed to send OTP",
+            details: err?.response?.data ?? err.message,
+        });
+    }
+};
+
+export const verifyOtpController = async (req, res) => {
+    try {
+        const { otp, token } = req.body ?? {};
+
+        if (!otp || !token) {
+            return res.status(400).json({
+                success: false,
+                error: "otp and token are required",
+            });
+        }
+
+        let decoded;
+        try {
+            decoded = jwt.verify(token, "this is you");
+        } catch (err) {
+            return res.status(401).json({
+                success: false,
+                error: "Invalid or expired token",
+            });
+        }
+
+        const contact = decoded.numero;
+
+        if (!contact) {
+            return res.status(400).json({
+                success: false,
+                error: "Contact not found in token",
+            });
+        }
+
+        const otpRecord = await Otp.findOne({ contact }).sort({ createdAt: -1 });
+
+        if (!otpRecord) {
+            return res.status(404).json({
+                success: false,
+                error: "OTP not found or expired",
+            });
+        }
+
+        if (otpRecord.otp !== otp) {
+            return res.status(400).json({
+                success: false,
+                error: "Invalid OTP",
+            });
+        }
+
+        await Otp.deleteOne({ _id: otpRecord._id });
+
+        return res.json({
+            success: true,
+            message: "OTP verified successfully",
+            contact,
+        });
+
+    } catch (err) {
+        console.error("verifyOtpController error:", err);
+        return res.status(500).json({
+            success: false,
+            error: "OTP verification failed",
+            details: err.message,
+        });
+    }
+};
 
 export const register = async (req, res) => {
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      return res.status(400).json({ success: false, errors: errors.array() });
+      const errorMessage = getFirstValidationError(errors);
+      return res.status(400).json({ success: false, message: errorMessage || 'Validation failed' });
     }
 
-  const { contact, email, password, role, fcmToken } = req.body;
+  const { contact, email, password, role, fcmToken, apnsToken, voipToken, deviceType, isDev } = req.body;
   const normalizedContact = typeof contact === 'string' ? normalizeContact(contact) : contact;
 
     // Check if we have either contact or email
@@ -88,15 +212,26 @@ export const register = async (req, res) => {
       hashedPassword = await bcrypt.hash(password, salt);
     }
 
+  // Convert isDev to boolean if provided
+  const booleanIsDev = typeof isDev !== 'undefined' ? convertToBoolean(isDev) : false;
+
   const user = await User.create({
       contact: normalizedContact,
       email: normalizedEmail,
       password: hashedPassword,
       role,
-      fcmToken
+      ...(fcmToken ? { fcmToken } : {}),
+      ...(apnsToken ? { apnsToken } : {}),
+      ...(voipToken ? { voipToken } : {}),
+      ...(deviceType ? { deviceType } : {}),
+      ...(typeof isDev !== 'undefined' ? { isDev: booleanIsDev } : {})
     });
 
-    // Initialize user with 1000 coins
+    // Generate unique Agora key for the user
+    const agoraKey = await generateUniqueAgoraKey();
+    user.agoraKey = agoraKey;
+
+    // Initialize user with 20 coins
     await initializeUserCoins(user._id);
 
     // Auto-login
@@ -110,8 +245,10 @@ export const register = async (req, res) => {
     return res.status(201).json({
       success: true,
       message: 'Registered successfully',
-      data: sanitizeUser(user),
-      tokens: { accessToken, refreshToken }
+      data: {
+        user: sanitizeUser(user),
+        tokens: { accessToken, refreshToken }
+      }
     });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
@@ -122,10 +259,11 @@ export const login = async (req, res) => {
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      return res.status(400).json({ success: false, errors: errors.array() });
+      const errorMessage = getFirstValidationError(errors);
+      return res.status(400).json({ success: false, message: errorMessage || 'Validation failed' });
     }
 
-    const { contact, email, isMobile } = req.body;
+    const { contact, email, isMobile, fcmToken, apnsToken, voipToken, deviceType, isDev } = req.body;
     const normalizedContact = typeof contact === 'string' ? normalizeContact(contact) : contact;
     let user;
 
@@ -170,13 +308,54 @@ export const login = async (req, res) => {
       }
     }
 
+    // Update tokens and device type if provided
+    const updateData = {};
+    const unsetData = {};
+
+    if (fcmToken) updateData.fcmToken = fcmToken;
+    if (apnsToken) updateData.apnsToken = apnsToken;
+    if (voipToken) updateData.voipToken = voipToken;
+
+    if (deviceType) {
+      updateData.deviceType = deviceType;
+
+      // Clean up tokens based on device type
+      if (deviceType === 'android') {
+        // Remove iOS tokens when switching to Android
+        unsetData.apnsToken = 1;
+        unsetData.voipToken = 1;
+        console.log(`User ${user._id} switching to Android - removing iOS tokens`);
+      } else if (deviceType === 'ios') {
+        // Remove FCM token when switching to iOS
+        unsetData.fcmToken = 1;
+        console.log(`User ${user._id} switching to iOS - removing FCM token`);
+      }
+    }
+
+    // Handle isDev parameter - convert string to boolean if needed
+    if (typeof isDev !== 'undefined') {
+      const booleanIsDev = convertToBoolean(isDev);
+      updateData.isDev = booleanIsDev;
+      console.log(`User ${user._id} setting isDev to ${booleanIsDev} (converted from ${typeof isDev}: ${isDev})`);
+    }
+
     // Increment sessionVersion to invalidate tokens from other devices
     user.sessionVersion = (typeof user.sessionVersion === 'number' ? user.sessionVersion : 0) + 1;
-    await user.save();
+    updateData.sessionVersion = user.sessionVersion;
+
+    // Update user with new tokens and session version
+    if (Object.keys(updateData).length > 0 || Object.keys(unsetData).length > 0) {
+      const finalUpdateData = { ...updateData };
+      if (Object.keys(unsetData).length > 0) {
+        finalUpdateData.$unset = unsetData;
+      }
+      await User.findByIdAndUpdate(user._id, finalUpdateData);
+    }
 
     const accessToken = createAccessToken({ userId: user._id, sessionVersion: user.sessionVersion });
     const refreshToken = createRefreshToken({ userId: user._id, sessionVersion: user.sessionVersion });
-    return res.json({ success: true, data: sanitizeUser(user), tokens: { accessToken, refreshToken } });
+
+    return res.json({ success: true, message: 'Login successful', data: sanitizeUser(user), tokens: { accessToken, refreshToken } });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
@@ -357,7 +536,14 @@ export const completeProfile = async (req, res) => {
         dedicationSamples: samplesRes.map((x) => ({ id: x._id, type: x.type, video: x.video, description: x.description, userId: x.userId, createdAt: x.createdAt, updatedAt: x.updatedAt })),
       };
     }
-    return res.json({ success: true, message: 'Profile updated', data: { ...sanitizeUser(updatedUser), ...extra } });
+    return res.json({
+      success: true,
+      message: 'Profile updated',
+      data: {
+        ...sanitizeUser(updatedUser),
+        ...extra
+      }
+    });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
@@ -378,7 +564,13 @@ export const refresh = async (req, res) => {
       return res.status(401).json({ success: false, message: 'Unauthorized' });
     }
     const accessToken = createAccessToken({ userId: decoded.userId, sessionVersion: user.sessionVersion });
-    return res.json({ success: true, tokens: { accessToken } });
+    return res.json({
+      success: true,
+      message: 'Token refreshed successfully',
+      data: {
+        tokens: { accessToken }
+      }
+    });
   } catch (err) {
     return res.status(401).json({ success: false, message: 'Invalid or expired refresh token' });
   }
@@ -397,7 +589,13 @@ export const checkUser = async (req, res) => {
 
     const query = email ? { email: email.toLowerCase() } : { contact };
     const exists = await User.exists(query);
-    return res.json({ success: true, exists: !!exists });
+    return res.json({
+      success: true,
+      message: 'User check completed',
+      data: {
+        exists: !!exists
+      }
+    });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
@@ -419,7 +617,10 @@ export const forgotPassword = async (req, res) => {
     user.passwordResetToken = undefined;
     user.passwordResetExpires = undefined;
     await user.save();
-    return res.json({ success: true, message: 'Password updated successfully' });
+    return res.json({
+      success: true,
+      message: 'Password updated successfully'
+    });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
@@ -443,7 +644,10 @@ export const resetPassword = async (req, res) => {
     user.passwordResetToken = undefined;
     user.passwordResetExpires = undefined;
     await user.save();
-    return res.json({ success: true, message: 'Password updated successfully' });
+    return res.json({
+      success: true,
+      message: 'Password updated successfully'
+    });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
@@ -482,7 +686,7 @@ export const me = async (req, res) => {
     if (user.role === 'fan') {
       // Get fan's transactions only
       const transactions = await Transaction.find({ payerId: user._id })
-        .populate('receiverId', 'name pseudo profilePic role')
+        .populate('receiverId', 'name pseudo profilePic role agoraKey')
         .sort({ createdAt: -1 })
         .limit(20);
 
@@ -490,13 +694,7 @@ export const me = async (req, res) => {
         transactions: transactions.map(txn => ({
           id: txn._id,
           type: txn.type,
-          receiver: txn.receiverId ? {
-            id: txn.receiverId._id,
-            name: txn.receiverId.name,
-            pseudo: txn.receiverId.pseudo,
-            profilePic: txn.receiverId.profilePic,
-            role: txn.receiverId.role
-          } : null,
+          receiver: txn.receiverId ? sanitizeUserData(txn.receiverId) : null,
           amount: txn.amount,
           description: txn.description,
           paymentMode: txn.paymentMode,
@@ -513,7 +711,14 @@ export const me = async (req, res) => {
       };
     }
 
-    return res.json({ success: true, data: { ...sanitizeUser(user), ...extra } });
+    return res.json({
+      success: true,
+      message: 'User profile retrieved successfully',
+      data: {
+        ...sanitizeUser(user),
+        ...extra
+      }
+    });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
@@ -596,7 +801,9 @@ export const softDeleteAccount = async (req, res) => {
     return res.json({
       success: true,
       message: 'Account marked for deletion successfully',
-      data: { deletedAt }
+      data: {
+        deletedAt
+      }
     });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
@@ -638,7 +845,9 @@ export const toggleAvailableForBookings = async (req, res) => {
     return res.json({
       success: true,
       message: `Successfully ${coerced ? 'enabled' : 'disabled'} bookings availability`,
-      data: sanitizeUser(updatedUser)
+      data: {
+        user: sanitizeUser(updatedUser)
+      }
     });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
@@ -724,7 +933,10 @@ export const permanentlyDeleteUser = async (req, res) => {
     return res.json({
       success: true,
       message: 'User permanently deleted successfully',
-      data: { deletedAt: new Date(), userId }
+      data: {
+        deletedAt: new Date(),
+        userId
+      }
     });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
@@ -744,8 +956,11 @@ export const getSoftDeletedUsers = async (req, res) => {
 
     return res.json({
       success: true,
-      count: softDeletedUsers.length,
-      data: softDeletedUsers
+      message: 'Soft deleted users retrieved successfully',
+      data: {
+        count: softDeletedUsers.length,
+        users: softDeletedUsers
+      }
     });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
@@ -783,7 +998,199 @@ export const updateFcmToken = async (req, res) => {
     return res.json({
       success: true,
       message: 'FCM token updated successfully',
-      data: sanitizeUser(updatedUser)
+      data: {
+        user: sanitizeUser(updatedUser)
+      }
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// Update APNs token for iOS push notifications
+export const updateApnsToken = async (req, res) => {
+  try {
+    if (!req.user?._id) {
+      return res.status(401).json({ success: false, message: 'Unauthorized' });
+    }
+
+    const userId = req.user._id;
+    const { apnsToken } = req.body;
+
+    if (!apnsToken || typeof apnsToken !== 'string') {
+      return res.status(400).json({
+        success: false,
+        message: 'APNs token is required and must be a string'
+      });
+    }
+
+    const updatedUser = await User.findByIdAndUpdate(
+      userId,
+      { apnsToken },
+      { new: true }
+    ).select('-password -passwordResetToken -passwordResetExpires');
+
+    if (!updatedUser) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    return res.json({
+      success: true,
+      message: 'APNs token updated successfully',
+      data: {
+        user: sanitizeUser(updatedUser)
+      }
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// Update VoIP token for iOS VoIP push notifications
+export const updateVoipToken = async (req, res) => {
+  try {
+    if (!req.user?._id) {
+      return res.status(401).json({ success: false, message: 'Unauthorized' });
+    }
+
+    const userId = req.user._id;
+    const { voipToken } = req.body;
+
+    if (!voipToken || typeof voipToken !== 'string') {
+      return res.status(400).json({
+        success: false,
+        message: 'VoIP token is required and must be a string'
+      });
+    }
+
+    const updatedUser = await User.findByIdAndUpdate(
+      userId,
+      { voipToken },
+      { new: true }
+    ).select('-password -passwordResetToken -passwordResetExpires');
+
+    if (!updatedUser) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    return res.json({
+      success: true,
+      message: 'VoIP token updated successfully',
+      data: {
+        user: sanitizeUser(updatedUser)
+      }
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// Update device type for push notifications
+export const updateDeviceType = async (req, res) => {
+  try {
+    if (!req.user?._id) {
+      return res.status(401).json({ success: false, message: 'Unauthorized' });
+    }
+
+    const userId = req.user._id;
+    const { deviceType } = req.body;
+
+    if (!deviceType || !['ios', 'android'].includes(deviceType)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Device type is required and must be either "ios" or "android"'
+      });
+    }
+
+    const updatedUser = await User.findByIdAndUpdate(
+      userId,
+      { deviceType },
+      { new: true }
+    ).select('-password -passwordResetToken -passwordResetExpires');
+
+    if (!updatedUser) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    return res.json({
+      success: true,
+      message: 'Device type updated successfully',
+      data: {
+        user: sanitizeUser(updatedUser)
+      }
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// Update development mode setting
+export const updateIsDev = async (req, res) => {
+  try {
+    if (!req.user?._id) {
+      return res.status(401).json({ success: false, message: 'Unauthorized' });
+    }
+
+    const userId = req.user._id;
+    const { isDev } = req.body;
+
+    if (typeof isDev === 'undefined') {
+      return res.status(400).json({
+        success: false,
+        message: 'isDev parameter is required'
+      });
+    }
+
+    const booleanIsDev = convertToBoolean(isDev);
+
+    const updatedUser = await User.findByIdAndUpdate(
+      userId,
+      { isDev: booleanIsDev },
+      { new: true }
+    ).select('-password -passwordResetToken -passwordResetExpires');
+
+    if (!updatedUser) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    return res.json({
+      success: true,
+      message: 'Development mode updated successfully',
+      data: {
+        user: sanitizeUser(updatedUser)
+      }
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// Logout user and invalidate all tokens
+export const logout = async (req, res) => {
+  try {
+    if (!req.user?._id) {
+      return res.status(401).json({ success: false, message: 'Unauthorized' });
+    }
+
+    const userId = req.user._id;
+
+    // Increment session version to invalidate all existing tokens
+    const currentSessionVersion = req.user.sessionVersion || 0;
+    const newSessionVersion = currentSessionVersion + 1;
+
+    // Clear all push notification tokens and increment session version
+    await User.findByIdAndUpdate(userId, {
+      $unset: {
+        fcmToken: 1,
+        apnsToken: 1,
+        voipToken: 1
+      },
+      sessionVersion: newSessionVersion
+    });
+
+    return res.json({
+      success: true,
+      message: 'Logged out successfully',
     });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });

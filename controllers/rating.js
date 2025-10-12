@@ -1,10 +1,13 @@
 import { validationResult } from 'express-validator';
+import { getFirstValidationError } from '../utils/validationHelper.js';
 import Review from '../models/Review.js';
 import User from '../models/User.js';
 import Appointment from '../models/Appointment.js';
 import DedicationRequest from '../models/DedicationRequest.js';
 import LiveShow from '../models/LiveShow.js';
 import mongoose from 'mongoose';
+import { sanitizeUserData } from '../utils/userDataHelper.js';
+import NotificationHelper from '../utils/notificationHelper.js';
 
 // Helper function to calculate and update star's average rating
 const updateStarRating = async (starId) => {
@@ -42,7 +45,8 @@ export const submitAppointmentReview = async (req, res) => {
     }
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      return res.status(400).json({ success: false, errors: errors.array() });
+      const errorMessage = getFirstValidationError(errors);
+      return res.status(400).json({ success: false, message: errorMessage || 'Validation failed' });
     }
 
     const { appointmentId, rating, comment } = req.body;
@@ -87,23 +91,32 @@ export const submitAppointmentReview = async (req, res) => {
     // Update star's average rating
     await updateStarRating(appointment.starId);
 
+    // Send notification to star about new rating
+    try {
+      await NotificationHelper.sendRatingNotification('NEW_RATING', review, { currentUserId: req.user._id });
+    } catch (notificationError) {
+      console.error('Error sending rating notification:', notificationError);
+    }
+
     // Populate reviewer info for response
-    await review.populate('reviewerId', 'name pseudo profilePic');
+    await review.populate('reviewerId', 'name pseudo profilePic agoraKey');
 
     return res.status(201).json({
       success: true,
       message: 'Review submitted successfully',
       data: {
-        id: review._id,
-        rating: review.rating,
-        comment: review.comment,
-        reviewer: {
-          id: review.reviewerId._id,
-          name: review.reviewerId.name,
-          pseudo: review.reviewerId.pseudo,
-          profilePic: review.reviewerId.profilePic
-        },
-        createdAt: review.createdAt
+        review: {
+          id: review._id,
+          rating: review.rating,
+          comment: review.comment,
+          reviewer: {
+            id: review.reviewerId._id,
+            name: review.reviewerId.name,
+            pseudo: review.reviewerId.pseudo,
+            profilePic: review.reviewerId.profilePic
+          },
+          createdAt: review.createdAt
+        }
       }
     });
   } catch (err) {
@@ -120,7 +133,8 @@ export const submitDedicationReview = async (req, res) => {
     }
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      return res.status(400).json({ success: false, errors: errors.array() });
+      const errorMessage = getFirstValidationError(errors);
+      return res.status(400).json({ success: false, message: errorMessage || 'Validation failed' });
     }
 
     const { dedicationRequestId, rating, comment } = req.body;
@@ -165,23 +179,32 @@ export const submitDedicationReview = async (req, res) => {
     // Update star's average rating
     await updateStarRating(dedicationRequest.starId);
 
+    // Send notification to star about new rating
+    try {
+      await NotificationHelper.sendRatingNotification('NEW_RATING', review, { currentUserId: req.user._id });
+    } catch (notificationError) {
+      console.error('Error sending rating notification:', notificationError);
+    }
+
     // Populate reviewer info for response
-    await review.populate('reviewerId', 'name pseudo profilePic');
+    await review.populate('reviewerId', 'name pseudo profilePic agoraKey');
 
     return res.status(201).json({
       success: true,
       message: 'Review submitted successfully',
       data: {
-        id: review._id,
-        rating: review.rating,
-        comment: review.comment,
-        reviewer: {
-          id: review.reviewerId._id,
-          name: review.reviewerId.name,
-          pseudo: review.reviewerId.pseudo,
-          profilePic: review.reviewerId.profilePic
-        },
-        createdAt: review.createdAt
+        review: {
+          id: review._id,
+          rating: review.rating,
+          comment: review.comment,
+          reviewer: {
+            id: review.reviewerId._id,
+            name: review.reviewerId.name,
+            pseudo: review.reviewerId.pseudo,
+            profilePic: review.reviewerId.profilePic
+          },
+          createdAt: review.createdAt
+        }
       }
     });
   } catch (err) {
@@ -194,7 +217,8 @@ export const submitLiveShowReview = async (req, res) => {
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      return res.status(400).json({ success: false, errors: errors.array() });
+      const errorMessage = getFirstValidationError(errors);
+      return res.status(400).json({ success: false, message: errorMessage || 'Validation failed' });
     }
 
     const { liveShowId, rating, comment } = req.body;
@@ -239,23 +263,32 @@ export const submitLiveShowReview = async (req, res) => {
     // Update star's average rating
     await updateStarRating(liveShow.starId);
 
+    // Send notification to star about new rating
+    try {
+      await NotificationHelper.sendRatingNotification('NEW_RATING', review, { currentUserId: req.user._id });
+    } catch (notificationError) {
+      console.error('Error sending rating notification:', notificationError);
+    }
+
     // Populate reviewer info for response
-    await review.populate('reviewerId', 'name pseudo profilePic');
+    await review.populate('reviewerId', 'name pseudo profilePic agoraKey');
 
     return res.status(201).json({
       success: true,
       message: 'Review submitted successfully',
       data: {
-        id: review._id,
-        rating: review.rating,
-        comment: review.comment,
-        reviewer: {
-          id: review.reviewerId._id,
-          name: review.reviewerId.name,
-          pseudo: review.reviewerId.pseudo,
-          profilePic: review.reviewerId.profilePic
-        },
-        createdAt: review.createdAt
+        review: {
+          id: review._id,
+          rating: review.rating,
+          comment: review.comment,
+          reviewer: {
+            id: review.reviewerId._id,
+            name: review.reviewerId.name,
+            pseudo: review.reviewerId.pseudo,
+            profilePic: review.reviewerId.profilePic
+          },
+          createdAt: review.createdAt
+        }
       }
     });
   } catch (err) {
@@ -278,24 +311,20 @@ export const getStarReviews = async (req, res) => {
     const reviews = await Review.find({ 
       starId
     })
-    .populate('reviewerId', 'name pseudo profilePic')
+    .populate('reviewerId', 'name pseudo profilePic agoraKey')
     .sort({ createdAt: -1 });
 
     const star = await User.findById(starId).select('averageRating totalReviews');
 
     return res.json({
       success: true,
+      message: 'Star reviews retrieved successfully',
       data: {
         reviews: reviews.map(review => ({
           id: review._id,
           rating: review.rating,
           comment: review.comment,
-          reviewer: {
-            id: review.reviewerId._id,
-            name: review.reviewerId.name,
-            pseudo: review.reviewerId.pseudo,
-            profilePic: review.reviewerId.profilePic
-          },
+          reviewer: review.reviewerId ? sanitizeUserData(review.reviewerId) : null,
           reviewType: review.reviewType,
           createdAt: review.createdAt
         })),
@@ -319,11 +348,12 @@ export const getMyReviews = async (req, res) => {
     const filter = isStar ? { starId: req.user._id } : { reviewerId: req.user._id };
 
     const reviews = await Review.find(filter)
-      .populate(isStar ? 'reviewerId' : 'starId', 'name pseudo profilePic')
+      .populate(isStar ? 'reviewerId' : 'starId', 'name pseudo profilePic agoraKey')
       .sort({ createdAt: -1 });
 
     return res.json({
       success: true,
+      message: 'User reviews retrieved successfully',
       data: {
         reviews: reviews.map(review => ({
           id: review._id,
@@ -332,20 +362,10 @@ export const getMyReviews = async (req, res) => {
           // If star is requesting, include reviewer details; otherwise include star details
           ...(isStar
             ? {
-                reviewer: {
-                  id: review.reviewerId._id,
-                  name: review.reviewerId.name,
-                  pseudo: review.reviewerId.pseudo,
-                  profilePic: review.reviewerId.profilePic
-                }
+                reviewer: review.reviewerId ? sanitizeUserData(review.reviewerId) : null
               }
             : {
-                star: {
-                  id: review.starId._id,
-                  name: review.starId.name,
-                  pseudo: review.starId.pseudo,
-                  profilePic: review.starId.profilePic
-                }
+                star: review.starId ? sanitizeUserData(review.starId) : null
               }),
           reviewType: review.reviewType,
           createdAt: review.createdAt
@@ -362,7 +382,8 @@ export const updateReview = async (req, res) => {
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      return res.status(400).json({ success: false, errors: errors.array() });
+      const errorMessage = getFirstValidationError(errors);
+      return res.status(400).json({ success: false, message: errorMessage || 'Validation failed' });
     }
 
     const { reviewId } = req.params;
@@ -392,10 +413,12 @@ export const updateReview = async (req, res) => {
       success: true,
       message: 'Review updated successfully',
       data: {
-        id: review._id,
-        rating: review.rating,
-        comment: review.comment,
-        updatedAt: review.updatedAt
+        review: {
+          id: review._id,
+          rating: review.rating,
+          comment: review.comment,
+          updatedAt: review.updatedAt
+        }
       }
     });
   } catch (err) {
@@ -434,6 +457,8 @@ export const deleteReview = async (req, res) => {
     return res.status(500).json({ success: false, message: err.message });
   }
 };
+
+
 
 
 

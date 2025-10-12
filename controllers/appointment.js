@@ -1,24 +1,15 @@
 import { validationResult } from 'express-validator';
+import { getFirstValidationError } from '../utils/validationHelper.js';
 import Availability from '../models/Availability.js';
 import Appointment from '../models/Appointment.js';
 import { createTransaction, createHybridTransaction, completeTransaction, cancelTransaction } from '../services/transactionService.js';
-import { TRANSACTION_TYPES, TRANSACTION_DESCRIPTIONS } from '../utils/transactionConstants.js';
+import { TRANSACTION_TYPES, TRANSACTION_DESCRIPTIONS, createTransactionDescription } from '../utils/transactionConstants.js';
 import Transaction from '../models/Transaction.js'; // Added missing import for Transaction
 import NotificationHelper from '../utils/notificationHelper.js';
 import { deleteConversationBetweenUsers } from '../services/messagingCleanup.js';
+import { sanitizeUserData } from '../utils/userDataHelper.js';
 
-const toUser = (u) => (
-  u && u._id ? {
-    id: u._id,
-    name: u.name,
-    pseudo: u.pseudo,
-    profilePic: u.profilePic,
-    email: u.email,
-    contact: u.contact,
-    baroniId: u.baroniId,
-    role: u.role,
-  } : u
-);
+const toUser = (u) => u ? sanitizeUserData(u) : null;
 
 const toAvailability = (a) => (
   a && a._id ? {
@@ -38,17 +29,120 @@ const sanitize = (doc) => ({
   time: doc.time,
   price: doc.price,
   status: doc.status,
+  ...(doc.paymentStatus ? { paymentStatus: doc.paymentStatus } : {}),
   transactionId: doc.transactionId,
+  // Keep transaction status light; paymentStatus covers domain payment lifecycle
   completedAt: doc.completedAt,
+  callDuration: typeof doc.callDuration === 'number' ? doc.callDuration : undefined,
   createdAt: doc.createdAt,
   updatedAt: doc.updatedAt,
 });
 
+// Get single appointment details
+export const getAppointmentDetails = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user._id;
+    const userRole = req.user.role;
+
+    if (!id) {
+      return res.status(400).json({
+        success: false,
+        message: 'Appointment ID is required'
+      });
+    }
+
+    // Find appointment - fans can only see their own, stars can see their own, admins can see all
+    let filter = { _id: id };
+    if (userRole === 'fan') {
+      filter.fanId = userId;
+    } else if (userRole === 'star') {
+      filter.starId = userId;
+    }
+    // Admin can see all appointments (no additional filter)
+
+    const appointment = await Appointment.findOne(filter)
+      .populate({ path: 'starId', select: '-password -passwordResetToken -passwordResetExpires' })
+      .populate('fanId', 'name pseudo profilePic baroniId email contact role agoraKey')
+      .populate('availabilityId', 'date timeSlots')
+      .populate('transactionId', 'amount status type')
+      .lean();
+
+    if (!appointment) {
+      return res.status(404).json({
+        success: false,
+        message: 'Appointment not found'
+      });
+    }
+
+    // Add computed fields similar to listAppointments
+    const parseStartDate = (dateStr, timeStr) => {
+      const [year, month, day] = (dateStr || '').split('-').map((v) => parseInt(v, 10));
+      let hours = 0;
+      let minutes = 0;
+      if (typeof timeStr === 'string') {
+        const m = timeStr.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+        if (m) {
+          hours = parseInt(m[1], 10);
+          minutes = parseInt(m[2], 10);
+          const ampm = m[3].toUpperCase();
+          if (ampm === 'PM' && hours !== 12) hours += 12;
+          if (ampm === 'AM' && hours === 12) hours = 0;
+        }
+      }
+      const d = new Date(year || 0, (month || 1) - 1, day || 1, hours, minutes, 0, 0);
+      return d;
+    };
+
+    let timeSlotObj = undefined;
+    if (appointment.availabilityId && appointment.availabilityId.timeSlots) {
+      const found = appointment.availabilityId.timeSlots.find((s) => String(s._id) === String(appointment.timeSlotId));
+      if (found) timeSlotObj = { id: found._id, slot: found.slot, status: found.status };
+    }
+
+    const startAt = parseStartDate(appointment.date, appointment.time);
+    const timeToNowMs = startAt.getTime() - Date.now();
+
+    const appointmentData = {
+      ...sanitize(appointment),
+      timeSlot: timeSlotObj,
+      startAt: isNaN(startAt.getTime()) ? undefined : startAt.toISOString(),
+      timeToNowMs
+    };
+
+    return res.status(200).json({
+      success: true,
+      message: 'Appointment details retrieved successfully',
+      data: {
+        appointment: appointmentData
+      }
+    });
+
+  } catch (error) {
+    console.error('Error fetching appointment details:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while fetching appointment details',
+      error: error.message
+    });
+  }
+};
+
 export const createAppointment = async (req, res) => {
   try {
     const errors = validationResult(req);
-    if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
-    const { starId, availabilityId, timeSlotId, price, starName } = req.body;
+    if (!errors.isEmpty()) {
+      const errorMessage = getFirstValidationError(errors);
+      return res.status(400).json({ success: false, message: errorMessage || 'Validation failed' });
+    }
+    let { starId, starBaroniId, baroniId, availabilityId, timeSlotId, price, starName } = req.body;
+
+    // Allow passing star by Baroni ID
+    if (!starId && (starBaroniId || baroniId)) {
+      const starByBaroni = await (await import('../models/User.js')).default.findOne({ baroniId: starBaroniId || baroniId, role: 'star' }).select('_id');
+      if (!starByBaroni) return res.status(404).json({ success: false, message: 'Star not found' });
+      starId = starByBaroni._id;
+    }
 
     const availability = await Availability.findOne({ _id: availabilityId, userId: starId });
     if (!availability) return res.status(404).json({ success: false, message: 'Availability not found' });
@@ -111,15 +205,16 @@ export const createAppointment = async (req, res) => {
         payerId: req.user._id,
         receiverId: starId,
         amount: price,
-        description: TRANSACTION_DESCRIPTIONS[TRANSACTION_TYPES.APPOINTMENT_PAYMENT],
+        description: createTransactionDescription(TRANSACTION_TYPES.APPOINTMENT_PAYMENT, req.user.name || req.user.pseudo || '', starName || '', req.user.role || 'fan', 'star'),
         userPhone: normalizedPhone,
-        starName,
+        starName: starName || '',
         metadata: {
           appointmentType: 'booking',
           availabilityId,
           timeSlotId,
           date: availability.date,
-          time: slot.slot
+          time: slot.slot,
+          payerName: req.user.name || req.user.pseudo || ''
         }
       });
     } catch (transactionError) {
@@ -153,20 +248,36 @@ export const createAppointment = async (req, res) => {
       time: slot.slot,
       price,
       status: 'pending',
+      paymentStatus: transaction.status === 'initiated' ? 'initiated' : 'pending',
       transactionId: transaction._id,
     });
 
+    // Reserve the slot immediately for all bookings (hybrid or coin-only)
+    try {
+      // Atomic update to avoid race conditions
+      await Availability.updateOne(
+        { _id: availabilityId, userId: starId, 'timeSlots._id': timeSlotId, 'timeSlots.status': 'available' },
+        { $set: { 'timeSlots.$.status': 'unavailable' } }
+      );
+    } catch (_e) {}
+
     // Send notification to star about new appointment request
     try {
-      await NotificationHelper.sendAppointmentNotification('APPOINTMENT_CREATED', created);
+      await NotificationHelper.sendAppointmentNotification('APPOINTMENT_CREATED', created, { currentUserId: req.user._id });
     } catch (notificationError) {
       console.error('Error sending appointment notification:', notificationError);
     }
 
-    const responseBody = { success: true, data: sanitize(created) };
+    const responseBody = { 
+      success: true, 
+      message: 'Appointment created successfully',
+      data: {
+        appointment: sanitize(created)
+      }
+    };
     if (transactionResult && transactionResult.paymentMode === 'hybrid' || transactionResult?.externalAmount > 0) {
       if (transactionResult.externalPaymentMessage) {
-        responseBody.externalPaymentMessage = transactionResult.externalPaymentMessage;
+        responseBody.data.externalPaymentMessage = transactionResult.externalPaymentMessage;
       }
     }
     return res.status(201).json(responseBody);
@@ -179,22 +290,75 @@ export const listAppointments = async (req, res) => {
   try {
     const isStar = req.user.role === 'star' || req.user.role === 'admin';
     const filter = isStar ? { starId: req.user._id } : { fanId: req.user._id };
+    // Optional date filtering: exact date or range via startDate/endDate (expects YYYY-MM-DD strings)
+    const { date, startDate, endDate } = req.query || {};
+    if (date && typeof date === 'string' && date.trim()) {
+      filter.date = date.trim();
+    } else if ((startDate && typeof startDate === 'string') || (endDate && typeof endDate === 'string')) {
+      const range = {};
+      if (startDate && startDate.trim()) range.$gte = startDate.trim();
+      if (endDate && endDate.trim()) range.$lte = endDate.trim();
+      if (Object.keys(range).length > 0) filter.date = range;
+    }
     const items = await Appointment.find(filter)
-      .populate('starId', 'name pseudo profilePic baroniId email contact role')
-      .populate('fanId', 'name pseudo profilePic baroniId email contact role')
+      .populate({ path: 'starId', select: '-password -passwordResetToken -passwordResetExpires' })
+      .populate('fanId', 'name pseudo profilePic baroniId email contact role agoraKey')
       .populate('availabilityId')
       .sort({ createdAt: -1 });
 
-    const data = items.map((doc) => {
+    const parseStartDate = (dateStr, timeStr) => {
+      const [year, month, day] = (dateStr || '').split('-').map((v) => parseInt(v, 10));
+      let hours = 0;
+      let minutes = 0;
+      if (typeof timeStr === 'string') {
+        const m = timeStr.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+        if (m) {
+          hours = parseInt(m[1], 10);
+          minutes = parseInt(m[2], 10);
+          const ampm = m[3].toUpperCase();
+          if (ampm === 'PM' && hours !== 12) hours += 12;
+          if (ampm === 'AM' && hours === 12) hours = 0;
+        }
+      }
+      const d = new Date(year || 0, (month || 1) - 1, day || 1, hours, minutes, 0, 0);
+      return d;
+    };
+
+    const withComputed = items.map((doc) => {
       const base = sanitize(doc);
       let timeSlotObj = undefined;
       if (doc.availabilityId && doc.availabilityId.timeSlots) {
         const found = doc.availabilityId.timeSlots.find((s) => String(s._id) === String(doc.timeSlotId));
         if (found) timeSlotObj = { id: found._id, slot: found.slot, status: found.status };
       }
-      return { ...base, timeSlot: timeSlotObj };
+      const startAt = parseStartDate(base.date, base.time);
+      const timeToNowMs = startAt.getTime() - Date.now();
+      return { ...base, timeSlot: timeSlotObj, startAt: isNaN(startAt.getTime()) ? undefined : startAt.toISOString(), timeToNowMs };
     });
-    return res.json({ success: true, data });
+
+    const future = [];
+    const past = [];
+    const cancelled = [];
+    for (const it of withComputed) {
+      if (it.status === 'cancelled') {
+        cancelled.push(it);
+      } else if (typeof it.timeToNowMs === 'number' && it.timeToNowMs >= 0) {
+        future.push(it);
+      } else {
+        past.push(it);
+      }
+    }
+    future.sort((a, b) => (a.timeToNowMs ?? Infinity) - (b.timeToNowMs ?? Infinity));
+    past.sort((a, b) => Math.abs(a.timeToNowMs ?? 0) - Math.abs(b.timeToNowMs ?? 0));
+    // Keep cancelled at the very end; sort by most recent update descending inside cancelled
+    cancelled.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+    const data = [...future, ...past, ...cancelled];
+
+    return res.json({ 
+      success: true, 
+      message: 'Appointments retrieved successfully',
+      data: data
+    });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
@@ -203,7 +367,10 @@ export const listAppointments = async (req, res) => {
 export const approveAppointment = async (req, res) => {
   try {
     const errors = validationResult(req);
-    if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
+    if (!errors.isEmpty()) {
+      const errorMessage = getFirstValidationError(errors);
+      return res.status(400).json({ success: false, message: errorMessage || 'Validation failed' });
+    }
     const { id } = req.params;
     const appt = await Appointment.findOne({ _id: id, starId: req.user._id });
     if (!appt) return res.status(404).json({ success: false, message: 'Appointment not found' });
@@ -223,12 +390,18 @@ export const approveAppointment = async (req, res) => {
 
     // Send notification to fan about appointment approval
     try {
-      await NotificationHelper.sendAppointmentNotification('APPOINTMENT_ACCEPTED', updated);
+      await NotificationHelper.sendAppointmentNotification('APPOINTMENT_ACCEPTED', updated, { currentUserId: req.user._id });
     } catch (notificationError) {
       console.error('Error sending appointment approval notification:', notificationError);
     }
 
-    return res.json({ success: true, data: sanitize(updated) });
+    return res.json({ 
+      success: true, 
+      message: 'Appointment approved successfully',
+      data: {
+        appointment: sanitize(updated)
+      }
+    });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
@@ -237,7 +410,10 @@ export const approveAppointment = async (req, res) => {
 export const rejectAppointment = async (req, res) => {
   try {
     const errors = validationResult(req);
-    if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
+    if (!errors.isEmpty()) {
+      const errorMessage = getFirstValidationError(errors);
+      return res.status(400).json({ success: false, message: errorMessage || 'Validation failed' });
+    }
     const { id } = req.params;
     const appt = await Appointment.findOne({ _id: id, starId: req.user._id });
     if (!appt) return res.status(404).json({ success: false, message: 'Appointment not found' });
@@ -254,14 +430,28 @@ export const rejectAppointment = async (req, res) => {
     }
     const updated = await appt.save();
 
+    // Free the reserved slot if it was marked unavailable (pending hybrid reservation)
+    try {
+      await Availability.updateOne(
+        { _id: appt.availabilityId, userId: appt.starId, 'timeSlots._id': appt.timeSlotId },
+        { $set: { 'timeSlots.$.status': 'available' } }
+      );
+    } catch (_e) {}
+
     // Send notification to fan about appointment rejection
     try {
-      await NotificationHelper.sendAppointmentNotification('APPOINTMENT_REJECTED', updated);
+      await NotificationHelper.sendAppointmentNotification('APPOINTMENT_REJECTED', updated, { currentUserId: req.user._id });
     } catch (notificationError) {
       console.error('Error sending appointment rejection notification:', notificationError);
     }
 
-    return res.json({ success: true, data: sanitize(updated) });
+    return res.json({ 
+      success: true, 
+      message: 'Appointment rejected successfully',
+      data: {
+        appointment: sanitize(updated)
+      }
+    });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
@@ -270,7 +460,10 @@ export const rejectAppointment = async (req, res) => {
 export const cancelAppointment = async (req, res) => {
   try {
     const errors = validationResult(req);
-    if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
+    if (!errors.isEmpty()) {
+      const errorMessage = getFirstValidationError(errors);
+      return res.status(400).json({ success: false, message: errorMessage || 'Validation failed' });
+    }
     const { id } = req.params;
     const filter = { _id: id };
     if (req.user.role !== 'admin') filter.fanId = req.user._id;
@@ -288,21 +481,30 @@ export const cancelAppointment = async (req, res) => {
       }
     }
 
-    // If previously approved, free the reserved slot
-    if (appt.status === 'approved') {
-      const availability = await Availability.findOne({ _id: appt.availabilityId, userId: appt.starId });
-      if (availability) {
-        const slot = availability.timeSlots.find((s) => String(s._id) === String(appt.timeSlotId));
-        if (slot && slot.status === 'unavailable') {
-          slot.status = 'available';
-          await availability.save();
-        }
-      }
-    }
+    // Free the reserved slot (for approved or pending hybrid-reserved)
+    try {
+      await Availability.updateOne(
+        { _id: appt.availabilityId, userId: appt.starId, 'timeSlots._id': appt.timeSlotId },
+        { $set: { 'timeSlots.$.status': 'available' } }
+      );
+    } catch (_e) {}
 
     appt.status = 'cancelled';
     const updated = await appt.save();
-    return res.json({ success: true, data: sanitize(updated) });
+
+    // Notify counterpart only: if star cancelled, notify fan; if fan cancelled, notify star
+    try {
+      await NotificationHelper.sendAppointmentNotification('APPOINTMENT_CANCELLED', updated, { currentUserId: req.user._id });
+    } catch (notificationError) {
+      console.error('Error sending appointment cancellation notification:', notificationError);
+    }
+    return res.json({ 
+      success: true, 
+      message: 'Appointment cancelled successfully',
+      data: {
+        appointment: sanitize(updated)
+      }
+    });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
@@ -311,7 +513,10 @@ export const cancelAppointment = async (req, res) => {
 export const rescheduleAppointment = async (req, res) => {
   try {
     const errors = validationResult(req);
-    if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
+    if (!errors.isEmpty()) {
+      const errorMessage = getFirstValidationError(errors);
+      return res.status(400).json({ success: false, message: errorMessage || 'Validation failed' });
+    }
     const { id } = req.params;
     const { availabilityId, timeSlotId } = req.body;
 
@@ -385,7 +590,13 @@ export const rescheduleAppointment = async (req, res) => {
     appt.time = newSlot.slot;
     appt.status = 'pending';
     const updated = await appt.save();
-    return res.json({ success: true, data: sanitize(updated) });
+    return res.json({ 
+      success: true, 
+      message: 'Appointment rescheduled successfully',
+      data: {
+        appointment: sanitize(updated)
+      }
+    });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
@@ -394,7 +605,10 @@ export const rescheduleAppointment = async (req, res) => {
 export const completeAppointment = async (req, res) => {
   try {
     const errors = validationResult(req);
-    if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
+    if (!errors.isEmpty()) {
+      const errorMessage = getFirstValidationError(errors);
+      return res.status(400).json({ success: false, message: errorMessage || 'Validation failed' });
+    }
     const { id } = req.params;
     const { callDuration } = req.body;
     const appt = await Appointment.findOne({ _id: id, starId: req.user._id });
@@ -414,6 +628,7 @@ export const completeAppointment = async (req, res) => {
     }
 
     appt.status = 'completed';
+    appt.paymentStatus = 'completed';
     appt.completedAt = new Date();
     appt.callDuration = callDuration;
     const updated = await appt.save();
@@ -423,7 +638,13 @@ export const completeAppointment = async (req, res) => {
       await deleteConversationBetweenUsers(appt.fanId, appt.starId);
     } catch (_e) {}
 
-    return res.json({ success: true, data: sanitize(updated) });
+    return res.json({ 
+      success: true, 
+      message: 'Appointment completed successfully',
+      data: {
+        appointment: sanitize(updated)
+      }
+    });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }

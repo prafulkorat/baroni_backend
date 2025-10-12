@@ -1,27 +1,32 @@
 import {validationResult} from 'express-validator';
+import { getFirstValidationError } from '../utils/validationHelper.js';
 import DedicationRequest from '../models/DedicationRequest.js';
 import {generateUniqueTrackingId} from '../utils/trackingIdGenerator.js';
 import {uploadVideo} from '../utils/uploadFile.js';
 import { createTransaction, createHybridTransaction, completeTransaction, cancelTransaction } from '../services/transactionService.js';
-import { TRANSACTION_TYPES, TRANSACTION_DESCRIPTIONS } from '../utils/transactionConstants.js';
+import { TRANSACTION_TYPES, TRANSACTION_DESCRIPTIONS, createTransactionDescription } from '../utils/transactionConstants.js';
 import Transaction from '../models/Transaction.js';
 import NotificationHelper from '../utils/notificationHelper.js';
 const { normalizeContact } = await import('../utils/normalizeContact.js');
 import { deleteConversationBetweenUsers } from '../services/messagingCleanup.js';
+import { sanitizeUserData } from '../utils/userDataHelper.js';
 
 const sanitize = (doc) => ({
   id: doc._id,
   trackingId: doc.trackingId,
-  fanId: doc.fanId,
-  starId: doc.starId,
+  fanId: doc.fanId && typeof doc.fanId === 'object' ? sanitizeUserData(doc.fanId) : doc.fanId,
+  starId: doc.starId && typeof doc.starId === 'object' ? sanitizeUserData(doc.starId) : doc.starId,
+  starBaroniId: doc.starId && doc.starId.baroniId ? doc.starId.baroniId : undefined,
   occasion: doc.occasion,
   eventName: doc.eventName,
   eventDate: doc.eventDate,
   description: doc.description,
   price: doc.price,
   status: doc.status,
+  ...(doc.paymentStatus ? { paymentStatus: doc.paymentStatus } : {}),
   videoUrl: doc.videoUrl,
   transactionId: doc.transactionId,
+  // Domain payment lifecycle is tracked in paymentStatus
   approvedAt: doc.approvedAt,
   rejectedAt: doc.rejectedAt,
   cancelledAt: doc.cancelledAt,
@@ -35,9 +40,19 @@ const sanitize = (doc) => ({
 export const createDedicationRequest = async (req, res) => {
   try {
     const errors = validationResult(req);
-    if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
+    if (!errors.isEmpty()) {
+      const errorMessage = getFirstValidationError(errors);
+      return res.status(400).json({ success: false, message: errorMessage || 'Validation failed' });
+    }
 
-    const { starId, occasion, eventName, eventDate, description, price, starName } = req.body;
+    let { starId, starBaroniId, baroniId, occasion, eventName, eventDate, description, price, starName } = req.body;
+
+    // Allow passing star by Baroni ID
+    if (!starId && (starBaroniId || baroniId)) {
+      const starByBaroni = await (await import('../models/User.js')).default.findOne({ baroniId: starBaroniId || baroniId, role: 'star' }).select('_id');
+      if (!starByBaroni) return res.status(404).json({ success: false, message: 'Star not found' });
+      starId = starByBaroni._id;
+    }
 
     // Create hybrid transaction before creating dedication request
     let txnResult;
@@ -52,14 +67,16 @@ export const createDedicationRequest = async (req, res) => {
         payerId: req.user._id,
         receiverId: starId,
         amount: price,
-        description: TRANSACTION_DESCRIPTIONS[TRANSACTION_TYPES.DEDICATION_REQUEST_PAYMENT],
+        description: createTransactionDescription(TRANSACTION_TYPES.DEDICATION_REQUEST_PAYMENT, req.user.name || req.user.pseudo || '', starName || '', req.user.role || 'fan', 'star'),
         userPhone: payloadContact,
-        starName,
+        starName: starName || '',
         metadata: {
           occasion,
           eventName,
           eventDate: new Date(eventDate),
-          dedicationType: 'request'
+          dedicationType: 'request',
+          message: description || '',
+          payerName: req.user.name || req.user.pseudo || ''
         }
       });
     } catch (transactionError) {
@@ -94,20 +111,27 @@ export const createDedicationRequest = async (req, res) => {
       description,
       price,
       status: 'pending',
+      paymentStatus: transaction.status === 'initiated' ? 'initiated' : 'pending',
       transactionId: transaction._id
     });
 
     // Notify star
     try {
-      await NotificationHelper.sendDedicationNotification('DEDICATION_REQUEST_CREATED', created);
+      await NotificationHelper.sendDedicationNotification('DEDICATION_REQUEST_CREATED', created, { currentUserId: req.user._id });
     } catch (notificationError) {
       console.error('Error sending dedication notification:', notificationError);
     }
 
-    const responseBody = { success: true, data: sanitize(created) };
+    const responseBody = { 
+      success: true, 
+      message: 'Dedication request created successfully',
+      data: {
+        dedicationRequest: sanitize(created)
+      }
+    };
     if (txnResult && txnResult.paymentMode === 'hybrid' || txnResult?.externalAmount > 0) {
       if (txnResult.externalPaymentMessage) {
-        responseBody.externalPaymentMessage = txnResult.externalPaymentMessage;
+        responseBody.data.externalPaymentMessage = txnResult.externalPaymentMessage;
       }
     }
 
@@ -140,11 +164,39 @@ export const listDedicationRequests = async (req, res) => {
     }
 
     const items = await DedicationRequest.find(filter)
-      .populate('fanId')
-      .populate('starId')
+      .populate('fanId', 'name pseudo profilePic agoraKey')
+      .populate({ path: 'starId', select: '-password -passwordResetToken -passwordResetExpires' })
       .sort({ createdAt: -1 });
 
-    return res.json({ success: true, data: items.map(sanitize) });
+    const withComputed = items.map((doc) => {
+      const base = sanitize(doc);
+      const eventAt = base.eventDate ? new Date(base.eventDate) : undefined;
+      const timeToNowMs = eventAt ? (eventAt.getTime() - Date.now()) : undefined;
+      return { ...base, eventAt: eventAt ? eventAt.toISOString() : undefined, timeToNowMs };
+    });
+
+    const future = [];
+    const past = [];
+    const cancelled = [];
+    for (const it of withComputed) {
+      if (it.status === 'cancelled') {
+        cancelled.push(it);
+      } else if (typeof it.timeToNowMs === 'number' && it.timeToNowMs >= 0) {
+        future.push(it);
+      } else {
+        past.push(it);
+      }
+    }
+    future.sort((a, b) => (a.timeToNowMs ?? Infinity) - (b.timeToNowMs ?? Infinity));
+    past.sort((a, b) => Math.abs(a.timeToNowMs ?? 0) - Math.abs(b.timeToNowMs ?? 0));
+    cancelled.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+    const data = [...future, ...past, ...cancelled];
+
+    return res.json({ 
+      success: true, 
+      message: 'Dedication requests retrieved successfully',
+      data: data
+    });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
@@ -154,11 +206,14 @@ export const listDedicationRequests = async (req, res) => {
 export const getDedicationRequest = async (req, res) => {
   try {
     const errors = validationResult(req);
-    if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
+    if (!errors.isEmpty()) {
+      const errorMessage = getFirstValidationError(errors);
+      return res.status(400).json({ success: false, message: errorMessage || 'Validation failed' });
+    }
 
     const item = await DedicationRequest.findById(req.params.id)
-      .populate('fanId')
-      .populate('starId');
+      .populate('fanId', 'name pseudo profilePic agoraKey')
+      .populate({ path: 'starId', select: '-password -passwordResetToken -passwordResetExpires' });
 
     if (!item) return res.status(404).json({ success: false, message: 'Not found' });
 
@@ -170,7 +225,13 @@ export const getDedicationRequest = async (req, res) => {
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
 
-    return res.json({ success: true, data: sanitize(item) });
+    return res.json({ 
+      success: true, 
+      message: 'Dedication request retrieved successfully',
+      data: {
+        dedicationRequest: sanitize(item)
+      }
+    });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
@@ -180,7 +241,10 @@ export const getDedicationRequest = async (req, res) => {
 export const approveDedicationRequest = async (req, res) => {
   try {
     const errors = validationResult(req);
-    if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
+    if (!errors.isEmpty()) {
+      const errorMessage = getFirstValidationError(errors);
+      return res.status(400).json({ success: false, message: errorMessage || 'Validation failed' });
+    }
 
     let filter = { _id: req.params.id, status: 'pending' };
 
@@ -200,12 +264,18 @@ export const approveDedicationRequest = async (req, res) => {
 
     // Send notification to fan about dedication request approval
     try {
-      await NotificationHelper.sendDedicationNotification('DEDICATION_ACCEPTED', updated);
+      await NotificationHelper.sendDedicationNotification('DEDICATION_ACCEPTED', updated, { currentUserId: req.user._id });
     } catch (notificationError) {
       console.error('Error sending dedication approval notification:', notificationError);
     }
 
-    return res.json({ success: true, data: sanitize(updated) });
+    return res.json({ 
+      success: true, 
+      message: 'Dedication request approved successfully',
+      data: {
+        dedicationRequest: sanitize(updated)
+      }
+    });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
@@ -215,7 +285,10 @@ export const approveDedicationRequest = async (req, res) => {
 export const rejectDedicationRequest = async (req, res) => {
   try {
     const errors = validationResult(req);
-    if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
+    if (!errors.isEmpty()) {
+      const errorMessage = getFirstValidationError(errors);
+      return res.status(400).json({ success: false, message: errorMessage || 'Validation failed' });
+    }
 
     let filter = { _id: req.params.id, status: 'pending' };
 
@@ -245,12 +318,18 @@ export const rejectDedicationRequest = async (req, res) => {
 
     // Send notification to fan about dedication request rejection
     try {
-      await NotificationHelper.sendDedicationNotification('DEDICATION_REJECTED', updated);
+      await NotificationHelper.sendDedicationNotification('DEDICATION_REJECTED', updated, { currentUserId: req.user._id });
     } catch (notificationError) {
       console.error('Error sending dedication rejection notification:', notificationError);
     }
 
-    return res.json({ success: true, data: sanitize(updated) });
+    return res.json({ 
+      success: true, 
+      message: 'Dedication request rejected successfully',
+      data: {
+        dedicationRequest: sanitize(updated)
+      }
+    });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
@@ -260,7 +339,10 @@ export const rejectDedicationRequest = async (req, res) => {
 export const uploadDedicationVideo = async (req, res) => {
   try {
     const errors = validationResult(req);
-    if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
+    if (!errors.isEmpty()) {
+      const errorMessage = getFirstValidationError(errors);
+      return res.status(400).json({ success: false, message: errorMessage || 'Validation failed' });
+    }
 
     if (!req.file) {
       return res.status(400).json({ success: false, message: 'Video file is required' });
@@ -283,12 +365,18 @@ export const uploadDedicationVideo = async (req, res) => {
 
     // Notify fan about video upload
     try {
-      await NotificationHelper.sendDedicationNotification('DEDICATION_VIDEO_UPLOADED', updated);
+      await NotificationHelper.sendDedicationNotification('DEDICATION_VIDEO_UPLOADED', updated, { currentUserId: req.user._id });
     } catch (notificationError) {
       console.error('Error sending dedication video upload notification:', notificationError);
     }
 
-    return res.json({ success: true, data: sanitize(updated) });
+    return res.json({ 
+      success: true, 
+      message: 'Dedication video uploaded successfully',
+      data: {
+        dedicationRequest: sanitize(updated)
+      }
+    });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
@@ -298,7 +386,10 @@ export const uploadDedicationVideo = async (req, res) => {
 export const completeDedicationByFan = async (req, res) => {
   try {
     const errors = validationResult(req);
-    if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
+    if (!errors.isEmpty()) {
+      const errorMessage = getFirstValidationError(errors);
+      return res.status(400).json({ success: false, message: errorMessage || 'Validation failed' });
+    }
 
     let filter = { _id: req.params.id, status: 'approved' };
 
@@ -327,6 +418,7 @@ export const completeDedicationByFan = async (req, res) => {
     }
 
     item.status = 'completed';
+    item.paymentStatus = 'completed';
     item.completedAt = new Date();
     const updated = await item.save();
 
@@ -335,7 +427,13 @@ export const completeDedicationByFan = async (req, res) => {
       await deleteConversationBetweenUsers(item.fanId, item.starId);
     } catch (_e) {}
 
-    return res.json({ success: true, data: sanitize(updated) });
+    return res.json({ 
+      success: true, 
+      message: 'Dedication completed successfully',
+      data: {
+        dedicationRequest: sanitize(updated)
+      }
+    });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
@@ -345,7 +443,10 @@ export const completeDedicationByFan = async (req, res) => {
 export const cancelDedicationRequest = async (req, res) => {
   try {
     const errors = validationResult(req);
-    if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
+    if (!errors.isEmpty()) {
+      const errorMessage = getFirstValidationError(errors);
+      return res.status(400).json({ success: false, message: errorMessage || 'Validation failed' });
+    }
 
     let filter = { _id: req.params.id, status: 'pending' };
 
@@ -371,7 +472,20 @@ export const cancelDedicationRequest = async (req, res) => {
     item.status = 'cancelled';
     item.cancelledAt = new Date();
     const updated = await item.save();
-    return res.json({ success: true, data: sanitize(updated) });
+
+    // Notify counterpart only
+    try {
+      await NotificationHelper.sendDedicationNotification('DEDICATION_CANCELLED', updated, { currentUserId: req.user._id });
+    } catch (notificationError) {
+      console.error('Error sending dedication cancellation notification:', notificationError);
+    }
+    return res.json({ 
+      success: true, 
+      message: 'Dedication request cancelled successfully',
+      data: {
+        dedicationRequest: sanitize(updated)
+      }
+    });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
@@ -381,17 +495,26 @@ export const cancelDedicationRequest = async (req, res) => {
 export const getDedicationRequestByTrackingId = async (req, res) => {
   try {
     const errors = validationResult(req);
-    if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
+    if (!errors.isEmpty()) {
+      const errorMessage = getFirstValidationError(errors);
+      return res.status(400).json({ success: false, message: errorMessage || 'Validation failed' });
+    }
 
     const { trackingId } = req.params;
 
     const item = await DedicationRequest.findOne({ trackingId })
-      .populate('fanId')
-      .populate('starId');
+      .populate('fanId', 'name pseudo profilePic agoraKey')
+      .populate({ path: 'starId', select: '-password -passwordResetToken -passwordResetExpires' });
 
     if (!item) return res.status(404).json({ success: false, message: 'Request not found' });
 
-    return res.json({ success: true, data: sanitize(item) });
+    return res.json({ 
+      success: true, 
+      message: 'Dedication request retrieved successfully',
+      data: {
+        dedicationRequest: sanitize(item)
+      }
+    });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }

@@ -23,7 +23,7 @@ export const getUserNotifications = async (req, res) => {
     // Get all notifications sorted by sentAt (latest first)
     const notifications = await Notification.find(query)
       .sort({ sentAt: -1 })
-      .populate('user', 'name pseudo profilePic')
+      .populate('user', 'name pseudo profilePic agoraKey')
       .lean();
 
     // Add timeAgo to each notification
@@ -34,6 +34,7 @@ export const getUserNotifications = async (req, res) => {
 
     res.json({
       success: true,
+      message: 'Notifications retrieved successfully',
       data: {
         notifications: notificationsWithTimeAgo
       }
@@ -150,7 +151,10 @@ export const getNotificationStats = async (req, res) => {
 
     res.json({
       success: true,
-      data: result
+      message: 'Notification statistics retrieved successfully',
+      data: {
+        ...result
+      }
     });
   } catch (error) {
     console.error('Error fetching notification stats:', error);
@@ -176,10 +180,24 @@ export const sendTestNotification = async (req, res) => {
       });
     }
 
+    // Only allow VOIP notifications from frontend users, not from backend
+    const normalizedType = typeof type === 'string' ? type.toLowerCase() : type;
+    const enrichedData = { ...data };
+    
+    // Check if this is a frontend request (client-side) by checking if the sender is the current user
+    const isFromFrontend = req.user && String(req.user._id) === String(userId);
+    
+    if (normalizedType === 'voip' && isFromFrontend) {
+      enrichedData.pushType = 'VoIP';
+    } else if (normalizedType === 'voip' && !isFromFrontend) {
+      // If VOIP is requested from backend, convert to normal notification
+      normalizedType = 'normal';
+    }
+
     const result = await notificationService.sendToUser(
       userId,
-      { title, body, type },
-      data,
+      { title, body, type: normalizedType },
+      enrichedData,
       { customPayload }
     );
 
@@ -187,7 +205,10 @@ export const sendTestNotification = async (req, res) => {
       return res.json({
         success: true,
         message: 'Test notification sent successfully',
-        data: { notificationId: result.notificationId, messageId: result.messageId }
+        data: {
+          notificationId: result.notificationId, 
+          messageId: result.messageId
+        }
       });
     }
 
@@ -212,15 +233,29 @@ export const sendNotificationToUser = async (req, res) => {
       return res.status(400).json({ success: false, message: 'userId, title, and body are required' });
     }
 
+    // Normalize VoIP type to pushType for APNs
+    const normalizedType = typeof type === 'string' ? type.toLowerCase() : type;
+    const enrichedData = { ...data };
+    if (normalizedType === 'VoIP') {
+      enrichedData.pushType = 'VoIP';
+    }
+
     const result = await notificationService.sendToUser(
       userId,
-      { title, body, type },
-      data,
+      { title, body, type: normalizedType },
+      enrichedData,
       { customPayload, expiresAt, relatedEntity }
     );
 
     if (result.success) {
-      return res.json({ success: true, data: { notificationId: result.notificationId, messageId: result.messageId } });
+      return res.json({ 
+        success: true, 
+        message: 'Notification sent successfully',
+        data: { 
+          notificationId: result.notificationId, 
+          messageId: result.messageId 
+        } 
+      });
     }
 
     return res.status(400).json({ success: false, message: result.message || result.error || 'Failed to send notification' });
@@ -249,7 +284,14 @@ export const sendNotificationToMultipleUsers = async (req, res) => {
     );
 
     if (result.success) {
-      return res.json({ success: true, data: { successCount: result.successCount, failureCount: result.failureCount } });
+      return res.json({ 
+        success: true, 
+        message: 'Notifications sent successfully',
+        data: { 
+          successCount: result.successCount, 
+          failureCount: result.failureCount 
+        } 
+      });
     }
 
     return res.status(400).json({ success: false, message: result.message || result.error || 'Failed to send notifications' });
@@ -275,7 +317,7 @@ export const sendNotificationToLiveShowAttendees = async (req, res) => {
 
     // First, verify that the live show exists and get its details
     const liveShow = await LiveShow.findById(liveShowId)
-      .populate('starId', 'name pseudo profilePic')
+      .populate({ path: 'starId', select: '-password -passwordResetToken -passwordResetExpires' })
       .lean();
 
     if (!liveShow) {
@@ -295,7 +337,11 @@ export const sendNotificationToLiveShowAttendees = async (req, res) => {
       return res.json({
         success: true,
         message: 'No attendees found for this live show',
-        data: { successCount: 0, failureCount: 0, totalAttendees: 0 }
+        data: {
+          successCount: 0, 
+          failureCount: 0, 
+          totalAttendees: 0
+        }
       });
     }
 
@@ -348,6 +394,7 @@ export const sendNotificationToLiveShowAttendees = async (req, res) => {
       description: liveShow.description,
       thumbnail: liveShow.thumbnail,
       starId: liveShow.starId,
+      starBaroniId: liveShow.starId && liveShow.starId.baroniId ? liveShow.starId.baroniId : undefined,
       createdAt: liveShow.createdAt,
       updatedAt: liveShow.updatedAt
     };

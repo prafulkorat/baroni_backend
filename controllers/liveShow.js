@@ -1,4 +1,5 @@
 import { validationResult } from 'express-validator';
+import { getFirstValidationError } from '../utils/validationHelper.js';
 import LiveShow from '../models/LiveShow.js';
 import LiveShowAttendance from '../models/LiveShowAttendance.js';
 import User from '../models/User.js';
@@ -6,10 +7,143 @@ import { generateUniqueShowCode } from '../utils/liveShowCodeGenerator.js';
 import { uploadFile } from '../utils/uploadFile.js';
 import mongoose from 'mongoose';
 import { createTransaction, createHybridTransaction, completeTransaction, cancelTransaction } from '../services/transactionService.js';
-import { TRANSACTION_TYPES, TRANSACTION_DESCRIPTIONS } from '../utils/transactionConstants.js';
+import { TRANSACTION_TYPES, TRANSACTION_DESCRIPTIONS, createTransactionDescription } from '../utils/transactionConstants.js';
 import Transaction from '../models/Transaction.js';
 import NotificationHelper from '../utils/notificationHelper.js';
 import { deleteConversationBetweenUsers } from '../services/messagingCleanup.js';
+import { sanitizeUserData } from '../utils/userDataHelper.js';
+
+// Get single live show details for fan
+export const getLiveShowDetails = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const fanId = req.user._id;
+
+    if (!id) {
+      return res.status(400).json({
+        success: false,
+        message: 'Live show ID is required'
+      });
+    }
+
+    const liveShow = await LiveShow.findById(id)
+      .populate('starId', 'name pseudo profilePic baroniId role country about location profession coinBalance')
+      .lean();
+
+    if (!liveShow) {
+      return res.status(404).json({
+        success: false,
+        message: 'Live show not found'
+      });
+    }
+
+    // Check if live show is still live (not completed or cancelled)
+    if (liveShow.status === 'completed' || liveShow.status === 'cancelled') {
+      return res.status(400).json({
+        success: false,
+        message: 'This live show is no longer live'
+      });
+    }
+
+    // Calculate time until live show
+    const liveShowDateTime = new Date(liveShow.date);
+    const now = new Date();
+    const timeUntilLiveShow = liveShowDateTime.getTime() - now.getTime();
+
+    // If live show time has passed, it's no longer live
+    if (timeUntilLiveShow <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'This live show is no longer live'
+      });
+    }
+
+    // Format time until live show
+    const hours = Math.floor(timeUntilLiveShow / (1000 * 60 * 60));
+    const minutes = Math.floor((timeUntilLiveShow % (1000 * 60 * 60)) / (1000 * 60));
+    const timeUntilLive = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')} until live`;
+
+    // Check if user has joined this live show
+    const LiveShowAttendance = (await import('../models/LiveShowAttendance.js')).default;
+    const userAttendance = await LiveShowAttendance.findOne({
+      liveShowId: id,
+      fanId: fanId
+    }).lean();
+
+    // Get star's profession details
+    let professionDetails = null;
+    if (liveShow.starId.profession) {
+      const Category = (await import('../models/Category.js')).default;
+      professionDetails = await Category.findById(liveShow.starId.profession).lean();
+    }
+
+    // Format date for display
+    const showDate = new Date(liveShow.date);
+    const formattedDate = showDate.toLocaleDateString('en-US', {
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric'
+    });
+
+    // Format time for display
+    const formattedTime = liveShow.time;
+
+    const response = {
+      success: true,
+      data: {
+        id: liveShow._id,
+        sessionTitle: liveShow.sessionTitle,
+        date: formattedDate,
+        time: formattedTime,
+        timeUntilLive,
+        attendanceFee: liveShow.attendanceFee,
+        maxCapacity: liveShow.maxCapacity,
+        currentAttendees: liveShow.currentAttendees,
+        showCode: liveShow.showCode,
+        inviteLink: liveShow.inviteLink,
+        status: liveShow.status,
+        ...(liveShow.paymentStatus ? { paymentStatus: liveShow.paymentStatus } : {}),
+        description: liveShow.description,
+        thumbnail: liveShow.thumbnail,
+        isJoined: !!userAttendance,
+        attendanceStatus: userAttendance ? userAttendance.status : null,
+        ...(userAttendance && userAttendance.paymentStatus ? { attendancePaymentStatus: userAttendance.paymentStatus } : {}),
+        createdAt: liveShow.createdAt,
+        updatedAt: liveShow.updatedAt,
+        star: {
+          id: liveShow.starId._id,
+          name: liveShow.starId.name,
+          pseudo: liveShow.starId.pseudo,
+          profilePic: liveShow.starId.profilePic,
+          baroniId: liveShow.starId.baroniId,
+          role: liveShow.starId.role,
+          country: liveShow.starId.country,
+          about: liveShow.starId.about,
+          location: liveShow.starId.location,
+          coinBalance: liveShow.starId.coinBalance,
+          profession: professionDetails ? {
+            id: professionDetails._id,
+            name: professionDetails.name,
+            image: professionDetails.image
+          } : null
+        },
+        attendance: {
+          current: liveShow.currentAttendees,
+          max: liveShow.maxCapacity === -1 ? 'Unlimited' : liveShow.maxCapacity,
+          percentage: liveShow.maxCapacity === -1 ? 0 : Math.round((liveShow.currentAttendees / liveShow.maxCapacity) * 100)
+        }
+      }
+    };
+
+    res.json(response);
+  } catch (error) {
+    console.error('Error fetching live show details:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching live show details'
+    });
+  }
+};
 
 const sanitizeLiveShow = (show) => ({
   id: show._id,
@@ -25,40 +159,24 @@ const sanitizeLiveShow = (show) => ({
   thumbnail: show.thumbnail,
   showCode: show.showCode,
   inviteLink: show.inviteLink,
-  starId: show.starId ? {
-    id: show.starId._id,
-    baroniId: show.starId.baroniId,
-    name: show.starId.name,
-    pseudo: show.starId.pseudo,
-    profilePic: show.starId.profilePic,
-    availableForBookings: show.starId.availableForBookings,
-    about: show.starId.about,
-    location: show.starId.location,
-    country: show.starId.country,
-    preferredLanguage: show.starId.preferredLanguage,
-    coinBalance: show.starId.coinBalance,
-    profession: show.starId.profession ? {
-      id: show.starId.profession._id,
-      name: show.starId.profession.name,
-      image: show.starId.profession.image
-    } : undefined
-  } : show.starId,
-  attendees: Array.isArray(show.attendees) ? show.attendees.map((a) => a && a._id ? {
-    id: a._id,
-    name: a.name,
-    pseudo: a.pseudo,
-    profilePic: a.profilePic,
-    baroniId: a.baroniId,
-    role: a.role
-  } : a) : show.attendees,
+  starId: show.starId && typeof show.starId === 'object' ? sanitizeUserData(show.starId) : show.starId,
+  attendees: Array.isArray(show.attendees) ? show.attendees.map((a) => a && typeof a === 'object' ? sanitizeUserData(a) : a) : show.attendees,
   likes: show.likes,
+  likeCount: Array.isArray(show.likes) ? show.likes.length : 0,
+  likesCount: Array.isArray(show.likes) ? show.likes.length : 0,
   status: show.status,
+  ...(show.paymentStatus ? { paymentStatus: show.paymentStatus } : {}),
   createdAt: show.createdAt,
   updatedAt: show.updatedAt,
 });
 
 const setPerUserFlags = (sanitized, show, req) => {
   const data = { ...sanitized };
+  console.log(data,"ttttttttttttyyyyyyyyyy")
+  console.log(show,"0000000000000000000000000000000")
+  // Ensure likeCount is always present across all responses
+  data.likeCount = Array.isArray(show.likes) ? show.likes.length : 0;
+  data.likesCount = data.likeCount;
   if (req.user && req.user.role === 'fan') {
     const starId = show.starId && show.starId._id ? show.starId._id : show.starId;
     data.isFavorite = Array.isArray(req.user.favorites) && starId
@@ -74,7 +192,15 @@ const setPerUserFlags = (sanitized, show, req) => {
   data.isLiked = Array.isArray(show.likes) && req.user
     ? show.likes.some(u => u.toString() === req.user._id.toString())
     : false;
-  return data;
+  // Derived flag: upcoming if scheduled in the future and still pending
+  try {
+    const now = new Date();
+    const showDate = show && show.date ? new Date(show.date) : null;
+    data.isUpcoming = !!(showDate && showDate.getTime() > now.getTime() && show.status === 'pending');
+  } catch (_e) {
+    data.isUpcoming = false;
+  }
+  return {...data,description: show.description};
 };
 
 // Create a new live show (star)
@@ -82,7 +208,8 @@ export const createLiveShow = async (req, res) => {
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      return res.status(400).json({ success: false, errors: errors.array() });
+      const errorMessage = getFirstValidationError(errors);
+      return res.status(400).json({ success: false, message: errorMessage || 'Validation failed' });
     }
 
     const { sessionTitle, date, time, attendanceFee, hostingPrice, maxCapacity, description, starName } = req.body;
@@ -108,12 +235,13 @@ export const createLiveShow = async (req, res) => {
         payerId: req.user._id,
         receiverId: adminUser._id,
         amount: Number(hostingPrice || 0),
-        description: TRANSACTION_DESCRIPTIONS[TRANSACTION_TYPES.LIVE_SHOW_HOSTING_PAYMENT],
+        description: createTransactionDescription(TRANSACTION_TYPES.LIVE_SHOW_HOSTING_PAYMENT, req.user.name || req.user.pseudo || '', 'Admin', req.user.role || 'star', 'admin'),
         userPhone: normalizedPhone,
-        starName,
+        starName: starName || '',
         metadata: {
           showType: 'live_show_hosting',
-          requestedAt: new Date()
+          requestedAt: new Date(),
+          payerName: req.user.name || req.user.pseudo || ''
         }
       });
     } catch (transactionError) {
@@ -156,23 +284,44 @@ export const createLiveShow = async (req, res) => {
       inviteLink,
       starId: req.user._id,
       status: 'pending',
+      paymentStatus: hostingTxn.status === 'initiated' ? 'initiated' : 'pending',
       description,
       thumbnail: thumbnailUrl,
       transactionId: hostingTxn._id
     });
 
-    await liveShow.populate('starId', 'name pseudo profilePic');
+    await liveShow.populate({ path: 'starId', select: '-password -passwordResetToken -passwordResetExpires' });
 
-    // Send notification to star's followers
+    // Send notification to admin only (no followers notification)
     try {
-      await NotificationHelper.sendLiveShowNotification('LIVE_SHOW_CREATED', liveShow);
+      const starName = req.user.name || req.user.pseudo || 'A star';
+      await NotificationHelper.sendCustomNotification(
+        adminUser._id,
+        'New Live Show Created',
+        `${starName} has created a new live show: "${sessionTitle}"`,
+        {
+          type: 'live_show',
+          liveShowId: liveShow._id.toString(),
+          starId: req.user._id.toString(),
+          starName: starName,
+          navigateTo: 'live_show',
+          eventType: 'LIVE_SHOW_CREATED'
+        }
+      );
     } catch (notificationError) {
-      console.error('Error sending live show notification:', notificationError);
+      console.error('Error sending live show notification to admin:', notificationError);
     }
 
-    const resp = { success: true, message: 'Live show created successfully and is now open for joining', data: sanitizeLiveShow(liveShow) };
+    const resp = { 
+      success: true, 
+      message: 'Live show created successfully and is now open for joining',
+      data: {
+        liveShow: sanitizeLiveShow(liveShow),
+        count: 1
+      }
+    };
     if (hostingTxnResult && hostingTxnResult.paymentMode === 'hybrid' || hostingTxnResult?.externalAmount > 0) {
-      if (hostingTxnResult.externalPaymentMessage) resp.externalPaymentMessage = hostingTxnResult.externalPaymentMessage;
+      if (hostingTxnResult.externalPaymentMessage) resp.data.externalPaymentMessage = hostingTxnResult.externalPaymentMessage;
     }
     return res.status(201).json(resp);
   } catch (err) {
@@ -194,11 +343,38 @@ export const getAllLiveShows = async (req, res) => {
       filter.status = 'pending';
     }
 
-    const shows = await LiveShow.find(filter).populate('starId', 'name pseudo profilePic availableForBookings').sort({ date: 1 });
+    const shows = await LiveShow.find(filter).populate({ path: 'starId', select: '-password -passwordResetToken -passwordResetExpires' }).sort({ date: 1 });
+    const withComputed = shows.map((show) => {
+      const sanitized = sanitizeLiveShow(show);
+      const dateObj = sanitized.date ? new Date(sanitized.date) : undefined;
+      const timeToNowMs = dateObj ? (dateObj.getTime() - Date.now()) : undefined;
+      const flagged = setPerUserFlags(sanitized, show, req);
+      const likescount = Array.isArray(show.likes) ? show.likes.length : 0;
+      const { likes, likeCount, likesCount, ...rest } = flagged;
+      return { ...rest,description:show.description, likescount, showAt: dateObj ? dateObj.toISOString() : undefined, timeToNowMs };
+    });
 
-    const showsData = shows.map(show => setPerUserFlags(sanitizeLiveShow(show), show, req));
-
-    return res.json({ success: true, data: showsData });
+    const future = [];
+    const past = [];
+    const cancelled = [];
+    for (const it of withComputed) {
+      if (it.status === 'cancelled') {
+        cancelled.push(it);
+      } else if (typeof it.timeToNowMs === 'number' && it.timeToNowMs >= 0) {
+        future.push(it);
+      } else {
+        past.push(it);
+      }
+    }
+    future.sort((a, b) => (a.timeToNowMs ?? Infinity) - (b.timeToNowMs ?? Infinity));
+    past.sort((a, b) => Math.abs(a.timeToNowMs ?? 0) - Math.abs(b.timeToNowMs ?? 0));
+    cancelled.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+    const data = [...future, ...past, ...cancelled];
+    return res.json({
+      success: true, 
+      message: 'Live shows retrieved successfully',
+      data: data
+    });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
@@ -209,12 +385,18 @@ export const getLiveShowById = async (req, res) => {
     const { id } = req.params;
     if (!mongoose.Types.ObjectId.isValid(id)) return res.status(400).json({ success: false, message: 'Invalid live show ID' });
 
-    const show = await LiveShow.findById(id).populate('starId', 'name pseudo profilePic availableForBookings');
+    const show = await LiveShow.findById(id).populate({ path: 'starId', select: '-password -passwordResetToken -passwordResetExpires' });
     if (!show) return res.status(404).json({ success: false, message: 'Live show not found' });
-
     const showData = setPerUserFlags(sanitizeLiveShow(show), show, req);
+    console.log(showData,"aaaaaaaaaaaaaaaaaaaaaaaa");
 
-    return res.json({ success: true, data: showData });
+    return res.json({ 
+      success: true, 
+      message: 'Live show retrieved successfully',
+      data: {
+        liveShow: showData
+      }
+    });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
@@ -223,12 +405,18 @@ export const getLiveShowById = async (req, res) => {
 export const getLiveShowByCode = async (req, res) => {
   try {
     const { showCode } = req.params;
-    const show = await LiveShow.findOne({ showCode: showCode.toUpperCase() }).populate('starId', 'name pseudo profilePic availableForBookings');
+    const show = await LiveShow.findOne({ showCode: showCode.toUpperCase() }).populate({ path: 'starId', select: '-password -passwordResetToken -passwordResetExpires' });
     if (!show) return res.status(404).json({ success: false, message: 'Live show not found' });
 
     const showData = setPerUserFlags(sanitizeLiveShow(show), show, req);
 
-    return res.json({ success: true, data: showData });
+    return res.json({ 
+      success: true, 
+      message: 'Live show retrieved successfully',
+      data: {
+        liveShow: showData
+      }
+    });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
@@ -237,7 +425,10 @@ export const getLiveShowByCode = async (req, res) => {
 export const updateLiveShow = async (req, res) => {
   try {
     const errors = validationResult(req);
-    if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
+    if (!errors.isEmpty()) {
+      const errorMessage = getFirstValidationError(errors);
+      return res.status(400).json({ success: false, message: errorMessage || 'Validation failed' });
+    }
 
     const { id } = req.params;
     const updateData = req.body;
@@ -255,9 +446,15 @@ export const updateLiveShow = async (req, res) => {
     if (req.file && req.file.buffer) updateData.thumbnail = await uploadFile(req.file.buffer);
 
     const updatedShow = await LiveShow.findByIdAndUpdate(id, updateData, { new: true, runValidators: true })
-      .populate('starId', 'name pseudo profilePic availableForBookings');
+      .populate({ path: 'starId', select: '-password -passwordResetToken -passwordResetExpires' });
 
-    return res.json({ success: true, message: 'Live show updated successfully', data: sanitizeLiveShow(updatedShow) });
+    return res.json({ 
+      success: true, 
+      message: 'Live show updated successfully',
+      data: {
+        liveShow: sanitizeLiveShow(updatedShow)
+      }
+    });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
@@ -277,7 +474,10 @@ export const deleteLiveShow = async (req, res) => {
 
     await LiveShow.findByIdAndDelete(id);
 
-    return res.json({ success: true, message: 'Live show deleted successfully' });
+    return res.json({ 
+      success: true, 
+      message: 'Live show deleted successfully'
+    });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
@@ -297,9 +497,15 @@ export const joinLiveShow = async (req, res) => {
     // Check if already joined
     const alreadyJoined = Array.isArray(show.attendees) && show.attendees.some(u => u.toString() === req.user._id.toString());
     if (alreadyJoined) {
-      const populated = await LiveShow.findById(id).populate('starId', 'name pseudo profilePic availableForBookings');
+      const populated = await LiveShow.findById(id).populate({ path: 'starId', select: '-password -passwordResetToken -passwordResetExpires' });
       const data = setPerUserFlags(sanitizeLiveShow(populated), populated, req);
-      return res.json({ success: true, message: 'Already joined', data });
+      return res.json({ 
+        success: true, 
+        message: 'Already joined',
+        data: {
+          ...data
+        }
+      });
     }
 
     // Capacity check
@@ -325,16 +531,17 @@ export const joinLiveShow = async (req, res) => {
           payerId: req.user._id,
           receiverId: show.starId,
           amount,
-          description: TRANSACTION_DESCRIPTIONS[TRANSACTION_TYPES.LIVE_SHOW_ATTENDANCE_PAYMENT],
+          description: createTransactionDescription(TRANSACTION_TYPES.LIVE_SHOW_ATTENDANCE_PAYMENT, req.user.name || req.user.pseudo || '', starName || '', req.user.role || 'fan', 'star'),
           userPhone: normalizedPhone,
-          starName,
+          starName: starName || '',
           metadata: {
             showId: show._id,
             showCode: show.showCode,
             showTitle: show.sessionTitle,
             showDate: show.date,
             showTime: show.time,
-            showType: 'live_show_attendance'
+            showType: 'live_show_attendance',
+            payerName: req.user.name || req.user.pseudo || ''
           }
         });
       } catch (transactionError) {
@@ -368,6 +575,7 @@ export const joinLiveShow = async (req, res) => {
       attendance.transactionId = transaction._id;
       attendance.attendanceFee = amount;
       attendance.status = 'pending';
+      attendance.paymentStatus = transaction.status === 'initiated' ? 'initiated' : 'pending';
       attendance.joinedAt = new Date();
       attendance.cancelledAt = undefined;
       attendance.refundedAt = undefined;
@@ -379,7 +587,8 @@ export const joinLiveShow = async (req, res) => {
         fanId: req.user._id,
         starId: show.starId,
         transactionId: transaction._id,
-        attendanceFee: amount
+        attendanceFee: amount,
+        paymentStatus: transaction.status === 'initiated' ? 'initiated' : 'pending'
       });
     }
 
@@ -391,11 +600,11 @@ export const joinLiveShow = async (req, res) => {
         $inc: { currentAttendees: 1 }
       },
       { new: true }
-    ).populate('starId', 'name pseudo profilePic availableForBookings');
+    ).populate({ path: 'starId', select: '-password -passwordResetToken -passwordResetExpires' });
 
     const data = setPerUserFlags(sanitizeLiveShow(updated), updated, req);
 
-    // Send notification to star about new attendee
+    // Send notification to star about new attendee (general notification, not VoIP)
     try {
       await NotificationHelper.sendCustomNotification(
         show.starId,
@@ -404,7 +613,9 @@ export const joinLiveShow = async (req, res) => {
         {
           type: 'live_show_attendee',
           liveShowId: show._id.toString(),
-          attendeeId: req.user._id.toString()
+          attendeeId: req.user._id.toString(),
+          navigateTo: 'live_show',
+          eventType: 'LIVE_SHOW_ATTENDEE_JOINED'
         }
       );
     } catch (notificationError) {
@@ -425,11 +636,15 @@ export const joinLiveShow = async (req, res) => {
 export const getMyJoinedLiveShows = async (req, res) => {
   try {
     const shows = await LiveShow.find({ attendees: req.user._id })
-      .populate('starId', 'name pseudo profilePic availableForBookings')
+      .populate({ path: 'starId', select: '-password -passwordResetToken -passwordResetExpires' })
       .sort({ date: -1 });
 
     const data = shows.map(show => setPerUserFlags(sanitizeLiveShow(show), show, req));
-    return res.json({ success: true, data });
+    return res.json({ 
+      success: true, 
+      message: 'Live shows retrieved successfully',
+      data: data
+    });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
@@ -464,7 +679,7 @@ export const cancelLiveShow = async (req, res) => {
     }
 
     const updated = await LiveShow.findByIdAndUpdate(id, { status: 'cancelled' }, { new: true })
-      .populate('starId', 'name pseudo profilePic availableForBookings');
+      .populate({ path: 'starId', select: '-password -passwordResetToken -passwordResetExpires' });
 
     // Send notification to attendees about cancellation
     try {
@@ -473,7 +688,13 @@ export const cancelLiveShow = async (req, res) => {
       console.error('Error sending live show cancellation notification:', notificationError);
     }
 
-    return res.json({ success: true, message: 'Live show cancelled', data: sanitizeLiveShow(updated) });
+    return res.json({ 
+      success: true, 
+      message: 'Live show cancelled',
+      data: {
+        liveShow: sanitizeLiveShow(updated)
+      }
+    });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
@@ -483,7 +704,10 @@ export const cancelLiveShow = async (req, res) => {
 export const rescheduleLiveShow = async (req, res) => {
   try {
     const errors = validationResult(req);
-    if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
+    if (!errors.isEmpty()) {
+      const errorMessage = getFirstValidationError(errors);
+      return res.status(400).json({ success: false, message: errorMessage || 'Validation failed' });
+    }
 
     const { id } = req.params;
     const { date, time } = req.body;
@@ -498,7 +722,7 @@ export const rescheduleLiveShow = async (req, res) => {
     if (time) payload.time = String(time);
 
     const updated = await LiveShow.findByIdAndUpdate(id, payload, { new: true, runValidators: true })
-      .populate('starId', 'name pseudo profilePic availableForBookings');
+      .populate({ path: 'starId', select: '-password -passwordResetToken -passwordResetExpires' });
 
     // Send notification to attendees about rescheduling
     try {
@@ -507,7 +731,13 @@ export const rescheduleLiveShow = async (req, res) => {
       console.error('Error sending live show reschedule notification:', notificationError);
     }
 
-    return res.json({ success: true, message: 'Live show rescheduled', data: sanitizeLiveShow(updated) });
+    return res.json({ 
+      success: true, 
+      message: 'Live show rescheduled',
+      data: {
+        liveShow: sanitizeLiveShow(updated)
+      }
+    });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
@@ -528,7 +758,13 @@ export const getStarUpcomingShows = async (req, res) => {
 
     const showsData = shows.map(show => setPerUserFlags(sanitizeLiveShow(show), show, req));
 
-    return res.json({ success: true, data: showsData });
+    return res.json({ 
+      success: true, 
+      message: 'Live shows retrieved successfully',
+      data: {
+        liveShows: showsData
+      }
+    });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
@@ -549,7 +785,13 @@ export const getStarAllShows = async (req, res) => {
 
     const showsData = shows.map(show => setPerUserFlags(sanitizeLiveShow(show), show, req));
 
-    return res.json({ success: true, data: showsData });
+    return res.json({ 
+      success: true, 
+      message: 'Live shows retrieved successfully',
+      data: {
+        liveShows: showsData
+      }
+    });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
@@ -572,7 +814,14 @@ export const toggleLikeLiveShow = async (req, res) => {
     const updated = await LiveShow.findByIdAndUpdate(id, update, { new: true });
     const data = sanitizeLiveShow(updated);
     data.isLiked = !hasLiked;
-    return res.json({ success: true, message: hasLiked ? 'Unliked' : 'Liked', data });
+    return res.json({ 
+      success: true, 
+      message: hasLiked ? 'Unliked' : 'Liked',
+      data: {
+        ...data,
+        likeCount: Array.isArray(updated.likes) ? updated.likes.length : 0
+      }
+    });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
@@ -616,7 +865,10 @@ export const completeLiveShowAttendance = async (req, res) => {
       }
     } catch (_e) {}
 
-    return res.json({ success: true, message: 'Live show attendance completed and coins transferred' });
+    return res.json({ 
+      success: true, 
+      message: 'Live show attendance completed and coins transferred'
+    });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }

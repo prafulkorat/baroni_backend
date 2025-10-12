@@ -1,4 +1,5 @@
 import { validationResult } from 'express-validator';
+import { getFirstValidationError } from '../utils/validationHelper.js';
 import ContactSupport from '../models/ContactSupport.js';
 import { uploadFile } from '../utils/uploadFile.js';
 
@@ -7,7 +8,8 @@ export const createSupportTicket = async (req, res) => {
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      return res.status(400).json({ success: false, errors: errors.array() });
+      const errorMessage = getFirstValidationError(errors);
+      return res.status(400).json({ success: false, message: errorMessage || 'Validation failed' });
     }
 
     const { issueType, description } = req.body;
@@ -37,7 +39,7 @@ export const createSupportTicket = async (req, res) => {
     });
 
     // Populate user details
-    await supportTicket.populate('userId', 'name email baroniId');
+    await supportTicket.populate('userId', 'name email baroniId agoraKey');
 
     return res.status(201).json({
       success: true,
@@ -60,7 +62,7 @@ export const getUserSupportTickets = async (req, res) => {
     const userId = req.user.id;
 
     const tickets = await ContactSupport.find({ userId })
-      .populate('userId', 'name email baroniId')
+      .populate('userId', 'name email baroniId agoraKey')
       .sort({ createdAt: -1 });
 
     return res.status(200).json({
@@ -84,7 +86,7 @@ export const getSupportTicketById = async (req, res) => {
     const userId = req.user.id;
 
     const ticket = await ContactSupport.findById(id)
-      .populate('userId', 'name email baroniId');
+      .populate('userId', 'name email baroniId agoraKey');
 
     if (!ticket) {
       return res.status(404).json({
@@ -120,7 +122,8 @@ export const updateSupportTicket = async (req, res) => {
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      return res.status(400).json({ success: false, errors: errors.array() });
+      const errorMessage = getFirstValidationError(errors);
+      return res.status(400).json({ success: false, message: errorMessage || 'Validation failed' });
     }
 
     const { id } = req.params;
@@ -232,7 +235,7 @@ export const getAllSupportTickets = async (req, res) => {
     if (issueType) filter.issueType = issueType;
 
     const tickets = await ContactSupport.find(filter)
-      .populate('userId', 'name email baroniId')
+      .populate('userId', 'name email baroniId agoraKey')
       .sort({ createdAt: -1 });
 
     return res.status(200).json({

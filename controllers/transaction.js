@@ -1,4 +1,5 @@
 import { validationResult } from 'express-validator';
+import { getFirstValidationError } from '../utils/validationHelper.js';
 import { 
   createTransaction, 
   createHybridTransaction,
@@ -12,7 +13,8 @@ export const createNewHybridTransaction = async (req, res) => {
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      return res.status(400).json({ success: false, errors: errors.array() });
+      const errorMessage = getFirstValidationError(errors);
+      return res.status(400).json({ success: false, message: errorMessage || 'Validation failed' });
     }
 
     const { type, receiverId, amount, description, metadata, contact, starName } = req.body;
@@ -25,6 +27,7 @@ export const createNewHybridTransaction = async (req, res) => {
         message: 'Payer and receiver cannot be the same'
       });
     }
+
 
     // Normalize and validate required fields for hybrid transaction
     const { normalizeContact } = await import('../utils/normalizeContact.js');
@@ -49,7 +52,9 @@ export const createNewHybridTransaction = async (req, res) => {
     return res.status(201).json({
       success: true,
       message: result.message,
-      data: result
+      data: {
+        ...result
+      }
     });
   } catch (err) {
     console.error('Error creating hybrid transaction:', err);
@@ -65,7 +70,8 @@ export const createNewTransaction = async (req, res) => {
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      return res.status(400).json({ success: false, errors: errors.array() });
+      const errorMessage = getFirstValidationError(errors);
+      return res.status(400).json({ success: false, message: errorMessage || 'Validation failed' });
     }
 
     const { type, receiverId, amount, description, paymentMode, metadata } = req.body;
@@ -94,7 +100,9 @@ export const createNewTransaction = async (req, res) => {
     return res.status(201).json({
       success: true,
       message: result.message,
-      data: result
+      data: {
+        ...result
+      }
     });
   } catch (err) {
     console.error('Error creating transaction:', err);
@@ -118,7 +126,10 @@ export const getUserTransactions = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      data: transactions
+      message: 'Transaction history retrieved successfully',
+      data: {
+        transactions
+      }
     });
   } catch (err) {
     console.error('Error fetching user transactions:', err);
@@ -149,7 +160,10 @@ export const getTransaction = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      data: transaction
+      message: 'Transaction retrieved successfully',
+      data: {
+        transaction
+      }
     });
   } catch (err) {
     console.error('Error fetching transaction:', err);
@@ -169,7 +183,10 @@ export const getUserBalance = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      data: { balance }
+      message: 'User balance retrieved successfully',
+      data: {
+        balance
+      }
     });
   } catch (err) {
     console.error('Error fetching user balance:', err);

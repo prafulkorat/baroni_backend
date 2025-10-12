@@ -3,6 +3,7 @@ import ConversationModel from '../models/Conversation.js';
 import User from '../models/User.js';
 import NotificationHelper from '../utils/notificationHelper.js';
 import { uploadFile } from '../utils/uploadFile.js';
+import { sanitizeUserData } from '../utils/userDataHelper.js';
 
 export const storeMessage = async (req, res) => {
     const { conversationId, receiverId, message, type } = req.body;
@@ -151,8 +152,8 @@ export const listMessages = async (req, res) => {
 
         const messages = await MessageModel.find({ conversationId })
             .sort({ createdAt: 1 })
-            .populate('senderId', 'name pseudo profilePic baroniId role')
-            .populate('receiverId', 'name pseudo profilePic baroniId role')
+            .populate('senderId', 'name pseudo profilePic baroniId role agoraKey')
+            .populate('receiverId', 'name pseudo profilePic baroniId role agoraKey')
             .lean();
 
         const authUserId = String(req.user && req.user._id ? req.user._id : '');
@@ -163,6 +164,8 @@ export const listMessages = async (req, res) => {
                 : String(sender);
             return {
                 ...msg,
+                senderId: msg.senderId ? sanitizeUserData(msg.senderId) : msg.senderId,
+                receiverId: msg.receiverId ? sanitizeUserData(msg.receiverId) : msg.receiverId,
                 isMine: senderIdString === authUserId
             };
         });
@@ -206,7 +209,7 @@ export const getUserConversations = async (req, res) => {
                     _id: conv._id,
                     lastMessage: conv.lastMessage,
                     lastMessageAt: conv.lastMessageAt,
-                    otherParticipant: otherUser,
+                    otherParticipant: otherUser ? sanitizeUserData(otherUser) : otherUser,
                     createdAt: conv.createdAt,
                     updatedAt: conv.updatedAt
                 };

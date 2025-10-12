@@ -54,6 +54,12 @@ const liveShowSchema = new mongoose.Schema(
       enum: ['pending', 'completed', 'cancelled'],
       default: 'pending'
     },
+    // Payment lifecycle for hosting payment (escrow to admin)
+    // initiated -> hybrid external part initiated
+    // pending -> payment confirmed and in escrow
+    // completed -> released after show completion
+    // refunded -> refunded due to cancellation/timeout
+    paymentStatus: { type: String, enum: ['initiated', 'pending', 'completed', 'refunded'], default: 'pending', index: true },
     currentAttendees: {
       type: Number,
       default: 0,
@@ -70,7 +76,8 @@ const liveShowSchema = new mongoose.Schema(
       maxlength: 500
     },
     thumbnail: {
-      type: String
+      type: String,
+        default: 'https://res.cloudinary.com/ddnpvm2yk/image/upload/v1759868390/placeholder_aws6oc.png',
     }
     ,
     transactionId: {
