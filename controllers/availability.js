@@ -476,7 +476,15 @@ export const createAvailability = async (req, res) => {
                 const { action, doc } = await upsertOne(String(date).trim(), normalized);
                 const statusCode = action === 'created' ? 201 : 200;
                 const message = action === 'created' ? 'Availability created successfully' : 'Availability updated successfully';
-                return res.status(statusCode).json({ success: true, data: sanitize(doc), message });
+                return res.status(statusCode).json({ 
+                    success: true, 
+                    data: [{
+                        date: date,
+                        action,
+                        data: sanitize(doc)
+                    }], 
+                    message 
+                });
             }
 
             if (isWeekly) {
@@ -494,7 +502,11 @@ export const createAvailability = async (req, res) => {
                 for (const d of dates) {
                     // All generated dates are >= start, which we've already validated is not in the past
                     const r = await upsertOne(d, normalized);
-                    results.push(sanitize(r.doc));
+                    results.push({
+                        date: d,
+                        action: r.action,
+                        data: sanitize(r.doc)
+                    });
                 }
                 return res.status(201).json({ success: true, data: results, message: 'Weekly availabilities created/updated successfully' });
             }
@@ -513,7 +525,11 @@ export const createAvailability = async (req, res) => {
                 const results = [];
                 for (const d of dates) {
                     const r = await upsertOne(d, normalized);
-                    results.push(sanitize(r.doc));
+                    results.push({
+                        date: d,
+                        action: r.action,
+                        data: sanitize(r.doc)
+                    });
                 }
                 return res.status(201).json({ success: true, data: results, message: 'Daily availabilities created/updated successfully' });
             }
@@ -538,9 +554,11 @@ export const listMyAvailabilities = async (req, res) => {
         return res.status(200).json({
             success: true,
             message: 'Availabilities retrieved successfully',
-            data: {
-                availabilities: items.map(sanitize)
-            }
+            data: items.map(item => ({
+                date: item.date,
+                action: 'retrieved',
+                data: sanitize(item)
+            }))
         });
     } catch (error) {
         return res.status(500).json({ success: false, message: error.message });
@@ -559,9 +577,11 @@ export const getAvailability = async (req, res) => {
         return res.json({
             success: true,
             message: 'Availability retrieved successfully',
-            data: {
-                availability: sanitize(item)
-            }
+            data: [{
+                date: item.date,
+                action: 'retrieved',
+                data: sanitize(item)
+            }]
         });
     } catch (err) {
         return res.status(500).json({ success: false, message: err.message });
@@ -681,9 +701,11 @@ export const updateAvailability = async (req, res) => {
         return res.json({
             success: true,
             message: 'Availability updated successfully',
-            data: {
-                availability: sanitize(updated)
-            }
+            data: [{
+                date: updated.date,
+                action: 'updated',
+                data: sanitize(updated)
+            }]
         });
     } catch (err) {
         if (err?.code === 11000) {
