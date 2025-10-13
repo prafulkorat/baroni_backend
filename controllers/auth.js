@@ -58,6 +58,7 @@ export const sendOtpController = async (req, res) => {
         
         // Remove + prefix for OTP sending (gateway expects number without +)
         const numeroForGateway = removePlusPrefix(normalizedContact);
+        console.log('numeroForGateway', numeroForGateway);
 
         const isIndian = /^(\+91|91)/.test(normalizedContact);
 

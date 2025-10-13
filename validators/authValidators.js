@@ -10,8 +10,15 @@ export const registerValidator = [
       // Ensure the number starts with '+' for international format
       return noSpaces.startsWith('+') ? noSpaces : `+${noSpaces}`;
     })
-    .isMobilePhone('any', { strictMode: false })
-    .withMessage('Invalid contact number format. Use international format, e.g. +22376299719'),
+    .custom((value) => {
+      if (!value) return true; // Allow empty values since it's optional
+      // More flexible validation for international phone numbers
+      const phoneRegex = /^\+[1-9]\d{6,14}$/;
+      if (!phoneRegex.test(value)) {
+        throw new Error('Invalid contact number format. Use international format, e.g. +22376299719');
+      }
+      return true;
+    }),
   body('email').optional().isEmail().withMessage('Invalid email format'),
   body('password').optional().isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
   body('role').optional().isIn(['fan', 'star', 'admin']).withMessage('Invalid role'),
@@ -30,8 +37,15 @@ export const loginValidator = [
       // Ensure the number starts with '+' for international format
       return noSpaces.startsWith('+') ? noSpaces : `+${noSpaces}`;
     })
-    .isMobilePhone('any', { strictMode: false })
-    .withMessage('Invalid contact number format. Use international format, e.g. +22376299719'),
+    .custom((value) => {
+      if (!value) return true; // Allow empty values since it's optional
+      // More flexible validation for international phone numbers
+      const phoneRegex = /^\+[1-9]\d{6,14}$/;
+      if (!phoneRegex.test(value)) {
+        throw new Error('Invalid contact number format. Use international format, e.g. +22376299719');
+      }
+      return true;
+    }),
   body('email').optional().isEmail().withMessage('Invalid email format'),
   body('isMobile').optional().isBoolean().withMessage('isMobile must be a boolean'),
   body('password').optional().isString().withMessage('Password must be a string'),
@@ -55,8 +69,15 @@ export const completeProfileValidator = [
       // Ensure the number starts with '+' for international format
       return noSpaces.startsWith('+') ? noSpaces : `+${noSpaces}`;
     })
-    .isMobilePhone('any', { strictMode: false })
-    .withMessage('Invalid contact number format. Use international format, e.g. +22376299719'),
+    .custom((value) => {
+      if (!value) return true; // Allow empty values since it's optional
+      // More flexible validation for international phone numbers
+      const phoneRegex = /^\+[1-9]\d{6,14}$/;
+      if (!phoneRegex.test(value)) {
+        throw new Error('Invalid contact number format. Use international format, e.g. +22376299719');
+      }
+      return true;
+    }),
   body('about').optional().trim().isLength({ max: 500 }).withMessage('About must be less than 500 characters'),
   body('location').optional().trim().isLength({ max: 100 }).withMessage('Location must be less than 100 characters'),
   body('profession').optional().isMongoId(),
