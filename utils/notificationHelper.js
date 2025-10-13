@@ -37,7 +37,7 @@ class NotificationHelper {
       fanName,
       navigateTo: 'appointment',
       eventType: type,
-      isMessage: isPastAppointment ? false : (additionalData.isMessage || true),
+      isMessage: false, // Default to false, will be set to true only on approval
       ...additionalData
     };
 
@@ -127,7 +127,7 @@ class NotificationHelper {
       appointmentId: appointment._id.toString(),
       starName: appointment.starName || 'Star',
       fanName: appointment.fanName || 'Fan',
-      isMessage: isPastAppointment ? false : (additionalData.isMessage || true)
+      isMessage: false // Default to false, will be set to true only on approval
     };
 
     // Get current user ID from additionalData
@@ -408,7 +408,7 @@ class NotificationHelper {
     const data = {
       type: template.type,
       dedicationId: dedication._id.toString(),
-      isMessage: isPastDedication ? false : (additionalData.isMessage || true),
+      isMessage: false, // Default to false, will be set to true only on approval
       ...additionalData
     };
 
