@@ -260,7 +260,21 @@ export const getAllStars = async (req, res) => {
 
         // Apply category filter
         if (category && category.trim()) {
-            filter.profession = category.trim();
+            // Find the category by name to get its ObjectId
+            const Category = (await import('../models/Category.js')).default;
+            const categoryDoc = await Category.findOne({ 
+                name: { $regex: new RegExp(`^${category.trim()}$`, 'i') } 
+            });
+            
+            if (categoryDoc) {
+                filter.profession = categoryDoc._id;
+            } else {
+                // If category not found, return empty results
+                return res.status(404).json({
+                    success: false,
+                    message: `Category "${category.trim()}" not found`,
+                });
+            }
         }
         if (q && q.trim()) {
             const regex = new RegExp(q.trim(), "i");
@@ -289,7 +303,21 @@ export const getAllStars = async (req, res) => {
 
                 // Apply category filter
                 if (category && category.trim()) {
-                    baroniIdFilter.profession = category.trim();
+                    // Find the category by name to get its ObjectId
+                    const Category = (await import('../models/Category.js')).default;
+                    const categoryDoc = await Category.findOne({ 
+                        name: { $regex: new RegExp(`^${category.trim()}$`, 'i') } 
+                    });
+                    
+                    if (categoryDoc) {
+                        baroniIdFilter.profession = categoryDoc._id;
+                    } else {
+                        // If category not found, return empty results
+                        return res.status(404).json({
+                            success: false,
+                            message: `Category "${category.trim()}" not found`,
+                        });
+                    }
                 }
 
                 // Debug logging for baroniId filter
