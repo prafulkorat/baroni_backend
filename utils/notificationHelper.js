@@ -438,6 +438,8 @@ class NotificationHelper {
         ...template,
         body: `Your dedication Request was accepted by ${starName}`
       };
+      // Set isMessage to true when dedication is accepted
+      data.isMessage = true;
 
       if (dedication.fanId && String(dedication.fanId) !== String(currentUserId)) {
         console.log('[DedicationNotification] send to fan (accepted)', {
@@ -456,6 +458,22 @@ class NotificationHelper {
           title: template.title
         });
         await notificationService.sendToUser(dedication.starId, template, data, {
+          relatedEntity: { type: 'dedication', id: dedication._id }
+        });
+      }
+    } else if (type === 'DEDICATION_COMPLETED') {
+      // Set isMessage to false when dedication is completed
+      data.isMessage = false;
+      
+      // Send completion notification to fan
+      if (dedication.fanId && String(dedication.fanId) !== String(currentUserId)) {
+        const completionTemplate = {
+          ...template,
+          title: 'Dedication Completed',
+          body: `Your dedication request has been completed by ${starName}`
+        };
+        
+        await notificationService.sendToUser(dedication.fanId, completionTemplate, data, {
           relatedEntity: { type: 'dedication', id: dedication._id }
         });
       }

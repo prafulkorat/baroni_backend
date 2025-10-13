@@ -422,6 +422,13 @@ export const completeDedicationByFan = async (req, res) => {
     item.completedAt = new Date();
     const updated = await item.save();
 
+    // Send completion notification
+    try {
+      await NotificationHelper.sendDedicationNotification('DEDICATION_COMPLETED', updated, { currentUserId: req.user._id });
+    } catch (notificationError) {
+      console.error('Error sending dedication completion notification:', notificationError);
+    }
+
     // Cleanup messages between fan and star after completion
     try {
       await deleteConversationBetweenUsers(item.fanId, item.starId);

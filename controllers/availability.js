@@ -37,9 +37,9 @@ const handleAvailabilityModeSwitching = async (userId, isWeekly, isDaily) => {
         const hasExistingDaily = futureAvailabilities.some(a => a.isDaily);
         const hasExistingSpecific = futureAvailabilities.some(a => !a.isWeekly && !a.isDaily);
         
-        const isTryingToSwitchMode = (isWeekly && (hasExistingDaily || hasExistingSpecific)) ||
-                                   (isDaily && (hasExistingWeekly || hasExistingSpecific)) ||
-                                   (!isWeekly && !isDaily && (hasExistingWeekly || hasExistingDaily));
+        // More lenient mode switching detection - only block if switching between weekly/daily modes
+        const isTryingToSwitchMode = (isWeekly && hasExistingDaily) ||
+                                   (isDaily && hasExistingWeekly);
         
         if (isTryingToSwitchMode) {
             const appointmentDetails = activeAppointments.map(apt => ({
