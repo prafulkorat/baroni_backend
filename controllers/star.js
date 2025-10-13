@@ -199,6 +199,9 @@ export const becomeStar = async (req, res) => {
                     about: "Coucou, c'est ta star 🌟 ! Je suis là pour te partager de la bonne humeur, de l'énergie et des dédicaces pleines d'amour."
                 } 
             });
+
+            // Send star promotion notification for coin-only payments
+            await sendStarPromotionNotification(req.user._id);
         }
 
         const responseBody = {
@@ -1012,5 +1015,53 @@ export const getStarById = async (req, res) => {
             message: "Server error while fetching star details",
             error: error.message,
         });
+    }
+};
+
+/**
+ * Send star promotion notification to the new star
+ * @param {string} userId - User ID of the new star
+ */
+const sendStarPromotionNotification = async (userId) => {
+    try {
+        // Import notification service
+        const notificationService = (await import('../services/notificationService.js')).default;
+        
+        // Get user details
+        const user = await User.findById(userId);
+        if (!user) {
+            console.error('User not found for star promotion notification');
+            return;
+        }
+
+        const userName = user.name || user.pseudo || 'Star';
+        
+        // Prepare notification data
+        const notificationData = {
+            title: 'Congratulations! You are now a Baroni Star 🌟',
+            body: `Welcome to the stars, ${userName}! You can now receive bookings and create content for your fans.`,
+            type: 'star_promotion'
+        };
+
+        const data = {
+            type: 'star_promotion',
+            userId: user._id.toString(),
+            userName,
+            navigateTo: 'profile',
+            eventType: 'STAR_PROMOTION_COMPLETED',
+            isMessage: false
+        };
+
+        const options = {
+            relatedEntity: { type: 'user', id: user._id }
+        };
+
+        // Send notification to the new star
+        await notificationService.sendToUser(user._id.toString(), notificationData, data, options);
+        
+        console.log(`Star promotion notification sent to user ${user._id}`);
+    } catch (error) {
+        console.error('Error sending star promotion notification:', error);
+        // Don't throw error to avoid breaking the star promotion flow
     }
 };

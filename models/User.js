@@ -17,7 +17,7 @@ const userSchema = new mongoose.Schema(
     location: { type: String, trim: true },
     profession: { type: mongoose.Schema.Types.ObjectId, ref: 'Category' },
     role: { type: String, enum: ['fan', 'star', 'admin'], default: 'fan' },
-    availableForBookings: { type: Boolean, default: false },
+    availableForBookings: { type: Boolean, default: true },
     appNotification: { type: Boolean, default: true },
     hidden: { type: Boolean, default: false },
     fcmToken: { type: String, sparse: true, index: true },

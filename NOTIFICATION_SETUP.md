@@ -230,7 +230,7 @@ The notification system includes comprehensive error handling:
 
 ### Test Notification Endpoint
 ```bash
-curl -X POST http://localhost:3000/api/notifications/test \
+curl -X POST http://localhost:4000/api/notifications/test \
   -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{

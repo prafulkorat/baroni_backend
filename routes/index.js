@@ -21,6 +21,7 @@ import notificationsRouter from './api/notifications.js';
 import ratingsRouter from './api/ratings.js';
 import analyticsRouter from './api/analytics.js';
 import configRouter from './api/config.js';
+import adminRouter from './api/admin.js';
 
 const router = express.Router();
 
@@ -46,6 +47,7 @@ router.use('/notifications', notificationsRouter);
 router.use('/ratings', ratingsRouter);
 router.use('/analytics', analyticsRouter);
 router.use('/config', configRouter);
+router.use('/admin', adminRouter);
 
 export default router;
 

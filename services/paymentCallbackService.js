@@ -80,6 +80,9 @@ export const processPaymentCallback = async (callbackData) => {
             },
             { session }
           );
+
+          // Send star promotion notification to the new star
+          await sendStarPromotionNotification(transaction, session);
         }
 
         // Send appointment notification to star after payment success
@@ -274,6 +277,55 @@ const sendAppointmentNotificationAfterPayment = async (transaction, session) => 
     }
   } catch (error) {
     console.error('Error sending appointment notification after payment:', error);
+    // Don't throw error to avoid breaking the payment callback
+  }
+};
+
+/**
+ * Send star promotion notification to the new star
+ * @param {Object} transaction - Transaction object
+ * @param {Object} session - MongoDB session
+ */
+const sendStarPromotionNotification = async (transaction, session) => {
+  try {
+    // Import notification service
+    const notificationService = (await import('./notificationService.js')).default;
+    
+    // Get user details
+    const user = await User.findById(transaction.payerId).session(session);
+    if (!user) {
+      console.error('User not found for star promotion notification');
+      return;
+    }
+
+    const userName = user.name || user.pseudo || 'Star';
+    
+    // Prepare notification data
+    const notificationData = {
+      title: 'Congratulations! You are now a Baroni Star 🌟',
+      body: `Welcome to the stars, ${userName}! You can now receive bookings and create content for your fans.`,
+      type: 'star_promotion'
+    };
+
+    const data = {
+      type: 'star_promotion',
+      userId: user._id.toString(),
+      userName,
+      navigateTo: 'profile',
+      eventType: 'STAR_PROMOTION_COMPLETED',
+      isMessage: false
+    };
+
+    const options = {
+      relatedEntity: { type: 'user', id: user._id }
+    };
+
+    // Send notification to the new star
+    await notificationService.sendToUser(user._id.toString(), notificationData, data, options);
+    
+    console.log(`Star promotion notification sent to user ${user._id}`);
+  } catch (error) {
+    console.error('Error sending star promotion notification:', error);
     // Don't throw error to avoid breaking the payment callback
   }
 };
