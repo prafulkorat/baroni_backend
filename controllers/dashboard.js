@@ -33,7 +33,7 @@ export const getDashboard = async (req, res) => {
           { pseudo: { $ne: '' } },
           { about: { $exists: true, $ne: null } },
           { about: { $ne: '' } },
-          { profession: { $exists: true, $ne: null, $ne: '', $type: 'objectId' } }
+          { profession: { $exists: true, $ne: null } }
         ]
       };
 
@@ -80,7 +80,7 @@ export const getDashboard = async (req, res) => {
           { pseudo: { $ne: '' } },
           { about: { $exists: true, $ne: null } },
           { about: { $ne: '' } },
-          { profession: { $exists: true, $ne: null, $ne: '', $type: 'objectId' } }
+          { profession: { $exists: true, $ne: null } }
         ]
       })
         .populate('profession')

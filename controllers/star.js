@@ -235,44 +235,116 @@ export const becomeStar = async (req, res) => {
 export const getAllStars = async (req, res) => {
     try {
         const { q, country, category } = req.query;
+        console.log('getAllStars called with params:', { q, country, category });
+        
+        // Debug: Check total stars in database
+        const totalStars = await User.countDocuments({ role: "star", isDeleted: { $ne: true } });
+        console.log('Total stars in database:', totalStars);
+        
+        // Debug: Check stars by country if country filter is applied
+        if (country && country.trim()) {
+            const starsByCountry = await User.find({ 
+                role: "star", 
+                isDeleted: { $ne: true },
+                country: { $exists: true, $ne: null, $ne: '' }
+            }).select('country name pseudo').limit(10);
+            console.log('Sample stars by country:', starsByCountry.map(s => ({ name: s.name, pseudo: s.pseudo, country: s.country })));
+        }
         const filter = {
             role: "star",
             hidden: { $ne: true }, // Exclude hidden stars from general search
             isDeleted: { $ne: true }, // Exclude deleted users from search
-            // Only include stars that have filled up their details
-            $and: [
-                { name: { $exists: true, $ne: null } },
-                { name: { $ne: '' } },
-                { pseudo: { $exists: true, $ne: null } },
-                { pseudo: { $ne: '' } },
-                { about: { $exists: true, $ne: null } },
-                { about: { $ne: '' } },
-                { location: { $exists: true, $ne: null } },
-                { location: { $ne: '' } },
-                { profession: { $exists: true, $ne: null, $ne: '', $type: 'objectId' } }
-            ]
+            // Basic requirements - only check for essential fields
+            name: { $exists: true, $ne: null, $ne: '' },
+            pseudo: { $exists: true, $ne: null, $ne: '' }
         };
 
-        // Apply country filter with case-insensitive matching
+        // Apply country filter with normalization for common variations
         if (country && country.trim()) {
-            filter.country = { $regex: new RegExp(`^${country.trim()}$`, 'i') };
+            const countryVariations = {
+                'india': ['India', 'भारत', 'Bharat', 'IN', 'IND'],
+                'bharat': ['India', 'भारत', 'Bharat', 'IN', 'IND'],
+                'भारत': ['India', 'भारत', 'Bharat', 'IN', 'IND'],
+                'usa': ['USA', 'United States', 'America', 'US'],
+                'united states': ['USA', 'United States', 'America', 'US'],
+                'america': ['USA', 'United States', 'America', 'US'],
+                'uk': ['UK', 'United Kingdom', 'Britain', 'England'],
+                'united kingdom': ['UK', 'United Kingdom', 'Britain', 'England'],
+                'canada': ['Canada', 'CA'],
+                'australia': ['Australia', 'AU'],
+                'france': ['France', 'FR'],
+                'germany': ['Germany', 'DE'],
+                'japan': ['Japan', 'JP'],
+                'china': ['China', 'CN'],
+                'brazil': ['Brazil', 'BR']
+            };
+            
+            const normalizedCountry = country.trim().toLowerCase();
+            const variations = countryVariations[normalizedCountry];
+            
+            if (variations) {
+                console.log(`Normalizing country "${country.trim()}" to variations:`, variations);
+                filter.country = { $in: variations };
+            } else {
+                console.log(`Using exact country match for: ${country.trim()}`);
+                filter.country = { $regex: new RegExp(`^${country.trim()}$`, 'i') };
+            }
         }
 
         // Apply category filter
         if (category && category.trim()) {
+            console.log('Processing category filter for:', category.trim());
             // Find the category by name to get its ObjectId
             const Category = (await import('../models/Category.js')).default;
-            const categoryDoc = await Category.findOne({ 
+            
+            // Debug: List all available categories
+            const allCategories = await Category.find({}).select('name _id');
+            console.log('All available categories:', allCategories.map(c => `${c.name} (${c._id})`));
+            
+            // Try exact match first, then fuzzy match
+            let categoryDoc = await Category.findOne({ 
                 name: { $regex: new RegExp(`^${category.trim()}$`, 'i') } 
             });
             
-            if (categoryDoc) {
+            // If not found, try common variations
+            if (!categoryDoc) {
+                const categoryVariations = {
+                    'singer': 'Musicians',
+                    'singers': 'Musicians',
+                    'music': 'Musicians',
+                    'musician': 'Musicians',
+                    'actor': 'Actors',
+                    'actress': 'Actors',
+                    'artist': 'Artists',
+                    'comedian': 'Comedians',
+                    'comedy': 'Comedians',
+                    'influencer': 'Influencer',
+                    'tv host': 'TV Hosts',
+                    'host': 'TV Hosts'
+                };
+                
+                const normalizedCategory = category.trim().toLowerCase();
+                const mappedCategory = categoryVariations[normalizedCategory];
+                
+                if (mappedCategory) {
+                    console.log(`Mapping "${category.trim()}" to "${mappedCategory}"`);
+                    categoryDoc = await Category.findOne({ 
+                        name: { $regex: new RegExp(`^${mappedCategory}$`, 'i') } 
+                    });
+                }
+            }
+            
+            console.log('Category lookup result:', categoryDoc ? `Found: ${categoryDoc.name} (${categoryDoc._id})` : 'Not found');
+            
+            if (categoryDoc && categoryDoc._id) {
                 filter.profession = categoryDoc._id;
+                console.log('Set filter.profession to ObjectId:', categoryDoc._id);
             } else {
                 // If category not found, return empty results
+                console.log('Category not found, returning 404');
                 return res.status(404).json({
                     success: false,
-                    message: `Category "${category.trim()}" not found`,
+                    message: `Category "${category.trim()}" not found. Available categories: ${allCategories.map(c => c.name).join(', ')}`,
                 });
             }
         }
@@ -296,26 +368,92 @@ export const getAllStars = async (req, res) => {
                     isDeleted: { $ne: true } // Exclude deleted users from baroniId search
                 };
 
-                // Apply country filter with case-insensitive matching
+                // Apply country filter with normalization for common variations
                 if (country && country.trim()) {
-                    baroniIdFilter.country = { $regex: new RegExp(`^${country.trim()}$`, 'i') };
+                    const countryVariations = {
+                        'india': ['India', 'भारत', 'Bharat', 'IN', 'IND'],
+                        'bharat': ['India', 'भारत', 'Bharat', 'IN', 'IND'],
+                        'भारत': ['India', 'भारत', 'Bharat', 'IN', 'IND'],
+                        'usa': ['USA', 'United States', 'America', 'US'],
+                        'united states': ['USA', 'United States', 'America', 'US'],
+                        'america': ['USA', 'United States', 'America', 'US'],
+                        'uk': ['UK', 'United Kingdom', 'Britain', 'England'],
+                        'united kingdom': ['UK', 'United Kingdom', 'Britain', 'England'],
+                        'canada': ['Canada', 'CA'],
+                        'australia': ['Australia', 'AU'],
+                        'france': ['France', 'FR'],
+                        'germany': ['Germany', 'DE'],
+                        'japan': ['Japan', 'JP'],
+                        'china': ['China', 'CN'],
+                        'brazil': ['Brazil', 'BR']
+                    };
+                    
+                    const normalizedCountry = country.trim().toLowerCase();
+                    const variations = countryVariations[normalizedCountry];
+                    
+                    if (variations) {
+                        console.log(`Normalizing country "${country.trim()}" to variations for baroniId:`, variations);
+                        baroniIdFilter.country = { $in: variations };
+                    } else {
+                        console.log(`Using exact country match for baroniId: ${country.trim()}`);
+                        baroniIdFilter.country = { $regex: new RegExp(`^${country.trim()}$`, 'i') };
+                    }
                 }
 
                 // Apply category filter
                 if (category && category.trim()) {
+                    console.log('Processing category filter for baroniId search:', category.trim());
                     // Find the category by name to get its ObjectId
                     const Category = (await import('../models/Category.js')).default;
-                    const categoryDoc = await Category.findOne({ 
+                    
+                    // Debug: List all available categories
+                    const allCategories = await Category.find({}).select('name _id');
+                    console.log('All available categories for baroniId:', allCategories.map(c => `${c.name} (${c._id})`));
+                    
+                    // Try exact match first, then fuzzy match
+                    let categoryDoc = await Category.findOne({ 
                         name: { $regex: new RegExp(`^${category.trim()}$`, 'i') } 
                     });
                     
-                    if (categoryDoc) {
+                    // If not found, try common variations
+                    if (!categoryDoc) {
+                        const categoryVariations = {
+                            'singer': 'Musicians',
+                            'singers': 'Musicians',
+                            'music': 'Musicians',
+                            'musician': 'Musicians',
+                            'actor': 'Actors',
+                            'actress': 'Actors',
+                            'artist': 'Artists',
+                            'comedian': 'Comedians',
+                            'comedy': 'Comedians',
+                            'influencer': 'Influencer',
+                            'tv host': 'TV Hosts',
+                            'host': 'TV Hosts'
+                        };
+                        
+                        const normalizedCategory = category.trim().toLowerCase();
+                        const mappedCategory = categoryVariations[normalizedCategory];
+                        
+                        if (mappedCategory) {
+                            console.log(`Mapping "${category.trim()}" to "${mappedCategory}" for baroniId`);
+                            categoryDoc = await Category.findOne({ 
+                                name: { $regex: new RegExp(`^${mappedCategory}$`, 'i') } 
+                            });
+                        }
+                    }
+                    
+                    console.log('Category lookup result for baroniId:', categoryDoc ? `Found: ${categoryDoc.name} (${categoryDoc._id})` : 'Not found');
+                    
+                    if (categoryDoc && categoryDoc._id) {
                         baroniIdFilter.profession = categoryDoc._id;
+                        console.log('Set baroniIdFilter.profession to ObjectId:', categoryDoc._id);
                     } else {
                         // If category not found, return empty results
+                        console.log('Category not found in baroniId search, returning 404');
                         return res.status(404).json({
                             success: false,
-                            message: `Category "${category.trim()}" not found`,
+                            message: `Category "${category.trim()}" not found. Available categories: ${allCategories.map(c => c.name).join(', ')}`,
                         });
                     }
                 }
@@ -341,6 +479,84 @@ export const getAllStars = async (req, res) => {
                             { baroniId: { $regex: new RegExp(q.trim(), 'i') } }
                         ]
                     };
+
+                    // Apply country filter to flexible search with normalization
+                    if (country && country.trim()) {
+                        const countryVariations = {
+                            'india': ['India', 'भारत', 'Bharat', 'IN', 'IND'],
+                            'bharat': ['India', 'भारत', 'Bharat', 'IN', 'IND'],
+                            'भारत': ['India', 'भारत', 'Bharat', 'IN', 'IND'],
+                            'usa': ['USA', 'United States', 'America', 'US'],
+                            'united states': ['USA', 'United States', 'America', 'US'],
+                            'america': ['USA', 'United States', 'America', 'US'],
+                            'uk': ['UK', 'United Kingdom', 'Britain', 'England'],
+                            'united kingdom': ['UK', 'United Kingdom', 'Britain', 'England'],
+                            'canada': ['Canada', 'CA'],
+                            'australia': ['Australia', 'AU'],
+                            'france': ['France', 'FR'],
+                            'germany': ['Germany', 'DE'],
+                            'japan': ['Japan', 'JP'],
+                            'china': ['China', 'CN'],
+                            'brazil': ['Brazil', 'BR']
+                        };
+                        
+                        const normalizedCountry = country.trim().toLowerCase();
+                        const variations = countryVariations[normalizedCountry];
+                        
+                        if (variations) {
+                            console.log(`Normalizing country "${country.trim()}" to variations for flexible search:`, variations);
+                            flexibleFilter.country = { $in: variations };
+                        } else {
+                            console.log(`Using exact country match for flexible search: ${country.trim()}`);
+                            flexibleFilter.country = { $regex: new RegExp(`^${country.trim()}$`, 'i') };
+                        }
+                    }
+
+                    // Apply category filter to flexible search
+                    if (category && category.trim()) {
+                        console.log('Applying category filter to flexible search:', category.trim());
+                        const Category = (await import('../models/Category.js')).default;
+                        
+                        // Try exact match first, then fuzzy match
+                        let categoryDoc = await Category.findOne({ 
+                            name: { $regex: new RegExp(`^${category.trim()}$`, 'i') } 
+                        });
+                        
+                        // If not found, try common variations
+                        if (!categoryDoc) {
+                            const categoryVariations = {
+                                'singer': 'Musicians',
+                                'singers': 'Musicians',
+                                'music': 'Musicians',
+                                'musician': 'Musicians',
+                                'actor': 'Actors',
+                                'actress': 'Actors',
+                                'artist': 'Artists',
+                                'comedian': 'Comedians',
+                                'comedy': 'Comedians',
+                                'influencer': 'Influencer',
+                                'tv host': 'TV Hosts',
+                                'host': 'TV Hosts'
+                            };
+                            
+                            const normalizedCategory = category.trim().toLowerCase();
+                            const mappedCategory = categoryVariations[normalizedCategory];
+                            
+                            if (mappedCategory) {
+                                console.log(`Mapping "${category.trim()}" to "${mappedCategory}" for flexible search`);
+                                categoryDoc = await Category.findOne({ 
+                                    name: { $regex: new RegExp(`^${mappedCategory}$`, 'i') } 
+                                });
+                            }
+                        }
+                        
+                        if (categoryDoc && categoryDoc._id) {
+                            flexibleFilter.profession = categoryDoc._id;
+                            console.log('Set flexibleFilter.profession to ObjectId:', categoryDoc._id);
+                        } else {
+                            console.log('Category not found in flexible search, skipping category filter');
+                        }
+                    }
 
                     const flexibleStars = await User.find(flexibleFilter)
                         .populate('profession', 'name image')
@@ -379,15 +595,116 @@ export const getAllStars = async (req, res) => {
             filter.$or = searchQuery;
         }
 
-        const stars = await User.find(filter)
+        let stars = await User.find(filter)
             .populate('profession', 'name image')
             .select("-password -passwordResetToken -passwordResetExpires");
 
-        // if no stars found
+        console.log('Initial query results:', stars.length);
+
+        // if no stars found with current filters, try a more relaxed search
         if (!stars || stars.length === 0) {
-            return res.status(404).json({
-                success: false,
-                message: "No stars found",
+            console.log('No stars found with current filters, trying relaxed search...');
+            
+            // Create a more relaxed filter - only essential requirements
+            const relaxedFilter = {
+                role: "star",
+                hidden: { $ne: true },
+                isDeleted: { $ne: true }
+            };
+
+            // Apply only country filter if specified with normalization
+            if (country && country.trim()) {
+                const countryVariations = {
+                    'india': ['India', 'भारत', 'Bharat', 'IN', 'IND'],
+                    'bharat': ['India', 'भारत', 'Bharat', 'IN', 'IND'],
+                    'भारत': ['India', 'भारत', 'Bharat', 'IN', 'IND'],
+                    'usa': ['USA', 'United States', 'America', 'US'],
+                    'united states': ['USA', 'United States', 'America', 'US'],
+                    'america': ['USA', 'United States', 'America', 'US'],
+                    'uk': ['UK', 'United Kingdom', 'Britain', 'England'],
+                    'united kingdom': ['UK', 'United Kingdom', 'Britain', 'England'],
+                    'canada': ['Canada', 'CA'],
+                    'australia': ['Australia', 'AU'],
+                    'france': ['France', 'FR'],
+                    'germany': ['Germany', 'DE'],
+                    'japan': ['Japan', 'JP'],
+                    'china': ['China', 'CN'],
+                    'brazil': ['Brazil', 'BR']
+                };
+                
+                const normalizedCountry = country.trim().toLowerCase();
+                const variations = countryVariations[normalizedCountry];
+                
+                if (variations) {
+                    console.log(`Normalizing country "${country.trim()}" to variations for relaxed search:`, variations);
+                    relaxedFilter.country = { $in: variations };
+                } else {
+                    console.log(`Using exact country match for relaxed search: ${country.trim()}`);
+                    relaxedFilter.country = { $regex: new RegExp(`^${country.trim()}$`, 'i') };
+                }
+            }
+
+            // Apply only category filter if specified
+            if (category && category.trim()) {
+                console.log('Applying category filter to relaxed search:', category.trim());
+                const Category = (await import('../models/Category.js')).default;
+                
+                // Try exact match first, then fuzzy match
+                let categoryDoc = await Category.findOne({ 
+                    name: { $regex: new RegExp(`^${category.trim()}$`, 'i') } 
+                });
+                
+                // If not found, try common variations
+                if (!categoryDoc) {
+                    const categoryVariations = {
+                        'singer': 'Musicians',
+                        'singers': 'Musicians',
+                        'music': 'Musicians',
+                        'musician': 'Musicians',
+                        'actor': 'Actors',
+                        'actress': 'Actors',
+                        'artist': 'Artists',
+                        'comedian': 'Comedians',
+                        'comedy': 'Comedians',
+                        'influencer': 'Influencer',
+                        'tv host': 'TV Hosts',
+                        'host': 'TV Hosts'
+                    };
+                    
+                    const normalizedCategory = category.trim().toLowerCase();
+                    const mappedCategory = categoryVariations[normalizedCategory];
+                    
+                    if (mappedCategory) {
+                        console.log(`Mapping "${category.trim()}" to "${mappedCategory}" for relaxed search`);
+                        categoryDoc = await Category.findOne({ 
+                            name: { $regex: new RegExp(`^${mappedCategory}$`, 'i') } 
+                        });
+                    }
+                }
+                
+                if (categoryDoc && categoryDoc._id) {
+                    relaxedFilter.profession = categoryDoc._id;
+                    console.log('Set relaxedFilter.profession to ObjectId:', categoryDoc._id);
+                } else {
+                    console.log('Category not found in relaxed search, skipping category filter');
+                }
+            }
+
+            stars = await User.find(relaxedFilter)
+                .populate('profession', 'name image')
+                .select("-password -passwordResetToken -passwordResetExpires");
+
+            console.log('Relaxed search results:', stars.length);
+        }
+
+        // if still no stars found, return empty result but don't error
+        if (!stars || stars.length === 0) {
+            console.log('No stars found even with relaxed search');
+            return res.status(200).json({
+                success: true,
+                count: 0,
+                data: [],
+                message: "No stars found matching the criteria"
             });
         }
 
