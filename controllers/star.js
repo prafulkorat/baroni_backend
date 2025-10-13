@@ -238,6 +238,7 @@ export const getAllStars = async (req, res) => {
         const filter = {
             role: "star",
             hidden: { $ne: true }, // Exclude hidden stars from general search
+            isDeleted: { $ne: true }, // Exclude deleted users from search
             // Only include stars that have filled up their details
             $and: [
                 { name: { $exists: true, $ne: null } },
@@ -248,7 +249,7 @@ export const getAllStars = async (req, res) => {
                 { about: { $ne: '' } },
                 { location: { $exists: true, $ne: null } },
                 { location: { $ne: '' } },
-                { profession: { $exists: true, $ne: null } }
+                { profession: { $exists: true, $ne: null, $ne: '', $type: 'objectId' } }
             ]
         };
 
@@ -277,7 +278,8 @@ export const getAllStars = async (req, res) => {
                 // For baroniId search, also include hidden stars and don't require complete profile
                 const baroniIdFilter = {
                     role: "star",
-                    baroniId: q.trim()
+                    baroniId: q.trim(),
+                    isDeleted: { $ne: true } // Exclude deleted users from baroniId search
                 };
 
                 // Apply country filter with case-insensitive matching
@@ -305,6 +307,7 @@ export const getAllStars = async (req, res) => {
                     console.log('No results with exact baroniId match, trying flexible search...');
                     const flexibleFilter = {
                         role: "star",
+                        isDeleted: { $ne: true }, // Exclude deleted users from flexible search
                         $or: [
                             { baroniId: q.trim() },
                             { baroniId: { $regex: new RegExp(q.trim(), 'i') } }

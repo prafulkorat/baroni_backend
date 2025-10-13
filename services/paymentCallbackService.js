@@ -7,6 +7,7 @@ import LiveShowAttendance from '../models/LiveShowAttendance.js';
 import mongoose from 'mongoose';
 import orangeMoneyService from './orangeMoneyService.js';
 import { TRANSACTION_STATUSES } from '../utils/transactionConstants.js';
+import NotificationHelper from '../utils/notificationHelper.js';
 
 /**
  * Process payment callback from Orange Money
@@ -80,6 +81,9 @@ export const processPaymentCallback = async (callbackData) => {
             { session }
           );
         }
+
+        // Send appointment notification to star after payment success
+        await sendAppointmentNotificationAfterPayment(transaction, session);
       } else {
         // Payment failed - refund coins and mark as failed
         await refundHybridTransaction(transaction, session);
@@ -244,5 +248,32 @@ export const handlePaymentTimeout = async () => {
     throw error;
   } finally {
     await session.endSession();
+  }
+};
+
+/**
+ * Send appointment notification to star after payment success
+ * @param {Object} transaction - Transaction object
+ * @param {Object} session - MongoDB session
+ */
+const sendAppointmentNotificationAfterPayment = async (transaction, session) => {
+  try {
+    // Only send notification for appointment payments
+    if (transaction.type === 'appointment_payment') {
+      // Find the appointment
+      const appointment = await Appointment.findOne({ 
+        transactionId: transaction._id 
+      }).session(session);
+      
+      if (appointment) {
+        // Send appointment notification to star
+        await NotificationHelper.sendAppointmentNotification('APPOINTMENT_CREATED', appointment, { 
+          currentUserId: appointment.fanId 
+        });
+      }
+    }
+  } catch (error) {
+    console.error('Error sending appointment notification after payment:', error);
+    // Don't throw error to avoid breaking the payment callback
   }
 };

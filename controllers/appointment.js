@@ -261,11 +261,14 @@ export const createAppointment = async (req, res) => {
       );
     } catch (_e) {}
 
-    // Send notification to star about new appointment request
-    try {
-      await NotificationHelper.sendAppointmentNotification('APPOINTMENT_CREATED', created, { currentUserId: req.user._id });
-    } catch (notificationError) {
-      console.error('Error sending appointment notification:', notificationError);
+    // Send notification to star about new appointment request only if payment is completed
+    // For hybrid payments, notification will be sent after payment callback
+    if (transaction.status === 'pending' || transaction.paymentMode === 'coin') {
+      try {
+        await NotificationHelper.sendAppointmentNotification('APPOINTMENT_CREATED', created, { currentUserId: req.user._id });
+      } catch (notificationError) {
+        console.error('Error sending appointment notification:', notificationError);
+      }
     }
 
     const responseBody = { 

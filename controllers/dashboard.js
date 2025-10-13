@@ -24,6 +24,7 @@ export const getDashboard = async (req, res) => {
       // Build star criteria
       const starCriteria = {
         role: 'star',
+        isDeleted: { $ne: true }, // Exclude deleted users from dashboard
         // Only include stars that have filled up their details
         $and: [
           { name: { $exists: true, $ne: null } },
@@ -32,7 +33,7 @@ export const getDashboard = async (req, res) => {
           { pseudo: { $ne: '' } },
           { about: { $exists: true, $ne: null } },
           { about: { $ne: '' } },
-          { profession: { $exists: true, $ne: null } }
+          { profession: { $exists: true, $ne: null, $ne: '', $type: 'objectId' } }
         ]
       };
 
@@ -56,7 +57,7 @@ export const getDashboard = async (req, res) => {
 
       let starIdsForCountry = [];
       if (country) {
-        const starIdsDocs = await User.find({ role: 'star', country }).select('_id');
+        const starIdsDocs = await User.find({ role: 'star', country, isDeleted: { $ne: true } }).select('_id');
         starIdsForCountry = starIdsDocs.map(s => s._id);
         // If no stars in that country, ensure no shows are returned quickly
         liveShowFilter.starId = { $in: starIdsForCountry.length ? starIdsForCountry : [null] };
@@ -70,6 +71,7 @@ export const getDashboard = async (req, res) => {
       // Query for top 5 popular stars (based on profile impressions) with random sorting
       const popularStarsQuery = User.find({
         role: 'star',
+        isDeleted: { $ne: true }, // Exclude deleted users from popular stars
         profileImpressions: { $gt: 0 }, // Only stars with some profile views
         $and: [
           { name: { $exists: true, $ne: null } },
@@ -78,7 +80,7 @@ export const getDashboard = async (req, res) => {
           { pseudo: { $ne: '' } },
           { about: { $exists: true, $ne: null } },
           { about: { $ne: '' } },
-          { profession: { $exists: true, $ne: null } }
+          { profession: { $exists: true, $ne: null, $ne: '', $type: 'objectId' } }
         ]
       })
         .populate('profession')
