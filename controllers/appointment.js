@@ -636,6 +636,13 @@ export const completeAppointment = async (req, res) => {
     appt.callDuration = callDuration;
     const updated = await appt.save();
 
+    // Send completion notification
+    try {
+      await NotificationHelper.sendAppointmentNotification('APPOINTMENT_COMPLETED', updated, { currentUserId: req.user._id });
+    } catch (notificationError) {
+      console.error('Error sending appointment completion notification:', notificationError);
+    }
+
     // Cleanup messages between fan and star after completion
     try {
       await deleteConversationBetweenUsers(appt.fanId, appt.starId);

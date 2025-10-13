@@ -76,9 +76,11 @@ class NotificationHelper {
         type !== 'APPOINTMENT_CREATED') {
       
       // Customize fan template based on action type
-      if (type === 'APPOINTMENT_APPROVED') {
+      if (type === 'APPOINTMENT_APPROVED' || type === 'APPOINTMENT_ACCEPTED') {
         fanTemplate.title = 'Appointment Approved';
         fanTemplate.body = `${starName} has approved your appointment request.`;
+        // Set isMessage to true when appointment is accepted
+        data.isMessage = true;
       } else if (type === 'APPOINTMENT_REJECTED') {
         fanTemplate.title = 'Appointment Rejected';
         fanTemplate.body = `${starName} has rejected your appointment request.`;
@@ -94,6 +96,8 @@ class NotificationHelper {
       } else if (type === 'APPOINTMENT_COMPLETED') {
         fanTemplate.title = 'Appointment Completed';
         fanTemplate.body = `Your appointment with ${starName} has been completed.`;
+        // Set isMessage to false when appointment is completed
+        data.isMessage = false;
       }
       
       await notificationService.sendToUser(data.fanId, fanTemplate, data, {
