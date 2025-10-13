@@ -769,12 +769,37 @@ export const me = async (req, res) => {
         }
       };
     }
+    
+    // Handle chatToken registration
+    let chatToken = user.chatToken;
+    
+    if (!chatToken) {
+      try {
+        // Import internal registration function
+        const { registerUserForMessagingInternal } = await import('./messages.js');
+        
+        // Call internal registration function
+        const registrationResult = await registerUserForMessagingInternal(user._id);
+        
+        if (registrationResult.success) {
+          chatToken = registrationResult.data.chatToken;
+          console.log('Chat token generated and saved for user:', user._id);
+        } else {
+          throw new Error('Registration failed');
+        }
+      } catch (registrationError) {
+        console.error('Chat token generation failed:', registrationError);
+        // Continue without chatToken if generation fails
+        chatToken = null;
+      }
+    }
 
     return res.json({
       success: true,
       message: 'User profile retrieved successfully',
       data: {
         ...sanitizeUser(user),
+        chatToken: chatToken,
         ...extra
       }
     });

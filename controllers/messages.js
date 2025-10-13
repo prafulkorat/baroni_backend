@@ -4,6 +4,134 @@ import User from '../models/User.js';
 import NotificationHelper from '../utils/notificationHelper.js';
 import { uploadFile } from '../utils/uploadFile.js';
 import { sanitizeUserData } from '../utils/userDataHelper.js';
+import crypto from 'crypto';
+import axios from 'axios';
+import agoraToken from 'agora-token';
+const { ChatTokenBuilder } = agoraToken;
+
+// Constants
+const AGORA_TOKEN_EXPIRATION = 31536000; // 1 year (365 * 24 * 60 * 60)
+
+// Utility functions
+function sanitizeAgoraUsername(username) {
+    // Remove or replace invalid characters for Agora Chat
+    return username
+        .replace(/[^a-zA-Z0-9_-]/g, '_') // Replace invalid chars with underscore
+        .replace(/_{2,}/g, '_') // Replace multiple underscores with single
+        .replace(/^_|_$/g, '') // Remove leading/trailing underscores
+        .substring(0, 64); // Limit length to 64 characters
+}
+
+function validateAgoraUsername(username) {
+    // Basic validation - just check if it's not empty after sanitization
+    const sanitized = sanitizeAgoraUsername(username);
+    return sanitized.length > 0;
+}
+
+export function getAgoraUsername(user) {
+    // const rawUsername = user.pseudo || user.name || user._id.toString();
+    return user._id.toString();
+}
+
+function validateAgoraConfig() {
+    const AGORA_APP_ID = process.env.AGORA_APP_ID || '711381888';
+    const AGORA_APP_CERTIFICATE = process.env.AGORA_APP_CERTIFICATE || 'default_certificate';
+    
+    if (!AGORA_APP_ID || !AGORA_APP_CERTIFICATE) {
+        throw new Error('Agora configuration is missing');
+    }
+    
+    return { AGORA_APP_ID, AGORA_APP_CERTIFICATE };
+}
+
+// Agora Chat Token Generation Function
+export function generateChatToken(userId, expireInSeconds = AGORA_TOKEN_EXPIRATION) {
+  const { AGORA_APP_ID: APP_ID, AGORA_APP_CERTIFICATE: APP_CERT } = validateAgoraConfig();
+  
+  // Use agora-token package for proper token generation
+  const userToken = ChatTokenBuilder.buildUserToken(APP_ID, APP_CERT, userId, expireInSeconds);
+  
+  return userToken;
+}
+
+// Generate App Token for admin operations
+function generateAppToken(expireInSeconds = AGORA_TOKEN_EXPIRATION) {
+  const { AGORA_APP_ID: APP_ID, AGORA_APP_CERTIFICATE: APP_CERT } = validateAgoraConfig();
+  
+  // Use agora-token package for app token generation
+  const appToken = ChatTokenBuilder.buildAppToken(APP_ID, APP_CERT, expireInSeconds);
+  
+  return appToken;
+}
+
+// Register user with Agora Chat API
+async function registerUserWithAgoraChat(username, password = null) {
+  try {
+    const { AGORA_APP_ID, AGORA_APP_CERTIFICATE } = validateAgoraConfig();
+    
+    const AGORA_ORG_NAME = process.env.AGORA_ORG_NAME || '711381888';
+    const AGORA_APP_NAME = process.env.AGORA_APP_NAME || '1586836';
+    
+    // Generate app token for user creation (admin operations)
+    const adminToken = generateAppToken(3600);
+    
+    // Use Easemob API format as shown in the example
+    const agoraChatUrl = `https://a71.chat.agora.io/${AGORA_ORG_NAME}/${AGORA_APP_NAME}/users`;
+    
+    console.log('Registering user with Agora Chat:', {
+      url: agoraChatUrl,
+      username: username,
+      appId: AGORA_APP_ID,
+      orgName: AGORA_ORG_NAME,
+      appName: AGORA_APP_NAME
+    });
+    
+    const requestBody = {
+      username: username
+    };
+    
+    // Add password if provided
+    if (password) {
+      requestBody.password = password;
+    }
+    
+    const response = await axios.post(agoraChatUrl, requestBody, {
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${adminToken}`
+      },
+      timeout: 10000
+    });
+    
+    console.log('Agora Chat registration successful:', response.data);
+    
+    return {
+      success: true,
+      data: response.data
+    };
+  } catch (error) {
+    console.error('Agora Chat registration error:', {
+      status: error.response?.status,
+      data: error.response?.data,
+      message: error.message
+    });
+    
+    // Handle specific error cases
+    if (error.response?.status === 400 && error.response?.data?.error === 'duplicate_unique_property_exists') {
+      return {
+        success: true,
+        data: { message: 'User already exists', username: username },
+        alreadyExists: true
+      };
+    }
+    
+    return {
+      success: false,
+      error: error.response?.data || error.message,
+      status: error.response?.status
+    };
+  }
+}
 
 export const storeMessage = async (req, res) => {
     const { conversationId, receiverId, message, type } = req.body;
@@ -224,6 +352,245 @@ export const getUserConversations = async (req, res) => {
         res.status(500).json({
             success: false,
             message: 'Error fetching conversations',
+            error: error.message
+        });
+    }
+};
+
+// Generate token for an existing user (similar to the example)
+export const generateUserToken = async (req, res) => {
+    try {
+        const userId = String(req.user._id);
+        const { username } = req.body;
+        
+        // Validate username if provided, otherwise use user's pseudo/name
+        const user = await User.findById(userId);
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: 'User not found'
+            });
+        }
+        
+        const agoraUsername = username || getAgoraUsername(user);
+        
+        console.log('Username processing:', {
+            originalUsername: username,
+            userPseudo: user.pseudo,
+            userName: user.name,
+            userId: user._id.toString(),
+            finalUsername: agoraUsername
+        });
+        
+        // Validate username format
+        if (!validateAgoraUsername(agoraUsername)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Username cannot be empty or contain only invalid characters.',
+                debug: {
+                    originalUsername: username,
+                    processedUsername: agoraUsername,
+                    userPseudo: user.pseudo,
+                    userName: user.name
+                }
+            });
+        }
+        
+        // Generate token for the user
+        const token = generateChatToken(agoraUsername, AGORA_TOKEN_EXPIRATION);
+        
+        // Save chat token to user document
+        await User.findByIdAndUpdate(userId, {
+            chatToken: token
+        });
+        
+        res.json({
+            success: true,
+            message: 'Token generated successfully',
+            data: {
+                agoraUsername: agoraUsername,
+                chatToken: token,
+                uuid: user._id.toString() // Using user ID as UUID for consistency
+            }
+        });
+    } catch (error) {
+        console.error('Generate user token error:', error);
+        
+        if (error.message.includes('Agora App ID and Certificate are required')) {
+            return res.status(500).json({
+                success: false,
+                message: 'Agora configuration is missing',
+                error: 'Server configuration error'
+            });
+        }
+        
+        res.status(500).json({
+            success: false,
+            message: 'Error generating token',
+            error: error.message
+        });
+    }
+};
+
+// Helper function to register user for messaging (can be called internally)
+export async function registerUserForMessagingInternal(userId) {
+    try {
+        // Validate user exists
+        const user = await User.findById(userId);
+        if (!user) {
+            throw new Error('User not found');
+        }
+
+        // Validate user has required fields
+        if (!user.pseudo && !user.name) {
+            throw new Error('User must have a pseudo or name to register for messaging');
+        }
+
+        // Use user's pseudo or name as username for Agora Chat
+        const agoraUsername = getAgoraUsername(user);
+        
+        console.log('Registration username processing:', {
+            userPseudo: user.pseudo,
+            userName: user.name,
+            userId: user._id.toString(),
+            finalUsername: agoraUsername
+        });
+        
+        // Validate username format (Agora Chat requirements)
+        if (!validateAgoraUsername(agoraUsername)) {
+            throw new Error('Username cannot be empty or contain only invalid characters.');
+        }
+        
+        // Register user with Agora Chat API
+        const agoraRegistration = await registerUserWithAgoraChat(agoraUsername);
+        
+        // Check if registration was successful
+        if (!agoraRegistration.success) {
+            throw new Error(`Failed to register user with Agora Chat: ${agoraRegistration.error}`);
+        }
+        
+        // Generate Agora Chat Token for the user
+        const chatToken = generateChatToken(agoraUsername, AGORA_TOKEN_EXPIRATION);
+
+        // Save chat token to user document
+        await User.findByIdAndUpdate(userId, {
+            chatToken: chatToken
+        });
+
+        // Extract UUID from Agora registration response
+        const uuid = agoraRegistration.data?.entities?.[0]?.uuid || null;
+        
+        return {
+            success: true,
+            message: agoraRegistration.alreadyExists 
+                ? 'User already registered for messaging' 
+                : 'User registered for messaging successfully',
+            data: {
+                agoraUsername: agoraUsername,
+                chatToken: chatToken,
+                uuid: uuid
+            },
+            alreadyExists: agoraRegistration.alreadyExists || false
+        };
+    } catch (error) {
+        console.error('Register user for messaging error:', error);
+        throw error;
+    }
+}
+
+export const registerUserForMessaging = async (req, res) => {
+    try {
+        const userId = String(req.user._id);
+        
+        // Validate user exists
+        const user = await User.findById(userId);
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: 'User not found'
+            });
+        }
+
+        // Validate user has required fields
+        if (!user.pseudo && !user.name) {
+            return res.status(400).json({
+                success: false,
+                message: 'User must have a pseudo or name to register for messaging'
+            });
+        }
+
+        // Use user's pseudo or name as username for Agora Chat
+        const agoraUsername = getAgoraUsername(user);
+        
+        console.log('Registration username processing:', {
+            userPseudo: user.pseudo,
+            userName: user.name,
+            userId: user._id.toString(),
+            finalUsername: agoraUsername
+        });
+        
+        // Validate username format (Agora Chat requirements)
+        if (!validateAgoraUsername(agoraUsername)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Username cannot be empty or contain only invalid characters.',
+                debug: {
+                    processedUsername: agoraUsername,
+                    userPseudo: user.pseudo,
+                    userName: user.name
+                }
+            });
+        }
+        
+        // Register user with Agora Chat API
+        const agoraRegistration = await registerUserWithAgoraChat(agoraUsername);
+        
+        // Check if registration was successful
+        if (!agoraRegistration.success) {
+            return res.status(500).json({
+                success: false,
+                message: 'Failed to register user with Agora Chat',
+                error: agoraRegistration.error
+            });
+        }
+        
+        // Generate Agora Chat Token for the user
+        const chatToken = generateChatToken(agoraUsername, AGORA_TOKEN_EXPIRATION);
+
+        // Save chat token to user document
+        await User.findByIdAndUpdate(userId, {
+            chatToken: chatToken
+        });
+
+        // Extract UUID from Agora registration response
+        const uuid = agoraRegistration.data?.entities?.[0]?.uuid || null;
+        
+        res.json({
+            success: true,
+            message: agoraRegistration.alreadyExists 
+                ? 'User already registered for messaging' 
+                : 'User registered for messaging successfully',
+            data: {
+                agoraUsername: agoraUsername,
+                chatToken: chatToken,
+                uuid: uuid
+            }
+        });
+    } catch (error) {
+        console.error('Register user for messaging error:', error);
+        
+        // Handle specific error types
+        if (error.message.includes('Agora App ID and Certificate are required')) {
+            return res.status(500).json({
+                success: false,
+                message: 'Agora configuration is missing',
+                error: 'Server configuration error'
+            });
+        }
+        
+        res.status(500).json({
+            success: false,
+            message: 'Error registering user for messaging',
             error: error.message
         });
     }
