@@ -29,30 +29,47 @@ const handleAvailabilityModeSwitching = async (userId, isWeekly, isDaily) => {
         status: { $in: ['pending', 'approved'] }
     });
 
+    // Allow adding new slots even with active appointments
+    // Only prevent mode switching if there are active appointments and user is trying to change mode
     if (activeAppointments.length > 0) {
-        const appointmentDetails = activeAppointments.map(apt => ({
-            appointmentId: apt._id,
-            date: apt.date,
-            time: apt.time,
-            status: apt.status
-        }));
+        // Check if user is trying to switch modes (has existing availabilities with different mode)
+        const hasExistingWeekly = futureAvailabilities.some(a => a.isWeekly);
+        const hasExistingDaily = futureAvailabilities.some(a => a.isDaily);
+        const hasExistingSpecific = futureAvailabilities.some(a => !a.isWeekly && !a.isDaily);
+        
+        const isTryingToSwitchMode = (isWeekly && (hasExistingDaily || hasExistingSpecific)) ||
+                                   (isDaily && (hasExistingWeekly || hasExistingSpecific)) ||
+                                   (!isWeekly && !isDaily && (hasExistingWeekly || hasExistingDaily));
+        
+        if (isTryingToSwitchMode) {
+            const appointmentDetails = activeAppointments.map(apt => ({
+                appointmentId: apt._id,
+                date: apt.date,
+                time: apt.time,
+                status: apt.status
+            }));
 
-        throw new Error(`Cannot switch availability mode. You have ${activeAppointments.length} active appointment(s) scheduled. Please complete or cancel them first. Details: ${JSON.stringify(appointmentDetails)}`);
+            throw new Error(`Cannot switch availability mode. You have ${activeAppointments.length} active appointment(s) scheduled. Please complete or cancel them first. Details: ${JSON.stringify(appointmentDetails)}`);
+        }
+        // If not switching modes, allow adding new slots
     }
 
-    // No active appointments, proceed with cleanup based on new mode
-    if (isWeekly) {
-        // Switching to weekly mode - cleanup daily and specific date availabilities
-        await cleanupNonWeeklyAvailabilities(userId);
-    } else if (isDaily) {
-        // Switching to daily mode - cleanup weekly and specific date availabilities
-        await cleanupWeeklyAvailabilities(userId);
-        await cleanupSpecificDateAvailabilities(userId);
-    } else {
-        // Switching to specific date mode - cleanup weekly and daily availabilities
-        await cleanupWeeklyAvailabilities(userId);
-        await cleanupDailyAvailabilities(userId);
+    // Only proceed with cleanup if no active appointments and user is switching modes
+    if (activeAppointments.length === 0) {
+        if (isWeekly) {
+            // Switching to weekly mode - cleanup daily and specific date availabilities
+            await cleanupNonWeeklyAvailabilities(userId);
+        } else if (isDaily) {
+            // Switching to daily mode - cleanup weekly and specific date availabilities
+            await cleanupWeeklyAvailabilities(userId);
+            await cleanupSpecificDateAvailabilities(userId);
+        } else {
+            // Switching to specific date mode - cleanup weekly and daily availabilities
+            await cleanupWeeklyAvailabilities(userId);
+            await cleanupDailyAvailabilities(userId);
+        }
     }
+    // If there are active appointments, skip cleanup to preserve existing slots
 };
 
 // Cleanup non-weekly availabilities (daily and specific date)
