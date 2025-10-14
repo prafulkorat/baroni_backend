@@ -339,23 +339,34 @@ export const listAppointments = async (req, res) => {
       return { ...base, timeSlot: timeSlotObj, startAt: isNaN(startAt.getTime()) ? undefined : startAt.toISOString(), timeToNowMs };
     });
 
+    const pending = [];
+    const ongoing = [];
     const future = [];
     const past = [];
     const cancelled = [];
     for (const it of withComputed) {
       if (it.status === 'cancelled') {
         cancelled.push(it);
+      } else if (it.status === 'pending') {
+        pending.push(it);
+      } else if (it.status === 'approved' && typeof it.timeToNowMs === 'number' && it.timeToNowMs <= 0 && it.timeToNowMs >= -30 * 60 * 1000) {
+        // Ongoing: approved appointments that started within the last 30 minutes (assuming 30 min appointment duration)
+        ongoing.push(it);
       } else if (typeof it.timeToNowMs === 'number' && it.timeToNowMs >= 0) {
         future.push(it);
       } else {
         past.push(it);
       }
     }
+    // Sort pending appointments by creation time (most recent first)
+    pending.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    // Sort ongoing appointments by how recently they started (most recent first)
+    ongoing.sort((a, b) => Math.abs(a.timeToNowMs ?? 0) - Math.abs(b.timeToNowMs ?? 0));
     future.sort((a, b) => (a.timeToNowMs ?? Infinity) - (b.timeToNowMs ?? Infinity));
     past.sort((a, b) => Math.abs(a.timeToNowMs ?? 0) - Math.abs(b.timeToNowMs ?? 0));
     // Keep cancelled at the very end; sort by most recent update descending inside cancelled
     cancelled.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
-    const data = [...future, ...past, ...cancelled];
+    const data = [...pending, ...ongoing, ...future, ...past, ...cancelled];
 
     return res.json({ 
       success: true, 
