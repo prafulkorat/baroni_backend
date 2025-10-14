@@ -232,7 +232,8 @@ export const storeMessage = async (req, res) => {
         senderId: authSenderId,
         receiverId: effectiveReceiverId,
         message: message || '',
-        type: type || 'text'
+        type: type || 'text',
+        isRead: false
     };
 
     // Handle image upload if file is provided
@@ -333,11 +334,19 @@ export const getUserConversations = async (req, res) => {
                     .select('name pseudo profilePic baroniId role')
                     .lean();
 
+                // Get unread message count for this conversation
+                const unreadCount = await MessageModel.countDocuments({
+                    conversationId: conv._id,
+                    receiverId: userId,
+                    isRead: false
+                });
+
                 return {
                     _id: conv._id,
                     lastMessage: conv.lastMessage,
                     lastMessageAt: conv.lastMessageAt,
                     otherParticipant: otherUser ? sanitizeUserData(otherUser) : otherUser,
+                    unreadCount: unreadCount,
                     createdAt: conv.createdAt,
                     updatedAt: conv.updatedAt
                 };
@@ -497,6 +506,56 @@ export async function registerUserForMessagingInternal(userId) {
         throw error;
     }
 }
+
+export const markMessagesAsRead = async (req, res) => {
+    try {
+        const { conversationId } = req.params;
+        const userId = String(req.user._id);
+
+        // Validate conversation exists and user is a participant
+        const conversation = await ConversationModel.findById(conversationId).lean();
+        if (!conversation) {
+            return res.status(404).json({
+                success: false,
+                message: 'Conversation not found'
+            });
+        }
+
+        const participants = (conversation.participants || []).map(String);
+        if (!participants.includes(userId)) {
+            return res.status(403).json({
+                success: false,
+                message: 'Not allowed in this conversation'
+            });
+        }
+
+        // Mark all unread messages in this conversation as read for the current user
+        const result = await MessageModel.updateMany(
+            {
+                conversationId: conversationId,
+                receiverId: userId,
+                isRead: false
+            },
+            {
+                isRead: true
+            }
+        );
+
+        res.json({
+            success: true,
+            message: 'Messages marked as read',
+            data: {
+                modifiedCount: result.modifiedCount
+            }
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Error marking messages as read',
+            error: error.message
+        });
+    }
+};
 
 export const registerUserForMessaging = async (req, res) => {
     try {

@@ -17,6 +17,10 @@ const messageSchema = new mongoose.Schema({
     imageUrl: {
         type: String,
         default: "https://res.cloudinary.com/ddnpvm2yk/image/upload/v1759868390/placeholder_aws6oc.png"
+    },
+    isRead: {
+        type: Boolean,
+        default: false
     }
 }, {timestamps: true});
 
