@@ -325,6 +325,14 @@ class NotificationService {
    * @param {Object} options - Additional options for notification storage
    */
   async sendToUser(userId, notificationData, data = {}, options = {}) {
+    console.log(`[NOTIFICATION START] Starting notification for user ${userId}:`, {
+      title: notificationData.title,
+      body: notificationData.body,
+      type: notificationData.type,
+      dataKeys: Object.keys(data),
+      optionsKeys: Object.keys(options)
+    });
+
     // Fetch user name to include in notification data
     let userName = 'User';
     try {
@@ -374,7 +382,20 @@ class NotificationService {
 
     try {
       const user = await User.findById(userId);
-      console.log("USER: ",user)
+      console.log(`[USER DETAILS] User ${userId} details:`, {
+        _id: user?._id,
+        name: user?.name,
+        pseudo: user?.pseudo,
+        deviceType: user?.deviceType,
+        isDev: user?.isDev,
+        hasFcmToken: !!user?.fcmToken,
+        hasApnsToken: !!user?.apnsToken,
+        hasVoipToken: !!user?.voipToken,
+        fcmTokenLength: user?.fcmToken ? user.fcmToken.length : 0,
+        fcmTokenPreview: user?.fcmToken ? user.fcmToken.substring(0, 20) + '...' : 'null',
+        appNotification: user?.appNotification
+      });
+
       if (!user || (!user.fcmToken && !user.apnsToken && !user.voipToken)) {
         console.log(`No push token found for user ${userId}`);
         // Update notification status to failed
@@ -532,6 +553,16 @@ class NotificationService {
       }
 
       // For Android devices or fallback, use FCM
+      console.log(`[NOTIFICATION DEBUG] Android notification check for user ${userId}:`, {
+        isAndroid,
+        isIOS,
+        hasFcmToken: !!user.fcmToken,
+        hasMessaging: !!this.messaging,
+        deliverySucceeded,
+        deviceType: user.deviceType,
+        fcmTokenLength: user.fcmToken ? user.fcmToken.length : 0
+      });
+
       if (!deliverySucceeded && (isAndroid || !isIOS) && user.fcmToken && this.messaging) {
         const message = {
           token: user.fcmToken,
@@ -540,8 +571,14 @@ class NotificationService {
             body: notificationData.body,
           },
           data: {
-            ...data,
-            ...(options.customPayload ? { customPayload: options.customPayload } : {}),
+            // Convert all data values to strings for Firebase FCM compatibility
+            ...Object.fromEntries(
+              Object.entries(data).map(([key, value]) => [
+                key, 
+                typeof value === 'string' ? value : JSON.stringify(value)
+              ])
+            ),
+            ...(options.customPayload ? { customPayload: JSON.stringify(options.customPayload) } : {}),
             clickAction: 'FLUTTER_NOTIFICATION_CLICK',
             sound: 'default',
             // Add notification type for Android handling
@@ -580,8 +617,14 @@ class NotificationService {
             },
             // Add Android-specific data
             data: {
-              ...data,
-              ...(options.customPayload ? { customPayload: options.customPayload } : {}),
+              // Convert all data values to strings for Firebase FCM compatibility
+              ...Object.fromEntries(
+                Object.entries(data).map(([key, value]) => [
+                  key, 
+                  typeof value === 'string' ? value : JSON.stringify(value)
+                ])
+              ),
+              ...(options.customPayload ? { customPayload: JSON.stringify(options.customPayload) } : {}),
               clickAction: 'FLUTTER_NOTIFICATION_CLICK',
               notificationType: notificationData.type || 'general',
               timestamp: Date.now().toString(),
@@ -601,24 +644,51 @@ class NotificationService {
           },
         };
         
+        console.log(`[FCM DEBUG] Complete message structure for user ${userId}:`, JSON.stringify(message, null, 2));
+        
         console.log(`[FCM] Sending notification to Android user ${userId}`, {
           title: notificationData.title,
           body: notificationData.body,
           channelId: 'baroni_notifications',
-          priority: 'high'
+          priority: 'high',
+          fcmTokenPreview: user.fcmToken ? user.fcmToken.substring(0, 20) + '...' : 'null'
         });
         
-        fcmResponse = await this.messaging.send(message);
-        deliverySucceeded = !!fcmResponse;
-        
-        console.log(`[FCM] Android notification sent successfully to user ${userId}`, {
-          messageId: fcmResponse,
-          success: deliverySucceeded
-        });
+        try {
+          fcmResponse = await this.messaging.send(message);
+          deliverySucceeded = !!fcmResponse;
+          
+          console.log(`[FCM SUCCESS] Android notification sent successfully to user ${userId}`, {
+            messageId: fcmResponse,
+            success: deliverySucceeded,
+            fcmTokenPreview: user.fcmToken ? user.fcmToken.substring(0, 20) + '...' : 'null'
+          });
+        } catch (fcmError) {
+          console.error(`[FCM ERROR] Failed to send notification to Android user ${userId}:`, {
+            error: fcmError.message,
+            code: fcmError.code,
+            fcmTokenPreview: user.fcmToken ? user.fcmToken.substring(0, 20) + '...' : 'null',
+            deviceType: user.deviceType,
+            isDev: user.isDev
+          });
+          deliverySucceeded = false;
+        }
       }
 
       // Check if we have the right provider for the device type
       if (!deliverySucceeded) {
+        console.log(`[NOTIFICATION FAILURE] Analyzing failure for user ${userId}:`, {
+          isAndroid,
+          isIOS,
+          deviceType: user.deviceType,
+          hasFcmToken: !!user.fcmToken,
+          hasApnsToken: !!user.apnsToken,
+          hasVoipToken: !!user.voipToken,
+          hasMessaging: !!this.messaging,
+          hasApnsProvider: !!this.getApnsProvider(user.isDev),
+          isDev: user.isDev
+        });
+
         let failureReason = 'All push delivery attempts failed';
         
         if (isIOS && !this.getApnsProvider(user.isDev)) {
@@ -627,7 +697,13 @@ class NotificationService {
           failureReason = 'Android device but FCM not configured';
         } else if (!isIOS && !isAndroid && !user.deviceType) {
           failureReason = 'Device type not specified and no valid tokens';
+        } else if (isAndroid && !user.fcmToken) {
+          failureReason = 'Android device but no FCM token found';
+        } else if (isAndroid && user.fcmToken && this.messaging) {
+          failureReason = 'Android device with FCM token and messaging service, but delivery failed';
         }
+
+        console.log(`[NOTIFICATION FAILURE] Final failure reason for user ${userId}:`, failureReason);
         
         try {
           await Notification.findByIdAndUpdate(notificationRecord._id, {
@@ -691,6 +767,15 @@ class NotificationService {
    * @param {Object} options - Additional options for notification storage
    */
   async sendToMultipleUsers(userIds, notificationData, data = {}, options = {}) {
+    console.log(`[MULTICAST START] Starting multicast notification for ${userIds.length} users:`, {
+      title: notificationData.title,
+      body: notificationData.body,
+      type: notificationData.type,
+      userIds: userIds.map(id => id.toString()),
+      dataKeys: Object.keys(data),
+      optionsKeys: Object.keys(options)
+    });
+
     // Fetch users who have any valid push tokens
     let usersWithTokens = [];
     try {
@@ -708,14 +793,29 @@ class NotificationService {
 
     const validUserIds = usersWithTokens.map(user => user._id);
     
+    console.log(`[MULTICAST USERS] Found ${usersWithTokens.length} users with tokens out of ${userIds.length} requested`);
+    
     // Separate tokens by device type
     const iosUsers = usersWithTokens.filter(u => u.deviceType === 'ios');
     const androidUsers = usersWithTokens.filter(u => u.deviceType === 'android');
     const unknownDeviceUsers = usersWithTokens.filter(u => !u.deviceType);
     
+    console.log(`[MULTICAST SEPARATION] Device type breakdown:`, {
+      iosUsers: iosUsers.length,
+      androidUsers: androidUsers.length,
+      unknownDeviceUsers: unknownDeviceUsers.length,
+      totalUsersWithTokens: usersWithTokens.length
+    });
+    
     const fcmTokens = [...androidUsers, ...unknownDeviceUsers].filter(u => !!u.fcmToken).map(u => u.fcmToken);
     const apnsTokens = iosUsers.filter(u => !!u.apnsToken).map(u => u.apnsToken);
     const voipTokens = iosUsers.filter(u => !!u.voipToken).map(u => u.voipToken);
+
+    console.log(`[MULTICAST TOKENS] Token counts:`, {
+      fcmTokens: fcmTokens.length,
+      apnsTokens: apnsTokens.length,
+      voipTokens: voipTokens.length
+    });
 
     // Create notification records ONLY for users who have tokens
     let notificationRecords = [];
@@ -801,8 +901,14 @@ class NotificationService {
             body: notificationData.body,
           },
           data: {
-            ...data,
-            ...(options.customPayload ? { customPayload: options.customPayload } : {}),
+            // Convert all data values to strings for Firebase FCM compatibility
+            ...Object.fromEntries(
+              Object.entries(data).map(([key, value]) => [
+                key, 
+                typeof value === 'string' ? value : JSON.stringify(value)
+              ])
+            ),
+            ...(options.customPayload ? { customPayload: JSON.stringify(options.customPayload) } : {}),
             clickAction: 'FLUTTER_NOTIFICATION_CLICK',
             sound: 'default',
             // Add notification type for Android handling
@@ -841,8 +947,14 @@ class NotificationService {
             },
             // Add Android-specific data
             data: {
-              ...data,
-              ...(options.customPayload ? { customPayload: options.customPayload } : {}),
+              // Convert all data values to strings for Firebase FCM compatibility
+              ...Object.fromEntries(
+                Object.entries(data).map(([key, value]) => [
+                  key, 
+                  typeof value === 'string' ? value : JSON.stringify(value)
+                ])
+              ),
+              ...(options.customPayload ? { customPayload: JSON.stringify(options.customPayload) } : {}),
               clickAction: 'FLUTTER_NOTIFICATION_CLICK',
               notificationType: notificationData.type || 'general',
               timestamp: Date.now().toString(),
@@ -863,21 +975,34 @@ class NotificationService {
           tokens: fcmTokens,
         };
         
-        console.log(`[FCM] Sending multicast notification to ${fcmTokens.length} Android users`, {
+        console.log(`[FCM MULTICAST] Sending multicast notification to ${fcmTokens.length} Android users`, {
           title: notificationData.title,
           body: notificationData.body,
           channelId: 'baroni_notifications',
           priority: 'high',
-          tokenCount: fcmTokens.length
+          tokenCount: fcmTokens.length,
+          fcmTokensPreview: fcmTokens.slice(0, 3).map(token => token.substring(0, 20) + '...')
         });
         
-        fcmResponse = await this.messaging.sendMulticast(fcmMessage);
+        console.log(`[FCM MULTICAST DEBUG] Complete multicast message structure:`, JSON.stringify(fcmMessage, null, 2));
         
-        console.log(`[FCM] Multicast notification results`, {
-          successCount: fcmResponse.successCount,
-          failureCount: fcmResponse.failureCount,
-          totalTokens: fcmTokens.length
-        });
+        try {
+          fcmResponse = await this.messaging.sendMulticast(fcmMessage);
+          
+          console.log(`[FCM MULTICAST SUCCESS] Multicast notification results`, {
+            successCount: fcmResponse.successCount,
+            failureCount: fcmResponse.failureCount,
+            totalTokens: fcmTokens.length,
+            responses: fcmResponse.responses ? fcmResponse.responses.length : 0
+          });
+        } catch (fcmMulticastError) {
+          console.error(`[FCM MULTICAST ERROR] Failed to send multicast notification:`, {
+            error: fcmMulticastError.message,
+            code: fcmMulticastError.code,
+            tokenCount: fcmTokens.length
+          });
+          fcmResponse = { successCount: 0, failureCount: fcmTokens.length, responses: [] };
+        }
       }
 
       let apnsSuccessCount = 0;
@@ -1031,8 +1156,14 @@ class NotificationService {
         // VoIP notifications don't support alert, sound, or badge
         voipNote.payload = {
           extra: {
-            ...data,
-            ...(options.customPayload ? { customPayload: options.customPayload } : {}),
+            // Convert all data values to strings for Firebase FCM compatibility
+            ...Object.fromEntries(
+              Object.entries(data).map(([key, value]) => [
+                key, 
+                typeof value === 'string' ? value : JSON.stringify(value)
+              ])
+            ),
+            ...(options.customPayload ? { customPayload: JSON.stringify(options.customPayload) } : {}),
             clickAction: 'FLUTTER_NOTIFICATION_CLICK',
             pushType: 'VoIP'
           }
