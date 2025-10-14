@@ -353,7 +353,7 @@ class NotificationService {
       body: notificationData.body,
       type: notificationData.type || 'general',
       data: enrichedData,
-      customPayload: options.customPayload,
+      customPayload: options.customPayload ? JSON.stringify(options.customPayload) : undefined,
       expiresAt: options.expiresAt,
       relatedEntity: options.relatedEntity,
       deliveryStatus: 'pending'
@@ -605,12 +605,7 @@ class NotificationService {
               defaultVibrateTimings: true,
               // Add light settings
               lightSettings: {
-                color: {
-                  red: 1.0,
-                  green: 0.42,
-                  blue: 0.42,
-                  alpha: 1.0
-                },
+                color: '#FF6B6B', // Baroni brand color in hex format
                 lightOnDurationMillis: 100, // 0.1 seconds in milliseconds
                 lightOffDurationMillis: 100 // 0.1 seconds in milliseconds
               }
@@ -841,7 +836,7 @@ class NotificationService {
           body: notificationData.body,
           type: notificationData.type || 'general',
           data: enrichedData,
-          customPayload: options.customPayload,
+          customPayload: options.customPayload ? JSON.stringify(options.customPayload) : undefined,
           expiresAt: options.expiresAt,
           relatedEntity: options.relatedEntity,
           deliveryStatus: 'pending'
@@ -935,12 +930,7 @@ class NotificationService {
               defaultVibrateTimings: true,
               // Add light settings
               lightSettings: {
-                color: {
-                  red: 1.0,
-                  green: 0.42,
-                  blue: 0.42,
-                  alpha: 1.0
-                },
+                color: '#FF6B6B', // Baroni brand color in hex format
                 lightOnDurationMillis: 100, // 0.1 seconds in milliseconds
                 lightOffDurationMillis: 100 // 0.1 seconds in milliseconds
               }
@@ -1439,7 +1429,7 @@ class NotificationService {
         body: notificationData.body,
         type: notificationData.type || 'general',
         data: data,
-        customPayload: options.customPayload,
+        customPayload: options.customPayload ? JSON.stringify(options.customPayload) : undefined,
         expiresAt: options.expiresAt,
         relatedEntity: options.relatedEntity,
         deliveryStatus: 'pending'
