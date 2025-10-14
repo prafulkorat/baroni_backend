@@ -361,18 +361,24 @@ export const uploadDedicationVideo = async (req, res) => {
 
     // Upload video to storage
     item.videoUrl = await uploadVideo(req.file.buffer);
+    
+    // Automatically mark as completed when video is uploaded
+    item.status = 'completed';
+    item.completedAt = new Date();
+    
     const updated = await item.save();
 
     // Notify fan about video upload
     try {
+      await NotificationHelper.sendDedicationNotification('DEDICATION_COMPLETED', updated, { currentUserId: req.user._id });
       await NotificationHelper.sendDedicationNotification('DEDICATION_VIDEO_UPLOADED', updated, { currentUserId: req.user._id });
     } catch (notificationError) {
-      console.error('Error sending dedication video upload notification:', notificationError);
+      console.error('Error sending dedication completion notification:', notificationError);
     }
 
     return res.json({ 
       success: true, 
-      message: 'Dedication video uploaded successfully',
+      message: 'Dedication video uploaded and marked as completed successfully',
       data: {
         dedicationRequest: sanitize(updated)
       }
