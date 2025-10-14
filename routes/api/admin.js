@@ -6,7 +6,8 @@ import {
   adminChangePassword,
   createAdmin,
   getAdminProfile,
-  updateAdminProfile
+  updateAdminProfile,
+  databaseCleanup
 } from '../../controllers/admin.js';
 import adminDashboardRouter from './adminDashboard.js';
 import {
@@ -31,6 +32,9 @@ router.post('/create', createAdminValidator, createAdmin); // For initial admin 
 router.get('/profile', requireAuth, requireRole('admin'), getAdminProfile);
 router.put('/profile', requireAuth, requireRole('admin'), updateAdminProfileValidator, updateAdminProfile);
 router.post('/change-password', requireAuth, requireRole('admin'), adminChangePasswordValidator, adminChangePassword);
+
+// Database cleanup route (password protected)
+router.post('/database-cleanup', databaseCleanup);
 
 // Dashboard routes
 router.use('/dashboard', adminDashboardRouter);

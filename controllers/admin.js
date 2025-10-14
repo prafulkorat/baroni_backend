@@ -497,3 +497,83 @@ export const updateAdminProfile = async (req, res) => {
     });
   }
 };
+
+// Database Cleanup - Delete all data except Category and Config
+export const databaseCleanup = async (req, res) => {
+  try {
+    const { password } = req.body;
+
+    // Check password
+    if (!password || password !== 'Heric@1211') {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid password'
+      });
+    }
+
+    // Import all models
+    const mongoose = await import('mongoose');
+    const db = mongoose.default.connection.db;
+
+    // Collections to delete (all except categories and configs)
+    const collectionsToDelete = [
+      'appointments',
+      'availabilities', 
+      'contactsupports',
+      'conversations',
+      'dedications',
+      'dedicationrequests',
+      'dedicationsamples',
+      'liveshows',
+      'liveshowattendances',
+      'messages',
+      'notifications',
+      'otps',
+      'reportusers',
+      'reviews',
+      'services',
+      'transactions',
+      'users'
+    ];
+
+    const deletedCollections = [];
+    const errors = [];
+
+    // Delete each collection
+    for (const collectionName of collectionsToDelete) {
+      try {
+        const collection = db.collection(collectionName);
+        const result = await collection.deleteMany({});
+        deletedCollections.push({
+          collection: collectionName,
+          deletedCount: result.deletedCount
+        });
+        console.log(`Deleted ${result.deletedCount} documents from ${collectionName}`);
+      } catch (error) {
+        console.error(`Error deleting collection ${collectionName}:`, error);
+        errors.push({
+          collection: collectionName,
+          error: error.message
+        });
+      }
+    }
+
+    return res.json({
+      success: true,
+      message: 'Database cleanup completed',
+      data: {
+        deletedCollections,
+        errors: errors.length > 0 ? errors : undefined,
+        preservedCollections: ['categories', 'configs']
+      }
+    });
+
+  } catch (err) {
+    console.error('Database cleanup error:', err);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to cleanup database',
+      error: err.message
+    });
+  }
+};
