@@ -574,8 +574,8 @@ class NotificationService {
                   blue: 0.42,
                   alpha: 1.0
                 },
-                lightOnDuration: '0.1s',
-                lightOffDuration: '0.1s'
+                lightOnDurationMillis: 100, // 0.1 seconds in milliseconds
+                lightOffDurationMillis: 100 // 0.1 seconds in milliseconds
               }
             },
             // Add Android-specific data
@@ -835,8 +835,8 @@ class NotificationService {
                   blue: 0.42,
                   alpha: 1.0
                 },
-                lightOnDuration: '0.1s',
-                lightOffDuration: '0.1s'
+                lightOnDurationMillis: 100, // 0.1 seconds in milliseconds
+                lightOffDurationMillis: 100 // 0.1 seconds in milliseconds
               }
             },
             // Add Android-specific data
@@ -1206,8 +1206,8 @@ class NotificationService {
                 blue: 0.42,
                 alpha: 1.0
               },
-              lightOnDuration: '0.1s',
-              lightOffDuration: '0.1s'
+              lightOnDurationMillis: 100, // 0.1 seconds in milliseconds
+              lightOffDurationMillis: 100 // 0.1 seconds in milliseconds
             }
           },
           // Add Android-specific data
