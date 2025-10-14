@@ -4,6 +4,10 @@ import User  from '../models/User.js';
 import Notification from '../models/Notification.js';
 import fs from 'fs';
 import path from 'path';
+import dotenv from 'dotenv';
+
+// Load environment variables
+dotenv.config();
 
 // Initialize Firebase Admin SDK
 let firebaseApp;
@@ -540,13 +544,52 @@ class NotificationService {
             ...(options.customPayload ? { customPayload: options.customPayload } : {}),
             clickAction: 'FLUTTER_NOTIFICATION_CLICK',
             sound: 'default',
+            // Add notification type for Android handling
+            notificationType: notificationData.type || 'general',
+            // Add timestamp for Android
+            timestamp: Date.now().toString(),
           },
           android: {
             notification: {
               sound: 'default',
-              channelId: 'default',
+              channelId: 'baroni_notifications', // Use a specific channel instead of 'default'
               priority: 'high',
+              visibility: 'public',
+              // Add icon and color for better Android display
+              icon: 'ic_notification',
+              color: '#FF6B6B', // Baroni brand color
+              // Add click action
+              clickAction: 'FLUTTER_NOTIFICATION_CLICK',
+              // Add tag for notification grouping
+              tag: notificationData.type || 'general',
+              // Add local notification for better reliability
+              localOnly: false,
+              // Add default vibration pattern
+              defaultVibrateTimings: true,
+              // Add light settings
+              lightSettings: {
+                color: {
+                  red: 1.0,
+                  green: 0.42,
+                  blue: 0.42,
+                  alpha: 1.0
+                },
+                lightOnDuration: '0.1s',
+                lightOffDuration: '0.1s'
+              }
             },
+            // Add Android-specific data
+            data: {
+              ...data,
+              ...(options.customPayload ? { customPayload: options.customPayload } : {}),
+              clickAction: 'FLUTTER_NOTIFICATION_CLICK',
+              notificationType: notificationData.type || 'general',
+              timestamp: Date.now().toString(),
+            },
+            // Add Android priority
+            priority: 'high',
+            // Add TTL for Android
+            ttl: 3600, // 1 hour
           },
           apns: {
             payload: {
@@ -557,8 +600,21 @@ class NotificationService {
             },
           },
         };
+        
+        console.log(`[FCM] Sending notification to Android user ${userId}`, {
+          title: notificationData.title,
+          body: notificationData.body,
+          channelId: 'baroni_notifications',
+          priority: 'high'
+        });
+        
         fcmResponse = await this.messaging.send(message);
         deliverySucceeded = !!fcmResponse;
+        
+        console.log(`[FCM] Android notification sent successfully to user ${userId}`, {
+          messageId: fcmResponse,
+          success: deliverySucceeded
+        });
       }
 
       // Check if we have the right provider for the device type
@@ -749,13 +805,52 @@ class NotificationService {
             ...(options.customPayload ? { customPayload: options.customPayload } : {}),
             clickAction: 'FLUTTER_NOTIFICATION_CLICK',
             sound: 'default',
+            // Add notification type for Android handling
+            notificationType: notificationData.type || 'general',
+            // Add timestamp for Android
+            timestamp: Date.now().toString(),
           },
           android: {
             notification: {
               sound: 'default',
-              channelId: 'default',
+              channelId: 'baroni_notifications', // Use a specific channel instead of 'default'
               priority: 'high',
+              visibility: 'public',
+              // Add icon and color for better Android display
+              icon: 'ic_notification',
+              color: '#FF6B6B', // Baroni brand color
+              // Add click action
+              clickAction: 'FLUTTER_NOTIFICATION_CLICK',
+              // Add tag for notification grouping
+              tag: notificationData.type || 'general',
+              // Add local notification for better reliability
+              localOnly: false,
+              // Add default vibration pattern
+              defaultVibrateTimings: true,
+              // Add light settings
+              lightSettings: {
+                color: {
+                  red: 1.0,
+                  green: 0.42,
+                  blue: 0.42,
+                  alpha: 1.0
+                },
+                lightOnDuration: '0.1s',
+                lightOffDuration: '0.1s'
+              }
             },
+            // Add Android-specific data
+            data: {
+              ...data,
+              ...(options.customPayload ? { customPayload: options.customPayload } : {}),
+              clickAction: 'FLUTTER_NOTIFICATION_CLICK',
+              notificationType: notificationData.type || 'general',
+              timestamp: Date.now().toString(),
+            },
+            // Add Android priority
+            priority: 'high',
+            // Add TTL for Android
+            ttl: 3600, // 1 hour
           },
           apns: {
             payload: {
@@ -767,7 +862,22 @@ class NotificationService {
           },
           tokens: fcmTokens,
         };
+        
+        console.log(`[FCM] Sending multicast notification to ${fcmTokens.length} Android users`, {
+          title: notificationData.title,
+          body: notificationData.body,
+          channelId: 'baroni_notifications',
+          priority: 'high',
+          tokenCount: fcmTokens.length
+        });
+        
         fcmResponse = await this.messaging.sendMulticast(fcmMessage);
+        
+        console.log(`[FCM] Multicast notification results`, {
+          successCount: fcmResponse.successCount,
+          failureCount: fcmResponse.failureCount,
+          totalTokens: fcmTokens.length
+        });
       }
 
       let apnsSuccessCount = 0;
@@ -1066,13 +1176,51 @@ class NotificationService {
           ...data,
           clickAction: 'FLUTTER_NOTIFICATION_CLICK',
           sound: 'default',
+          // Add notification type for Android handling
+          notificationType: notificationData.type || 'general',
+          // Add timestamp for Android
+          timestamp: Date.now().toString(),
         },
         android: {
           notification: {
             sound: 'default',
-            channelId: 'default',
+            channelId: 'baroni_notifications', // Use a specific channel instead of 'default'
             priority: 'high',
+            visibility: 'public',
+            // Add icon and color for better Android display
+            icon: 'ic_notification',
+            color: '#FF6B6B', // Baroni brand color
+            // Add click action
+            clickAction: 'FLUTTER_NOTIFICATION_CLICK',
+            // Add tag for notification grouping
+            tag: notificationData.type || 'general',
+            // Add local notification for better reliability
+            localOnly: false,
+            // Add default vibration pattern
+            defaultVibrateTimings: true,
+            // Add light settings
+            lightSettings: {
+              color: {
+                red: 1.0,
+                green: 0.42,
+                blue: 0.42,
+                alpha: 1.0
+              },
+              lightOnDuration: '0.1s',
+              lightOffDuration: '0.1s'
+            }
           },
+          // Add Android-specific data
+          data: {
+            ...data,
+            clickAction: 'FLUTTER_NOTIFICATION_CLICK',
+            notificationType: notificationData.type || 'general',
+            timestamp: Date.now().toString(),
+          },
+          // Add Android priority
+          priority: 'high',
+          // Add TTL for Android
+          ttl: 3600, // 1 hour
         },
         apns: {
           payload: {
