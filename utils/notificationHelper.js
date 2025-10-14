@@ -550,12 +550,26 @@ class NotificationHelper {
       ...additionalData
     };
 
+    // Check if it's an image message
     const isImage = message.type === 'image' || !!message.imageUrl;
-    const preview = (message.message || '').trim();
+    
+    // Get message preview text
+    const messageText = (message.message || '').trim();
+    
+    // Determine notification body
+    let notificationBody;
+    if (isImage) {
+      notificationBody = 'Sent an image';
+    } else if (messageText) {
+      notificationBody = messageText;
+    } else {
+      notificationBody = 'Sent a message';
+    }
+
     const template = {
       ...baseTemplate,
       title: `New message from ${senderName}`,
-      body: isImage ? 'Sent an image' : (preview || 'Sent a message')
+      body: notificationBody
     };
 
     // Send to the recipient if they are not the current user
