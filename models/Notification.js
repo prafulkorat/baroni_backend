@@ -28,7 +28,8 @@ const notificationSchema = new mongoose.Schema(
         'dedication', 
         'message', 
         'general',
-          'voip'
+        'star_promotion',
+        'voip'
       ], 
       required: true,
       index: true 

@@ -255,7 +255,9 @@ export const getAllStars = async (req, res) => {
         }
         const filter = {
             role: "star",
-            hidden: { $ne: true }, // Exclude hidden stars from general search
+            // Only exclude hidden stars if no search query is provided
+            // When searching, include hidden stars to allow finding them by name/pseudo
+            ...(q && q.trim() ? {} : { hidden: { $ne: true } }),
             isDeleted: { $ne: true }, // Exclude deleted users from search
             // Basic requirements - only check for essential fields
             name: { $exists: true, $ne: null, $ne: '' },
@@ -611,7 +613,8 @@ export const getAllStars = async (req, res) => {
             // Create a more relaxed filter - only essential requirements
             const relaxedFilter = {
                 role: "star",
-                hidden: { $ne: true },
+                // Only exclude hidden stars if no search query is provided
+                ...(q && q.trim() ? {} : { hidden: { $ne: true } }),
                 isDeleted: { $ne: true }
             };
 

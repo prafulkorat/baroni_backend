@@ -292,9 +292,11 @@ export const createLiveShow = async (req, res) => {
 
     await liveShow.populate({ path: 'starId', select: '-password -passwordResetToken -passwordResetExpires' });
 
-    // Send notification to admin only (no followers notification)
+    // Send notification to admin and star
     try {
       const starName = req.user.name || req.user.pseudo || 'A star';
+      
+      // Notify admin
       await NotificationHelper.sendCustomNotification(
         adminUser._id,
         'New Live Show Created',
@@ -308,8 +310,23 @@ export const createLiveShow = async (req, res) => {
           eventType: 'LIVE_SHOW_CREATED'
         }
       );
+
+      // Notify star about successful creation
+      await NotificationHelper.sendCustomNotification(
+        req.user._id,
+        'Your Live Show event has been set successfully',
+        `Your live show "${sessionTitle}" has been created and is now open for fans to join!`,
+        {
+          type: 'live_show',
+          liveShowId: liveShow._id.toString(),
+          starId: req.user._id.toString(),
+          starName: starName,
+          navigateTo: 'live_show',
+          eventType: 'LIVE_SHOW_CREATED_SUCCESS'
+        }
+      );
     } catch (notificationError) {
-      console.error('Error sending live show notification to admin:', notificationError);
+      console.error('Error sending live show notifications:', notificationError);
     }
 
     const resp = { 

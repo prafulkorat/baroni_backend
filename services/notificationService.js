@@ -1299,6 +1299,20 @@ class NotificationService {
         type: 'message'
       },
 
+      // Star promotion notifications
+      STAR_PROMOTION_COMPLETED: {
+        title: 'Congratulations! You are now a Baroni Star 🌟',
+        body: 'Welcome to the stars! You can now receive bookings and create content for your fans.',
+        type: 'star_promotion'
+      },
+
+      // Live show notifications
+      LIVE_SHOW_CREATED_SUCCESS: {
+        title: 'Your Live Show event has been set successfully',
+        body: 'Your live show has been created and is now open for fans to join!',
+        type: 'live_show'
+      },
+
       // General notifications
       GENERAL: {
         title: 'Notification',

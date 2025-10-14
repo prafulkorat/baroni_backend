@@ -263,13 +263,14 @@ export const createAppointment = async (req, res) => {
 
     // Send notification to star about new appointment request only if payment is completed
     // For hybrid payments, notification will be sent after payment callback
-    if (transaction.status === 'pending' || transaction.paymentMode === 'coin') {
+    if (transaction.status === 'pending' && transactionResult.paymentMode === 'coin') {
       try {
         await NotificationHelper.sendAppointmentNotification('APPOINTMENT_CREATED', created, { currentUserId: req.user._id });
       } catch (notificationError) {
         console.error('Error sending appointment notification:', notificationError);
       }
     }
+    // For hybrid payments, notification will be sent after payment validation in paymentCallbackService
 
     const responseBody = { 
       success: true, 
