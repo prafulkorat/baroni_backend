@@ -138,6 +138,11 @@ export const createSanitizedUserResponse = (user) => {
     profileImpressions: sanitized.profileImpressions,
     averageRating: sanitized.averageRating,
     totalReviews: sanitized.totalReviews,
+    fcmToken: sanitized.fcmToken,
+    apnsToken: sanitized.apnsToken,
+    voipToken: sanitized.voipToken,
+    deviceType: sanitized.deviceType,
+    isDev: sanitized.isDev,
     createdAt: sanitized.createdAt,
     updatedAt: sanitized.updatedAt
   };
