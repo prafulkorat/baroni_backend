@@ -294,8 +294,10 @@ export const listAppointments = async (req, res) => {
   try {
     const isStar = req.user.role === 'star' || req.user.role === 'admin';
     const filter = isStar ? { starId: req.user._id } : { fanId: req.user._id };
+    
     // Optional date filtering: exact date or range via startDate/endDate (expects YYYY-MM-DD strings)
-    const { date, startDate, endDate } = req.query || {};
+    const { date, startDate, endDate, status, page = 1, limit = 10 } = req.query || {};
+    
     if (date && typeof date === 'string' && date.trim()) {
       filter.date = date.trim();
     } else if ((startDate && typeof startDate === 'string') || (endDate && typeof endDate === 'string')) {
@@ -304,11 +306,31 @@ export const listAppointments = async (req, res) => {
       if (endDate && endDate.trim()) range.$lte = endDate.trim();
       if (Object.keys(range).length > 0) filter.date = range;
     }
+    
+    // Status filtering
+    if (status && typeof status === 'string' && status.trim()) {
+      const validStatuses = ['pending', 'approved', 'rejected', 'cancelled', 'completed'];
+      if (validStatuses.includes(status.trim())) {
+        filter.status = status.trim();
+      }
+    }
+    
+    // Pagination
+    const pageNum = parseInt(page, 10) || 1;
+    const limitNum = parseInt(limit, 10) || 10;
+    const skip = (pageNum - 1) * limitNum;
+    
+    // Get total count for pagination info
+    const totalCount = await Appointment.countDocuments(filter);
+    const totalPages = Math.ceil(totalCount / limitNum);
+    
     const items = await Appointment.find(filter)
       .populate({ path: 'starId', select: '-password -passwordResetToken -passwordResetExpires' })
       .populate('fanId', 'name pseudo profilePic baroniId email contact role agoraKey')
       .populate('availabilityId')
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limitNum);
 
     const parseStartDate = (dateStr, timeStr) => {
       const [year, month, day] = (dateStr || '').split('-').map((v) => parseInt(v, 10));
@@ -340,34 +362,52 @@ export const listAppointments = async (req, res) => {
       return { ...base, timeSlot: timeSlotObj, startAt: isNaN(startAt.getTime()) ? undefined : startAt.toISOString(), timeToNowMs };
     });
 
-    const pending = [];
-    const approved = [];
-    const other = [];
-    for (const it of withComputed) {
-      if (it.status === 'pending') {
-        pending.push(it);
-      } else if (it.status === 'approved') {
-        approved.push(it);
-      } else {
-        other.push(it);
+    // Only apply status-based sorting if no specific status filter is applied
+    let data = withComputed;
+    
+    if (!status || !status.trim()) {
+      // No status filter - apply the original sorting logic
+      const pending = [];
+      const approved = [];
+      const other = [];
+      
+      for (const it of withComputed) {
+        if (it.status === 'pending') {
+          pending.push(it);
+        } else if (it.status === 'approved') {
+          approved.push(it);
+        } else {
+          other.push(it);
+        }
       }
+      
+      // Sort pending appointments by creation time (most recent first)
+      pending.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      
+      // Sort approved appointments by time (earliest first)
+      approved.sort((a, b) => (a.timeToNowMs ?? Infinity) - (b.timeToNowMs ?? Infinity));
+      
+      // Sort other appointments by time (earliest first)
+      other.sort((a, b) => (a.timeToNowMs ?? Infinity) - (b.timeToNowMs ?? Infinity));
+      
+      data = [...pending, ...approved, ...other];
+    } else {
+      // Status filter applied - sort by creation time (most recent first)
+      data = withComputed.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
     }
-    
-    // Sort pending appointments by creation time (most recent first)
-    pending.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-    
-    // Sort approved appointments by time (earliest first)
-    approved.sort((a, b) => (a.timeToNowMs ?? Infinity) - (b.timeToNowMs ?? Infinity));
-    
-    // Sort other appointments by time (earliest first)
-    other.sort((a, b) => (a.timeToNowMs ?? Infinity) - (b.timeToNowMs ?? Infinity));
-    
-    const data = [...pending, ...approved, ...other];
 
     return res.json({ 
       success: true, 
       message: 'Appointments retrieved successfully',
-      data: data
+      data: data,
+      pagination: {
+        currentPage: pageNum,
+        totalPages,
+        totalCount,
+        limit: limitNum,
+        hasNextPage: pageNum < totalPages,
+        hasPrevPage: pageNum > 1
+      }
     });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });

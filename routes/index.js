@@ -22,6 +22,11 @@ import ratingsRouter from './api/ratings.js';
 import analyticsRouter from './api/analytics.js';
 import configRouter from './api/config.js';
 import adminRouter from './api/admin.js';
+import adminDashboardRouter from './api/adminDashboard.js';
+import adminManagementRouter from './api/adminManagement.js';
+import eventsRouter from './api/events.js';
+import adsRouter from './api/ads.js';
+import supportManagerRouter from './api/supportManager.js';
 
 const router = express.Router();
 
@@ -48,6 +53,11 @@ router.use('/ratings', ratingsRouter);
 router.use('/analytics', analyticsRouter);
 router.use('/config', configRouter);
 router.use('/admin', adminRouter);
+router.use('/admin/dashboard', adminDashboardRouter);
+router.use('/admin/management', adminManagementRouter);
+router.use('/events', eventsRouter);
+router.use('/ads', adsRouter);
+router.use('/support-manager', supportManagerRouter);
 
 export default router;
 

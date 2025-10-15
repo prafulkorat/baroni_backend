@@ -1,7 +1,7 @@
   import express from 'express';
 import { body } from 'express-validator';
 import { requireAuth, requireRole } from '../../middlewares/auth.js';
-import { idParamValidator } from '../../validators/commonValidators.js';
+import { idParamValidator, paginationQueryValidator, appointmentStatusQueryValidator } from '../../validators/commonValidators.js';
 import { createAppointment, listAppointments, approveAppointment, rejectAppointment, cancelAppointment, rescheduleAppointment, completeAppointment, getAppointmentDetails } from '../../controllers/appointment.js';
 
 const router = express.Router();
@@ -16,7 +16,7 @@ const createAppointmentValidator = [
 ];
 
 router.post('/', createAppointmentValidator, createAppointment);
-router.get('/', listAppointments);
+router.get('/', [...paginationQueryValidator, ...appointmentStatusQueryValidator], listAppointments);
 router.get('/:id', idParamValidator, getAppointmentDetails);
 router.post('/:id/approve', requireRole('star', 'admin'), idParamValidator, approveAppointment);
 router.post('/:id/reject', requireRole('star', 'admin'), idParamValidator, rejectAppointment);

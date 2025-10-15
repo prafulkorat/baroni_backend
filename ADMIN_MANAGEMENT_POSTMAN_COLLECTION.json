@@ -1,0 +1,2511 @@
+{
+  "info": {
+    "name": "Baroni Admin Management APIs",
+    "description": "Complete API collection for admin management endpoints including user management, star management, review management, and reported users management",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "version": "1.0.0"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{admin_token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:4000",
+      "type": "string"
+    },
+    {
+      "key": "admin_token",
+      "value": "YOUR_ADMIN_JWT_TOKEN_HERE",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Admin Authentication",
+      "item": [
+        {
+          "name": "Admin Sign In",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"admin@example.com\",\n  \"password\": \"admin123\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/admin/signin",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "signin"]
+            }
+          }
+        },
+        {
+          "name": "Get Admin Profile",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/profile",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "profile"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "User Management",
+      "item": [
+        {
+          "name": "Get All Users",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/management/users?page=1&limit=20&search=&role=all&country=all&status=all&sortBy=createdAt&sortOrder=desc",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "management", "users"],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "20"
+                },
+                {
+                  "key": "search",
+                  "value": ""
+                },
+                {
+                  "key": "role",
+                  "value": "all"
+                },
+                {
+                  "key": "country",
+                  "value": "all"
+                },
+                {
+                  "key": "status",
+                  "value": "all"
+                },
+                {
+                  "key": "sortBy",
+                  "value": "createdAt"
+                },
+                {
+                  "key": "sortOrder",
+                  "value": "desc"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get User Details",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/management/users/:userId",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "management", "users", ":userId"],
+              "variable": [
+                {
+                  "key": "userId",
+                  "value": "USER_ID_HERE"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update User Status (Block)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"action\": \"block\",\n  \"reason\": \"Violation of terms of service\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/admin/management/users/:userId/status",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "management", "users", ":userId", "status"],
+              "variable": [
+                {
+                  "key": "userId",
+                  "value": "USER_ID_HERE"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update User Status (Unblock)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"action\": \"unblock\",\n  \"reason\": \"Issue resolved\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/admin/management/users/:userId/status",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "management", "users", ":userId", "status"],
+              "variable": [
+                {
+                  "key": "userId",
+                  "value": "USER_ID_HERE"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update User Role",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"role\": \"star\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/admin/management/users/:userId/role",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "management", "users", ":userId", "role"],
+              "variable": [
+                {
+                  "key": "userId",
+                  "value": "USER_ID_HERE"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete User",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"Account closure request\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/admin/management/users/:userId",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "management", "users", ":userId"],
+              "variable": [
+                {
+                  "key": "userId",
+                  "value": "USER_ID_HERE"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get User Statistics",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/management/users-stats?period=current_month",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "management", "users-stats"],
+              "query": [
+                {
+                  "key": "period",
+                  "value": "current_month"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Star Management",
+      "item": [
+        {
+          "name": "Get All Stars",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/management/stars?page=1&limit=20&search=&country=all&status=all&sortBy=createdAt&sortOrder=desc",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "management", "stars"],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "20"
+                },
+                {
+                  "key": "search",
+                  "value": ""
+                },
+                {
+                  "key": "country",
+                  "value": "all"
+                },
+                {
+                  "key": "status",
+                  "value": "all"
+                },
+                {
+                  "key": "sortBy",
+                  "value": "createdAt"
+                },
+                {
+                  "key": "sortOrder",
+                  "value": "desc"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Star Profile",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/management/stars/:starId",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "management", "stars", ":starId"],
+              "variable": [
+                {
+                  "key": "starId",
+                  "value": "STAR_ID_HERE"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update Star Profile",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Emma Johnson\",\n  \"pseudo\": \"emma_j\",\n  \"email\": \"emma@example.com\",\n  \"contact\": \"+1234567890\",\n  \"profilePic\": \"https://example.com/profile.jpg\",\n  \"country\": \"USA\",\n  \"profession\": \"PROFESSION_ID_HERE\",\n  \"about\": \"Award-winning actress and voice artist with over 10 years of experience. I love connecting with fans and creating special moments.\",\n  \"location\": \"Hollywood\",\n  \"availableForBookings\": true,\n  \"hidden\": false,\n  \"appNotification\": true\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/admin/management/stars/:starId",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "management", "stars", ":starId"],
+              "variable": [
+                {
+                  "key": "starId",
+                  "value": "STAR_ID_HERE"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Star Services",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/management/stars/:starId/services",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "management", "stars", ":starId", "services"],
+              "variable": [
+                {
+                  "key": "starId",
+                  "value": "STAR_ID_HERE"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Add Star Service",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"Video Call\",\n  \"price\": 75\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/admin/management/stars/:starId/services",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "management", "stars", ":starId", "services"],
+              "variable": [
+                {
+                  "key": "starId",
+                  "value": "STAR_ID_HERE"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update Star Service",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"Video Call\",\n  \"price\": 100\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/admin/management/stars/:starId/services/:serviceId",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "management", "stars", ":starId", "services", ":serviceId"],
+              "variable": [
+                {
+                  "key": "starId",
+                  "value": "STAR_ID_HERE"
+                },
+                {
+                  "key": "serviceId",
+                  "value": "SERVICE_ID_HERE"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete Star Service",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/management/stars/:starId/services/:serviceId",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "management", "stars", ":starId", "services", ":serviceId"],
+              "variable": [
+                {
+                  "key": "starId",
+                  "value": "STAR_ID_HERE"
+                },
+                {
+                  "key": "serviceId",
+                  "value": "SERVICE_ID_HERE"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Star Dedication Samples",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/management/stars/:starId/dedication-samples",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "management", "stars", ":starId", "dedication-samples"],
+              "variable": [
+                {
+                  "key": "starId",
+                  "value": "STAR_ID_HERE"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Add Star Dedication Sample",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"Birthday Wish\",\n  \"video\": \"https://example.com/video.mp4\",\n  \"description\": \"Sample birthday dedication video\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/admin/management/stars/:starId/dedication-samples",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "management", "stars", ":starId", "dedication-samples"],
+              "variable": [
+                {
+                  "key": "starId",
+                  "value": "STAR_ID_HERE"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update Star Dedication Sample",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"Birthday Wish\",\n  \"video\": \"https://example.com/new-video.mp4\",\n  \"description\": \"Updated birthday dedication video\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/admin/management/stars/:starId/dedication-samples/:sampleId",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "management", "stars", ":starId", "dedication-samples", ":sampleId"],
+              "variable": [
+                {
+                  "key": "starId",
+                  "value": "STAR_ID_HERE"
+                },
+                {
+                  "key": "sampleId",
+                  "value": "SAMPLE_ID_HERE"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete Star Dedication Sample",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/management/stars/:starId/dedication-samples/:sampleId",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "management", "stars", ":starId", "dedication-samples", ":sampleId"],
+              "variable": [
+                {
+                  "key": "starId",
+                  "value": "STAR_ID_HERE"
+                },
+                {
+                  "key": "sampleId",
+                  "value": "SAMPLE_ID_HERE"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Review Management",
+      "item": [
+        {
+          "name": "Get All Reviews",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/management/reviews?page=1&limit=20&search=&starId=&reviewerId=&rating=&reviewType=all&sortBy=createdAt&sortOrder=desc",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "management", "reviews"],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "20"
+                },
+                {
+                  "key": "search",
+                  "value": ""
+                },
+                {
+                  "key": "starId",
+                  "value": ""
+                },
+                {
+                  "key": "reviewerId",
+                  "value": ""
+                },
+                {
+                  "key": "rating",
+                  "value": ""
+                },
+                {
+                  "key": "reviewType",
+                  "value": "all"
+                },
+                {
+                  "key": "sortBy",
+                  "value": "createdAt"
+                },
+                {
+                  "key": "sortOrder",
+                  "value": "desc"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Review Details",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/management/reviews/:reviewId",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "management", "reviews", ":reviewId"],
+              "variable": [
+                {
+                  "key": "reviewId",
+                  "value": "REVIEW_ID_HERE"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update Review",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"rating\": 5,\n  \"comment\": \"Emma was amazing! She created a birthday message for my mom that made her cry tears of joy. Worth every penny!\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/admin/management/reviews/:reviewId",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "management", "reviews", ":reviewId"],
+              "variable": [
+                {
+                  "key": "reviewId",
+                  "value": "REVIEW_ID_HERE"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete Review",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/management/reviews/:reviewId",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "management", "reviews", ":reviewId"],
+              "variable": [
+                {
+                  "key": "reviewId",
+                  "value": "REVIEW_ID_HERE"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Star Reviews",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/management/stars/:starId/reviews?page=1&limit=20&rating=&reviewType=all&sortBy=createdAt&sortOrder=desc",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "management", "stars", ":starId", "reviews"],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "20"
+                },
+                {
+                  "key": "rating",
+                  "value": ""
+                },
+                {
+                  "key": "reviewType",
+                  "value": "all"
+                },
+                {
+                  "key": "sortBy",
+                  "value": "createdAt"
+                },
+                {
+                  "key": "sortOrder",
+                  "value": "desc"
+                }
+              ],
+              "variable": [
+                {
+                  "key": "starId",
+                  "value": "STAR_ID_HERE"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Review Statistics",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/management/reviews-stats?period=current_month",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "management", "reviews-stats"],
+              "query": [
+                {
+                  "key": "period",
+                  "value": "current_month"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Reported Users Management",
+      "item": [
+        {
+          "name": "Get All Reported Users",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/management/reported-users?page=1&limit=20&search=&status=all&reportedUserRole=all&country=all&sortBy=createdAt&sortOrder=desc",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "management", "reported-users"],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "20"
+                },
+                {
+                  "key": "search",
+                  "value": ""
+                },
+                {
+                  "key": "status",
+                  "value": "all"
+                },
+                {
+                  "key": "reportedUserRole",
+                  "value": "all"
+                },
+                {
+                  "key": "country",
+                  "value": "all"
+                },
+                {
+                  "key": "sortBy",
+                  "value": "createdAt"
+                },
+                {
+                  "key": "sortOrder",
+                  "value": "desc"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Reported User Details",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/management/reported-users/:reportId",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "management", "reported-users", ":reportId"],
+              "variable": [
+                {
+                  "key": "reportId",
+                  "value": "REPORT_ID_HERE"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update Report Status",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"resolved\",\n  \"adminNotes\": \"Investigation completed, user warned about inappropriate behavior\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/admin/management/reported-users/:reportId/status",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "management", "reported-users", ":reportId", "status"],
+              "variable": [
+                {
+                  "key": "reportId",
+                  "value": "REPORT_ID_HERE"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Block Reported User",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"Multiple violations reported - inappropriate behavior and harassment\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/admin/management/reported-users/:reportId/block",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "management", "reported-users", ":reportId", "block"],
+              "variable": [
+                {
+                  "key": "reportId",
+                  "value": "REPORT_ID_HERE"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Unblock Reported User",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"Investigation completed, no violations found\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/admin/management/reported-users/:reportId/unblock",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "management", "reported-users", ":reportId", "unblock"],
+              "variable": [
+                {
+                  "key": "reportId",
+                  "value": "REPORT_ID_HERE"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete Report",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/management/reported-users/:reportId",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "management", "reported-users", ":reportId"],
+              "variable": [
+                {
+                  "key": "reportId",
+                  "value": "REPORT_ID_HERE"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Reported Users Statistics",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/management/reported-users-stats?period=current_month",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "management", "reported-users-stats"],
+              "query": [
+                {
+                  "key": "period",
+                  "value": "current_month"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Admin Dashboard",
+      "item": [
+        {
+          "name": "Get Dashboard Summary",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/dashboard/summary?period=current_month",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "dashboard", "summary"],
+              "query": [
+                {
+                  "key": "period",
+                  "value": "current_month"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Revenue Insights",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/dashboard/revenue?period=current_month",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "dashboard", "revenue"],
+              "query": [
+                {
+                  "key": "period",
+                  "value": "current_month"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Active Users by Country",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/dashboard/active-users-by-country?period=current_month&limit=10",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "dashboard", "active-users-by-country"],
+              "query": [
+                {
+                  "key": "period",
+                  "value": "current_month"
+                },
+                {
+                  "key": "limit",
+                  "value": "10"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Cost Evaluation",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/dashboard/cost-evaluation?period=current_month",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "dashboard", "cost-evaluation"],
+              "query": [
+                {
+                  "key": "period",
+                  "value": "current_month"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Service Insights - Video Call",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/dashboard/service-insights/video-call?period=current_month",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "dashboard", "service-insights", "video-call"],
+              "query": [
+                {
+                  "key": "period",
+                  "value": "current_month"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Service Insights - Live Show",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/dashboard/service-insights/live-show?period=current_month",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "dashboard", "service-insights", "live-show"],
+              "query": [
+                {
+                  "key": "period",
+                  "value": "current_month"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Service Insights - Dedication",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/dashboard/service-insights/dedication?period=current_month",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "dashboard", "service-insights", "dedication"],
+              "query": [
+                {
+                  "key": "period",
+                  "value": "current_month"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Top Stars",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/dashboard/top-stars?period=current_month&limit=50&sortBy=revenue",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "dashboard", "top-stars"],
+              "query": [
+                {
+                  "key": "period",
+                  "value": "current_month"
+                },
+                {
+                  "key": "limit",
+                  "value": "50"
+                },
+                {
+                  "key": "sortBy",
+                  "value": "revenue"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Service Revenue Breakdown",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/dashboard/service-revenue-breakdown?period=current_month",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "dashboard", "service-revenue-breakdown"],
+              "query": [
+                {
+                  "key": "period",
+                  "value": "current_month"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Device Change Stats",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/dashboard/device-change-stats?period=current_month",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "dashboard", "device-change-stats"],
+              "query": [
+                {
+                  "key": "period",
+                  "value": "current_month"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Reported Users Details",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/dashboard/reported-users-details?status=pending&limit=50&page=1",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "dashboard", "reported-users-details"],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "pending"
+                },
+                {
+                  "key": "limit",
+                  "value": "50"
+                },
+                {
+                  "key": "page",
+                  "value": "1"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Complete Dashboard",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/dashboard/complete?period=current_month",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "dashboard", "complete"],
+              "query": [
+                {
+                  "key": "period",
+                  "value": "current_month"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Configuration Management",
+      "item": [
+        {
+          "name": "Get Global Configuration",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/config",
+              "host": ["{{base_url}}"],
+              "path": ["api", "config"]
+            }
+          }
+        },
+        {
+          "name": "Update Global Configuration",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"appName\": \"Baroni\",\n  \"appVersion\": \"1.0.0\",\n  \"maintenanceMode\": false,\n  \"registrationEnabled\": true,\n  \"maxFileSize\": 5242880,\n  \"supportedImageFormats\": [\"jpg\", \"jpeg\", \"png\", \"gif\"],\n  \"supportedVideoFormats\": [\"mp4\", \"mov\", \"avi\"],\n  \"defaultLanguage\": \"en\",\n  \"supportedLanguages\": [\"en\", \"fr\", \"es\"],\n  \"defaultCurrency\": \"USD\",\n  \"supportedCurrencies\": [\"USD\", \"EUR\", \"GBP\"],\n  \"maxCoinsPerTransaction\": 10000,\n  \"minCoinsPerTransaction\": 1,\n  \"commissionRate\": 0.1,\n  \"paymentGatewayEnabled\": true,\n  \"notificationEnabled\": true,\n  \"analyticsEnabled\": true,\n  \"debugMode\": false\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/config",
+              "host": ["{{base_url}}"],
+              "path": ["api", "config"]
+            }
+          }
+        },
+        {
+          "name": "Get Public Configuration",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/config/public",
+              "host": ["{{base_url}}"],
+              "path": ["api", "config", "public"]
+            }
+          }
+        },
+        {
+          "name": "Get Categories",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/config/categories",
+              "host": ["{{base_url}}"],
+              "path": ["api", "config", "categories"]
+            }
+          }
+        },
+        {
+          "name": "Get Country Service Configs",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/config/country-services?country=&serviceType=&limit=20&page=1",
+              "host": ["{{base_url}}"],
+              "path": ["api", "config", "country-services"],
+              "query": [
+                {
+                  "key": "country",
+                  "value": ""
+                },
+                {
+                  "key": "serviceType",
+                  "value": ""
+                },
+                {
+                  "key": "limit",
+                  "value": "20"
+                },
+                {
+                  "key": "page",
+                  "value": "1"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Create Country Service Config",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"country\": \"US\",\n  \"serviceType\": \"video_call\",\n  \"enabled\": true,\n  \"minPrice\": 10,\n  \"maxPrice\": 1000,\n  \"commissionRate\": 0.15,\n  \"currency\": \"USD\",\n  \"timezone\": \"America/New_York\",\n  \"businessHours\": {\n    \"start\": \"09:00\",\n    \"end\": \"17:00\",\n    \"timezone\": \"America/New_York\"\n  },\n  \"restrictions\": {\n    \"maxDuration\": 60,\n    \"minDuration\": 5,\n    \"allowedDays\": [\"monday\", \"tuesday\", \"wednesday\", \"thursday\", \"friday\"]\n  }\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/config/country-services",
+              "host": ["{{base_url}}"],
+              "path": ["api", "config", "country-services"]
+            }
+          }
+        },
+        {
+          "name": "Update Country Service Config",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"enabled\": false,\n  \"minPrice\": 15,\n  \"maxPrice\": 1200,\n  \"commissionRate\": 0.12,\n  \"businessHours\": {\n    \"start\": \"10:00\",\n    \"end\": \"18:00\",\n    \"timezone\": \"America/New_York\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/config/country-services/:configId",
+              "host": ["{{base_url}}"],
+              "path": ["api", "config", "country-services", ":configId"],
+              "variable": [
+                {
+                  "key": "configId",
+                  "value": "CONFIG_ID_HERE"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete Country Service Config",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/config/country-services/:configId",
+              "host": ["{{base_url}}"],
+              "path": ["api", "config", "country-services", ":configId"],
+              "variable": [
+                {
+                  "key": "configId",
+                  "value": "CONFIG_ID_HERE"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Appointment Management",
+      "item": [
+        {
+          "name": "Get Appointments",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/appointments?page=1&limit=10&status=pending&date=&startDate=&endDate=",
+              "host": ["{{base_url}}"],
+              "path": ["api", "appointments"],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "10"
+                },
+                {
+                  "key": "status",
+                  "value": "pending"
+                },
+                {
+                  "key": "date",
+                  "value": ""
+                },
+                {
+                  "key": "startDate",
+                  "value": ""
+                },
+                {
+                  "key": "endDate",
+                  "value": ""
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Appointment Details",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/appointments/:id",
+              "host": ["{{base_url}}"],
+              "path": ["api", "appointments", ":id"],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "APPOINTMENT_ID_HERE"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Create Appointment",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"starId\": \"STAR_ID_HERE\",\n  \"availabilityId\": \"AVAILABILITY_ID_HERE\",\n  \"timeSlotId\": \"TIME_SLOT_ID_HERE\",\n  \"price\": 50,\n  \"contact\": \"+1234567890\",\n  \"starName\": \"Star Name\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/appointments",
+              "host": ["{{base_url}}"],
+              "path": ["api", "appointments"]
+            }
+          }
+        },
+        {
+          "name": "Approve Appointment",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/appointments/:id/approve",
+              "host": ["{{base_url}}"],
+              "path": ["api", "appointments", ":id", "approve"],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "APPOINTMENT_ID_HERE"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Reject Appointment",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/appointments/:id/reject",
+              "host": ["{{base_url}}"],
+              "path": ["api", "appointments", ":id", "reject"],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "APPOINTMENT_ID_HERE"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Cancel Appointment",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/appointments/:id/cancel",
+              "host": ["{{base_url}}"],
+              "path": ["api", "appointments", ":id", "cancel"],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "APPOINTMENT_ID_HERE"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Reschedule Appointment",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"availabilityId\": \"NEW_AVAILABILITY_ID_HERE\",\n  \"timeSlotId\": \"NEW_TIME_SLOT_ID_HERE\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/appointments/:id/reschedule",
+              "host": ["{{base_url}}"],
+              "path": ["api", "appointments", ":id", "reschedule"],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "APPOINTMENT_ID_HERE"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Complete Appointment",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"callDuration\": 30\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/appointments/:id/complete",
+              "host": ["{{base_url}}"],
+              "path": ["api", "appointments", ":id", "complete"],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "APPOINTMENT_ID_HERE"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Event Management",
+      "item": [
+        {
+          "name": "Create Event",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"New Year Special Event\",\n  \"description\": \"Celebrate New Year with your favorite stars\",\n  \"type\": \"promotional\",\n  \"startDate\": \"2024-01-01T00:00:00.000Z\",\n  \"endDate\": \"2024-01-07T23:59:59.000Z\",\n  \"targetAudience\": \"all\",\n  \"targetCountry\": \"USA\",\n  \"priority\": \"high\",\n  \"budget\": 5000,\n  \"image\": \"https://example.com/event-image.jpg\",\n  \"link\": \"https://example.com/event-link\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/events",
+              "host": ["{{base_url}}"],
+              "path": ["api", "events"]
+            }
+          }
+        },
+        {
+          "name": "Get All Events",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/events?status=&type=&limit=20&page=1",
+              "host": ["{{base_url}}"],
+              "path": ["api", "events"],
+              "query": [
+                {
+                  "key": "status",
+                  "value": ""
+                },
+                {
+                  "key": "type",
+                  "value": ""
+                },
+                {
+                  "key": "limit",
+                  "value": "20"
+                },
+                {
+                  "key": "page",
+                  "value": "1"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update Event Status",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"active\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/events/:eventId/status",
+              "host": ["{{base_url}}"],
+              "path": ["api", "events", ":eventId", "status"],
+              "variable": [
+                {
+                  "key": "eventId",
+                  "value": "EVENT_ID_HERE"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Ads Management",
+      "item": [
+        {
+          "name": "Get Active Ads (Public)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/ads/public/active?limit=10&country=&audience=",
+              "host": ["{{base_url}}"],
+              "path": ["api", "ads", "public", "active"],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "10"
+                },
+                {
+                  "key": "country",
+                  "value": ""
+                },
+                {
+                  "key": "audience",
+                  "value": ""
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Track Ad Click",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/ads/:id/click",
+              "host": ["{{base_url}}"],
+              "path": ["api", "ads", ":id", "click"],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "AD_ID_HERE"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Create Ad",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "title",
+                  "value": "Special Promotion",
+                  "type": "text"
+                },
+                {
+                  "key": "link",
+                  "value": "https://example.com/promotion",
+                  "type": "text"
+                },
+                {
+                  "key": "budget",
+                  "value": "1000",
+                  "type": "text"
+                },
+                {
+                  "key": "targetAudience",
+                  "value": "all",
+                  "type": "text"
+                },
+                {
+                  "key": "targetCountry",
+                  "value": "USA",
+                  "type": "text"
+                },
+                {
+                  "key": "priority",
+                  "value": "high",
+                  "type": "text"
+                },
+                {
+                  "key": "startDate",
+                  "value": "2024-01-01T00:00:00.000Z",
+                  "type": "text"
+                },
+                {
+                  "key": "endDate",
+                  "value": "2024-01-31T23:59:59.000Z",
+                  "type": "text"
+                },
+                {
+                  "key": "image",
+                  "type": "file",
+                  "src": []
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/api/ads",
+              "host": ["{{base_url}}"],
+              "path": ["api", "ads"]
+            }
+          }
+        },
+        {
+          "name": "Get User Ads",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/ads?page=1&limit=10&status=&sortBy=createdAt&sortOrder=desc",
+              "host": ["{{base_url}}"],
+              "path": ["api", "ads"],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "10"
+                },
+                {
+                  "key": "status",
+                  "value": ""
+                },
+                {
+                  "key": "sortBy",
+                  "value": "createdAt"
+                },
+                {
+                  "key": "sortOrder",
+                  "value": "desc"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Ad Details",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/ads/:id",
+              "host": ["{{base_url}}"],
+              "path": ["api", "ads", ":id"],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "AD_ID_HERE"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update Ad",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "title",
+                  "value": "Updated Promotion",
+                  "type": "text"
+                },
+                {
+                  "key": "link",
+                  "value": "https://example.com/updated-promotion",
+                  "type": "text"
+                },
+                {
+                  "key": "budget",
+                  "value": "1500",
+                  "type": "text"
+                },
+                {
+                  "key": "status",
+                  "value": "active",
+                  "type": "text"
+                },
+                {
+                  "key": "image",
+                  "type": "file",
+                  "src": []
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/api/ads/:id",
+              "host": ["{{base_url}}"],
+              "path": ["api", "ads", ":id"],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "AD_ID_HERE"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete Ad",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/ads/:id",
+              "host": ["{{base_url}}"],
+              "path": ["api", "ads", ":id"],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "AD_ID_HERE"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Ad Analytics",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/ads/:id/analytics",
+              "host": ["{{base_url}}"],
+              "path": ["api", "ads", ":id", "analytics"],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "AD_ID_HERE"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Ticket Management (Support)",
+      "item": [
+        {
+          "name": "Create Support Ticket",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "issueType",
+                  "value": "technical",
+                  "type": "text"
+                },
+                {
+                  "key": "title",
+                  "value": "App not working properly",
+                  "type": "text"
+                },
+                {
+                  "key": "description",
+                  "value": "The app crashes when I try to book a video call with a star",
+                  "type": "text"
+                },
+                {
+                  "key": "priority",
+                  "value": "high",
+                  "type": "text"
+                },
+                {
+                  "key": "category",
+                  "value": "technical",
+                  "type": "text"
+                },
+                {
+                  "key": "image",
+                  "type": "file",
+                  "src": []
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/api/support-manager",
+              "host": ["{{base_url}}"],
+              "path": ["api", "support-manager"]
+            }
+          }
+        },
+        {
+          "name": "Get My Support Tickets",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/support-manager/my-tickets",
+              "host": ["{{base_url}}"],
+              "path": ["api", "support-manager", "my-tickets"]
+            }
+          }
+        },
+        {
+          "name": "Get Support Ticket Details",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/support-manager/:id",
+              "host": ["{{base_url}}"],
+              "path": ["api", "support-manager", ":id"],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "TICKET_ID_HERE"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update Support Ticket",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "title",
+                  "value": "Updated ticket title",
+                  "type": "text"
+                },
+                {
+                  "key": "description",
+                  "value": "Updated description with more details",
+                  "type": "text"
+                },
+                {
+                  "key": "priority",
+                  "value": "medium",
+                  "type": "text"
+                },
+                {
+                  "key": "image",
+                  "type": "file",
+                  "src": []
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/api/support-manager/:id",
+              "host": ["{{base_url}}"],
+              "path": ["api", "support-manager", ":id"],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "TICKET_ID_HERE"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete Support Ticket",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/support-manager/:id",
+              "host": ["{{base_url}}"],
+              "path": ["api", "support-manager", ":id"],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "TICKET_ID_HERE"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Add Message to Ticket",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message\": \"I have tried the suggested solution but the issue persists. Can you please provide additional help?\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/support-manager/:id/message",
+              "host": ["{{base_url}}"],
+              "path": ["api", "support-manager", ":id", "message"],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "TICKET_ID_HERE"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get All Support Tickets (Admin)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/support-manager/admin/all?page=1&limit=20&status=&priority=&category=&search=&sortBy=createdAt&sortOrder=desc",
+              "host": ["{{base_url}}"],
+              "path": ["api", "support-manager", "admin", "all"],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "20"
+                },
+                {
+                  "key": "status",
+                  "value": ""
+                },
+                {
+                  "key": "priority",
+                  "value": ""
+                },
+                {
+                  "key": "category",
+                  "value": ""
+                },
+                {
+                  "key": "search",
+                  "value": ""
+                },
+                {
+                  "key": "sortBy",
+                  "value": "createdAt"
+                },
+                {
+                  "key": "sortOrder",
+                  "value": "desc"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update Ticket Status (Admin)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"resolved\",\n  \"adminNotes\": \"Issue resolved by updating the app version\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/support-manager/admin/:id/status",
+              "host": ["{{base_url}}"],
+              "path": ["api", "support-manager", "admin", ":id", "status"],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "TICKET_ID_HERE"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Assign Ticket to Admin",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"assignedTo\": \"ADMIN_USER_ID_HERE\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/support-manager/admin/:id/assign",
+              "host": ["{{base_url}}"],
+              "path": ["api", "support-manager", "admin", ":id", "assign"],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "TICKET_ID_HERE"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Ticket Statistics (Admin)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/support-manager/admin/statistics?period=current_month",
+              "host": ["{{base_url}}"],
+              "path": ["api", "support-manager", "admin", "statistics"],
+              "query": [
+                {
+                  "key": "period",
+                  "value": "current_month"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Admin Users for Assignment",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/support-manager/admin/users",
+              "host": ["{{base_url}}"],
+              "path": ["api", "support-manager", "admin", "users"]
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Auto-set authorization header if token is available",
+          "if (pm.environment.get('admin_token')) {",
+          "    pm.request.headers.add({",
+          "        key: 'Authorization',",
+          "        value: 'Bearer ' + pm.environment.get('admin_token')",
+          "    });",
+          "}"
+        ]
+      }
+    }
+  ]
+}

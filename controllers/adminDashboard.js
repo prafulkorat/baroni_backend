@@ -5,6 +5,8 @@ import DedicationRequest from '../models/DedicationRequest.js';
 import LiveShow from '../models/LiveShow.js';
 import LiveShowAttendance from '../models/LiveShowAttendance.js';
 import ReportUser from '../models/ReportUser.js';
+import DeviceChange from '../models/DeviceChange.js';
+import Event from '../models/Event.js';
 import mongoose from 'mongoose';
 
 // Helper function to get date range based on period
@@ -971,4 +973,362 @@ const getTopStarsData = async (period) => {
   ]);
 
   return topStars;
+};
+
+// Enhanced Service Revenue Breakdown API
+export const getServiceRevenueBreakdown = async (req, res) => {
+  try {
+    const admin = req.user;
+    if (!admin || admin.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Admin access required'
+      });
+    }
+
+    const { period = 'current_month' } = req.query;
+    const { startDate, endDate } = getDateRange(period);
+
+    // Get service-wise revenue breakdown
+    const serviceRevenue = await Transaction.aggregate([
+      {
+        $match: {
+          status: 'completed',
+          createdAt: { $gte: startDate, $lte: endDate }
+        }
+      },
+      {
+        $group: {
+          _id: '$type',
+          totalRevenue: { $sum: '$amount' },
+          transactionCount: { $sum: 1 }
+        }
+      },
+      {
+        $project: {
+          service: '$_id',
+          revenue: '$totalRevenue',
+          transactionCount: '$transactionCount',
+          averageTransaction: { $divide: ['$totalRevenue', '$transactionCount'] }
+        }
+      }
+    ]);
+
+    // Map transaction types to service names
+    const serviceMapping = {
+      'appointment': 'Video Calls',
+      'live_show': 'Live Show',
+      'dedication': 'Dedication',
+      'coin_purchase': 'Coin Purchase',
+      'star_promotion': 'Star Promotion'
+    };
+
+    const formattedRevenue = serviceRevenue.map(service => ({
+      service: serviceMapping[service.service] || service.service,
+      revenue: service.revenue,
+      transactionCount: service.transactionCount,
+      averageTransaction: Math.round(service.averageTransaction * 100) / 100
+    }));
+
+    return res.json({
+      success: true,
+      message: 'Service revenue breakdown retrieved successfully',
+      data: {
+        serviceRevenue: formattedRevenue,
+        totalRevenue: serviceRevenue.reduce((sum, service) => sum + service.revenue, 0)
+      }
+    });
+
+  } catch (err) {
+    console.error('Service revenue breakdown error:', err);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to get service revenue breakdown'
+    });
+  }
+};
+
+// Device Change Tracking API
+export const getDeviceChangeStats = async (req, res) => {
+  try {
+    const admin = req.user;
+    if (!admin || admin.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Admin access required'
+      });
+    }
+
+    const { period = 'current_month' } = req.query;
+    const { startDate, endDate } = getDateRange(period);
+
+    // Get current device counts
+    const androidUsers = await User.countDocuments({
+      deviceType: 'android',
+      isDeleted: { $ne: true }
+    });
+
+    const iosUsers = await User.countDocuments({
+      deviceType: 'ios',
+      isDeleted: { $ne: true }
+    });
+
+    // Get device changes in the period
+    const deviceChanges = await DeviceChange.aggregate([
+      {
+        $match: {
+          changeDate: { $gte: startDate, $lte: endDate }
+        }
+      },
+      {
+        $group: {
+          _id: '$newDeviceType',
+          changes: { $sum: 1 }
+        }
+      }
+    ]);
+
+    const androidChanges = deviceChanges.find(d => d._id === 'android')?.changes || 0;
+    const iosChanges = deviceChanges.find(d => d._id === 'ios')?.changes || 0;
+
+    return res.json({
+      success: true,
+      message: 'Device change stats retrieved successfully',
+      data: {
+        androidUsers: { count: androidUsers, change: androidChanges },
+        iosUsers: { count: iosUsers, change: iosChanges }
+      }
+    });
+
+  } catch (err) {
+    console.error('Device change stats error:', err);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to get device change stats'
+    });
+  }
+};
+
+// Detailed Reported Users API
+export const getReportedUsersDetails = async (req, res) => {
+  try {
+    const admin = req.user;
+    if (!admin || admin.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Admin access required'
+      });
+    }
+
+    const { status = 'pending', limit = 50, page = 1 } = req.query;
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    // Get reported users with details
+    const reportedUsers = await ReportUser.find({ status })
+      .populate('reporterId', 'name pseudo profilePic')
+      .populate('reportedUserId', 'name pseudo profilePic role')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit));
+
+    // Get counts by role
+    const reportedStars = await ReportUser.countDocuments({ 
+      reportedUserRole: 'star',
+      status 
+    });
+
+    const reportedFans = await ReportUser.countDocuments({ 
+      reportedUserRole: 'fan',
+      status 
+    });
+
+    return res.json({
+      success: true,
+      message: 'Reported users details retrieved successfully',
+      data: {
+        reports: reportedUsers.map(report => ({
+          id: report._id,
+          reporter: {
+            id: report.reporterId._id,
+            name: report.reporterId.name,
+            pseudo: report.reporterId.pseudo,
+            profilePic: report.reporterId.profilePic
+          },
+          reportedUser: {
+            id: report.reportedUserId._id,
+            name: report.reportedUserId.name,
+            pseudo: report.reportedUserId.pseudo,
+            profilePic: report.reportedUserId.profilePic,
+            role: report.reportedUserId.role
+          },
+          reason: report.reason,
+          description: report.description,
+          status: report.status,
+          createdAt: report.createdAt
+        })),
+        counts: {
+          stars: reportedStars,
+          fans: reportedFans,
+          total: reportedStars + reportedFans
+        },
+        pagination: {
+          page: parseInt(page),
+          limit: parseInt(limit),
+          total: reportedStars + reportedFans
+        }
+      }
+    });
+
+  } catch (err) {
+    console.error('Reported users details error:', err);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to get reported users details'
+    });
+  }
+};
+
+// Event Management APIs
+export const createEvent = async (req, res) => {
+  try {
+    const admin = req.user;
+    if (!admin || admin.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Admin access required'
+      });
+    }
+
+    const {
+      title,
+      description,
+      type,
+      startDate,
+      endDate,
+      targetAudience,
+      targetCountry,
+      priority,
+      budget,
+      image,
+      link
+    } = req.body;
+
+    const event = new Event({
+      title,
+      description,
+      type,
+      startDate: new Date(startDate),
+      endDate: new Date(endDate),
+      targetAudience,
+      targetCountry,
+      priority,
+      budget,
+      image,
+      link,
+      createdBy: admin._id
+    });
+
+    await event.save();
+
+    return res.status(201).json({
+      success: true,
+      message: 'Event created successfully',
+      data: event
+    });
+
+  } catch (err) {
+    console.error('Create event error:', err);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to create event'
+    });
+  }
+};
+
+export const getEvents = async (req, res) => {
+  try {
+    const admin = req.user;
+    if (!admin || admin.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Admin access required'
+      });
+    }
+
+    const { status, type, limit = 20, page = 1 } = req.query;
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    const filter = {};
+    if (status) filter.status = status;
+    if (type) filter.type = type;
+
+    const events = await Event.find(filter)
+      .populate('createdBy', 'name pseudo')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit));
+
+    const totalEvents = await Event.countDocuments(filter);
+
+    return res.json({
+      success: true,
+      message: 'Events retrieved successfully',
+      data: {
+        events,
+        pagination: {
+          page: parseInt(page),
+          limit: parseInt(limit),
+          total: totalEvents
+        }
+      }
+    });
+
+  } catch (err) {
+    console.error('Get events error:', err);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to get events'
+    });
+  }
+};
+
+export const updateEventStatus = async (req, res) => {
+  try {
+    const admin = req.user;
+    if (!admin || admin.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Admin access required'
+      });
+    }
+
+    const { eventId } = req.params;
+    const { status } = req.body;
+
+    const event = await Event.findByIdAndUpdate(
+      eventId,
+      { status },
+      { new: true }
+    );
+
+    if (!event) {
+      return res.status(404).json({
+        success: false,
+        message: 'Event not found'
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: 'Event status updated successfully',
+      data: event
+    });
+
+  } catch (err) {
+    console.error('Update event status error:', err);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to update event status'
+    });
+  }
 };

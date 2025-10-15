@@ -11,7 +11,8 @@
     "create:admin": "node scripts/createAdmin.js",
     "migrate:baroni-ids": "node scripts/migrateBaroniIds.js",
     "migrate:transaction-status": "node scripts/migrateTransactionStatus.js",
-    "migrate:agora-keys": "node scripts/runAgoraKeyMigration.js"
+    "migrate:agora-keys": "node scripts/runAgoraKeyMigration.js",
+    "init:config": "node scripts/initializeDefaultConfig.js"
   },
   "keywords": [],
   "author": "",

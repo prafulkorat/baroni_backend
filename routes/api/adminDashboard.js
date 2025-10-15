@@ -6,7 +6,13 @@ import {
   getCostEvaluation,
   getServiceInsights,
   getTopStars,
-  getCompleteDashboard
+  getCompleteDashboard,
+  getServiceRevenueBreakdown,
+  getDeviceChangeStats,
+  getReportedUsersDetails,
+  createEvent,
+  getEvents,
+  updateEventStatus
 } from '../../controllers/adminDashboard.js';
 import {
   dashboardSummaryValidator,
@@ -15,7 +21,10 @@ import {
   costEvaluationValidator,
   serviceInsightsValidator,
   topStarsValidator,
-  completeDashboardValidator
+  completeDashboardValidator,
+  serviceRevenueBreakdownValidator,
+  deviceChangeStatsValidator,
+  reportedUsersDetailsValidator
 } from '../../validators/adminDashboardValidators.js';
 import { requireAuth, requireRole } from '../../middlewares/auth.js';
 
@@ -45,5 +54,19 @@ router.get('/top-stars', topStarsValidator, getTopStars);
 
 // Complete Dashboard Data (All in one)
 router.get('/complete', completeDashboardValidator, getCompleteDashboard);
+
+// Enhanced Service Revenue Breakdown
+router.get('/service-revenue-breakdown', serviceRevenueBreakdownValidator, getServiceRevenueBreakdown);
+
+// Device Change Tracking
+router.get('/device-change-stats', deviceChangeStatsValidator, getDeviceChangeStats);
+
+// Detailed Reported Users
+router.get('/reported-users-details', reportedUsersDetailsValidator, getReportedUsersDetails);
+
+// Event Management
+router.post('/events', createEvent);
+router.get('/events', getEvents);
+router.patch('/events/:eventId/status', updateEventStatus);
 
 export default router;
