@@ -104,6 +104,9 @@ class NotificationHelper {
         relatedEntity: { type: 'appointment', id: appointment._id }
       });
     } else if (type === 'APPOINTMENT_CREATED') {
+      await notificationService.sendToUser(data.starId, starNote, data, {
+        relatedEntity: { type: 'appointment', id: appointment._id }
+      });
       // Logging for debugging purposes when not sending to fan during appointment creation
       console.log('[AppointmentNotification] Not sending to fan for appointment creation', {
         appointmentId: appointment._id?.toString?.() || String(appointment._id || ''),
