@@ -4,6 +4,69 @@ import LiveShow from '../models/LiveShow.js';
 import notificationService from '../services/notificationService.js';
 
 /**
+ * Debug user notification settings
+ */
+export const debugUserNotificationSettings = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        message: 'User ID is required'
+      });
+    }
+
+    // Import NotificationHelper
+    const NotificationHelper = (await import('../utils/notificationHelper.js')).default;
+    
+    // Validate user notification settings
+    const validation = await NotificationHelper.validateUserNotificationSettings(userId);
+    
+    // Get user details
+    const User = (await import('../models/User.js')).default;
+    const user = await User.findById(userId).select('name pseudo deviceType fcmToken apnsToken voipToken appNotification isDev role');
+    
+    // Get recent notifications for this user
+    const Notification = (await import('../models/Notification.js')).default;
+    const recentNotifications = await Notification.find({ user: userId })
+      .sort({ sentAt: -1 })
+      .limit(5)
+      .select('title body type deliveryStatus failureReason sentAt');
+
+    res.json({
+      success: true,
+      message: 'User notification settings debug info',
+      data: {
+        userId,
+        validation,
+        userDetails: user ? {
+          name: user.name,
+          pseudo: user.pseudo,
+          role: user.role,
+          deviceType: user.deviceType,
+          isDev: user.isDev,
+          appNotification: user.appNotification,
+          hasFcmToken: !!user.fcmToken,
+          hasApnsToken: !!user.apnsToken,
+          hasVoipToken: !!user.voipToken,
+          fcmTokenLength: user.fcmToken ? user.fcmToken.length : 0,
+          fcmTokenPreview: user.fcmToken ? user.fcmToken.substring(0, 20) + '...' : null
+        } : null,
+        recentNotifications
+      }
+    });
+  } catch (error) {
+    console.error('Error debugging user notification settings:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error debugging notification settings',
+      error: error.message
+    });
+  }
+};
+
+/**
  * Get notifications for the authenticated user
  */
 export const getUserNotifications = async (req, res) => {

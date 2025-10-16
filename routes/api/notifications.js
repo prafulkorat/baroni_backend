@@ -8,7 +8,8 @@ import {
   sendNotificationToUser,
   sendNotificationToMultipleUsers,
   sendNotificationToLiveShowAttendees,
-  sendTestNotification
+  sendTestNotification,
+  debugUserNotificationSettings
 } from '../../controllers/notification.js';
 
 const router = express.Router();
@@ -41,5 +42,8 @@ router.post('/send/bulk', sendNotificationToMultipleUsers);
 
 // Send notification to all attendees of a specific live show
 router.post('/send/live-show-attendees', sendNotificationToLiveShowAttendees);
+
+// Debug user notification settings (admin only)
+router.get('/debug/user/:userId', debugUserNotificationSettings);
 
 export default router;

@@ -269,10 +269,21 @@ const sendAppointmentNotificationAfterPayment = async (transaction, session) => 
       }).session(session);
       
       if (appointment) {
-        // Send appointment notification to star
-        await NotificationHelper.sendAppointmentNotification('APPOINTMENT_CREATED', appointment, { 
-          currentUserId: appointment.fanId 
-        });
+        // Check if this is a hybrid payment (external payment completed)
+        // Coin-only payments are handled immediately in appointment creation
+        const isHybridPayment = transaction.metadata && transaction.metadata.externalAmount > 0;
+        
+        if (isHybridPayment) {
+          console.log(`[PaymentCallback] Sending appointment notification for hybrid payment - transaction ${transaction._id}, appointment ${appointment._id}`);
+          // Send appointment notification to star for hybrid payments
+          await NotificationHelper.sendAppointmentNotification('APPOINTMENT_CREATED', appointment, { 
+            currentUserId: appointment.fanId 
+          });
+        } else {
+          console.log(`[PaymentCallback] Skipping notification for coin-only payment - transaction ${transaction._id}, appointment ${appointment._id}`);
+        }
+      } else {
+        console.log(`[PaymentCallback] No appointment found for transaction ${transaction._id}`);
       }
     }
   } catch (error) {

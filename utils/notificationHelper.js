@@ -3,6 +3,74 @@ import  User  from '../models/User.js';
 
 class NotificationHelper {
   /**
+   * Validate if user can receive notifications
+   * @param {string} userId - User ID to validate
+   * @returns {Object} Validation result with details
+   */
+  static async validateUserNotificationSettings(userId) {
+    try {
+      const user = await User.findById(userId).select('name pseudo deviceType fcmToken apnsToken voipToken appNotification isDev');
+      
+      if (!user) {
+        return {
+          canReceive: false,
+          reason: 'User not found',
+          details: { userId }
+        };
+      }
+
+      if (user.appNotification === false) {
+        return {
+          canReceive: false,
+          reason: 'User has notifications disabled',
+          details: { 
+            userId, 
+            appNotification: user.appNotification,
+            name: user.name,
+            pseudo: user.pseudo
+          }
+        };
+      }
+
+      if (!user.fcmToken && !user.apnsToken && !user.voipToken) {
+        return {
+          canReceive: false,
+          reason: 'No push tokens found',
+          details: { 
+            userId,
+            hasFcmToken: !!user.fcmToken,
+            hasApnsToken: !!user.apnsToken,
+            hasVoipToken: !!user.voipToken,
+            deviceType: user.deviceType
+          }
+        };
+      }
+
+      return {
+        canReceive: true,
+        reason: 'User can receive notifications',
+        details: {
+          userId,
+          name: user.name,
+          pseudo: user.pseudo,
+          deviceType: user.deviceType,
+          appNotification: user.appNotification,
+          hasFcmToken: !!user.fcmToken,
+          hasApnsToken: !!user.apnsToken,
+          hasVoipToken: !!user.voipToken,
+          isDev: user.isDev
+        }
+      };
+    } catch (error) {
+      return {
+        canReceive: false,
+        reason: 'Error validating user settings',
+        details: { userId, error: error.message }
+      };
+    }
+  }
+
+  /**
    * Send appointment-related notifications
    */
   static async sendAppointmentNotification(type, appointment, additionalData = {}) {
@@ -59,14 +127,23 @@ class NotificationHelper {
     // Send to star if star is not the current user.
     // Also notify star on cancellation when cancelled by fan.
     if (appointment.starId && String(appointment.starId) !== String(currentUserId)) {
-      const starNote = { ...starTemplate };
-      if (type === 'APPOINTMENT_CANCELLED' && String(currentUserId) === String(appointment.fanId)) {
-        starNote.title = 'Appointment Cancelled';
-        starNote.body = `${fanName} has cancelled the appointment.`;
+      // Validate star's notification settings before sending
+      const starValidation = await this.validateUserNotificationSettings(data.starId);
+      console.log(`[AppointmentNotification] Star validation for user ${data.starId}:`, starValidation);
+      
+      if (!starValidation.canReceive) {
+        console.log(`[AppointmentNotification] Skipping notification to star ${data.starId}: ${starValidation.reason}`);
+        console.log(`[AppointmentNotification] Star validation details:`, starValidation.details);
+      } else {
+        const starNote = { ...starTemplate };
+        if (type === 'APPOINTMENT_CANCELLED' && String(currentUserId) === String(appointment.fanId)) {
+          starNote.title = 'Appointment Cancelled';
+          starNote.body = `${fanName} has cancelled the appointment.`;
+        }
+        await notificationService.sendToUser(data.starId, starNote, data, {
+          relatedEntity: { type: 'appointment', id: appointment._id }
+        });
       }
-      await notificationService.sendToUser(data.starId, starNote, data, {
-        relatedEntity: { type: 'appointment', id: appointment._id }
-      });
     }
 
     // Send to fan if fan is not the current user and it's not an appointment creation
@@ -104,15 +181,9 @@ class NotificationHelper {
         relatedEntity: { type: 'appointment', id: appointment._id }
       });
     } else if (type === 'APPOINTMENT_CREATED') {
-      // Send notification to the star when appointment is created (if not already sent above)
-      if (appointment.starId) {
-        // If current user is the star (e.g., admin creates on star's behalf), notify the star
-        await notificationService.sendToUser(data.starId, starTemplate, data, {
-          relatedEntity: { type: 'appointment', id: appointment._id }
-        });
-      }
-      // Logging for debugging purposes
-      console.log('[AppointmentNotification] Appointment created, notification sent to star if needed', {
+      // For APPOINTMENT_CREATED, notification to star is handled in the main logic above
+      // This section is only for fan notifications or special cases
+      console.log('[AppointmentNotification] APPOINTMENT_CREATED processed - star notification handled in main logic', {
         appointmentId: appointment._id?.toString?.() || String(appointment._id || ''),
         userId: appointment.starId?.toString?.() || String(appointment.starId || '')
       });

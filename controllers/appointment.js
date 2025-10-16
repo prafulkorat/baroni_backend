@@ -261,16 +261,22 @@ export const createAppointment = async (req, res) => {
       );
     } catch (_e) {}
 
-    // Send notification to star about new appointment request only if payment is completed
-    // For hybrid payments, notification will be sent after payment callback
-    if (transaction.status === 'pending' && transactionResult.paymentMode === 'coin') {
+    // Handle coin-only payments immediately
+    if (transactionResult.paymentMode === 'coin') {
       try {
+        // Complete the transaction immediately for coin-only payments
+        await completeTransaction(transaction._id);
+        
+        // Send notification to star for coin-only payments
+        console.log(`[AppointmentCreated] Sending notification for coin-only payment - appointment ${created._id}`);
         await NotificationHelper.sendAppointmentNotification('APPOINTMENT_CREATED', created, { currentUserId: req.user._id });
-      } catch (notificationError) {
-        console.error('Error sending appointment notification:', notificationError);
+        
+        console.log(`[AppointmentCreated] Coin-only payment completed, notification sent for appointment ${created._id}`);
+      } catch (error) {
+        console.error('Error handling coin-only payment:', error);
       }
     }
-    // For hybrid payments, notification will be sent after payment validation in paymentCallbackService
+    // For hybrid payments, notification will be sent after payment completion in paymentCallbackService
 
     const responseBody = { 
       success: true, 

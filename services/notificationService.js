@@ -410,6 +410,21 @@ class NotificationService {
         return { success: false, message: 'No push token found' };
       }
 
+      // Check if user has notifications disabled
+      if (user.appNotification === false) {
+        console.log(`User ${userId} has app notifications disabled (appNotification: false)`);
+        // Update notification status to failed
+        try {
+          await Notification.findByIdAndUpdate(notificationRecord._id, {
+            deliveryStatus: 'failed',
+            failureReason: 'User has notifications disabled'
+          });
+        } catch (updateError) {
+          console.error('Error updating notification status:', updateError);
+        }
+        return { success: false, message: 'User has notifications disabled' };
+      }
+
       // Determine which token to use based on deviceType
       const isIOS = user.deviceType === 'ios';
       const isAndroid = user.deviceType === 'android';
@@ -646,7 +661,16 @@ class NotificationService {
           body: notificationData.body,
           channelId: 'baroni_notifications',
           priority: 'high',
-          fcmTokenPreview: user.fcmToken ? user.fcmToken.substring(0, 20) + '...' : 'null'
+          fcmTokenPreview: user.fcmToken ? user.fcmToken.substring(0, 20) + '...' : 'null',
+          userDetails: {
+            name: user.name,
+            pseudo: user.pseudo,
+            deviceType: user.deviceType,
+            isDev: user.isDev,
+            appNotification: user.appNotification,
+            hasFcmToken: !!user.fcmToken,
+            fcmTokenLength: user.fcmToken ? user.fcmToken.length : 0
+          }
         });
         
         try {
