@@ -368,38 +368,96 @@ export const listAppointments = async (req, res) => {
       return { ...base, timeSlot: timeSlotObj, startAt: isNaN(startAt.getTime()) ? undefined : startAt.toISOString(), timeToNowMs };
     });
 
-    // Only apply status-based sorting if no specific status filter is applied
+    // Apply proper sorting logic based on appointment status and time
     let data = withComputed;
     
     if (!status || !status.trim()) {
-      // No status filter - apply the original sorting logic
+      // No status filter - apply proper sorting logic
+      const ongoing = [];
+      const upcoming = [];
       const pending = [];
-      const approved = [];
-      const other = [];
+      const completed = [];
+      const canceled = [];
+      
+      const now = Date.now();
+      const appointmentDuration = 5 * 60 * 1000; // 5 minutes in milliseconds
       
       for (const it of withComputed) {
-        if (it.status === 'pending') {
+        const startTime = it.startAt ? new Date(it.startAt).getTime() : 0;
+        const endTime = startTime + appointmentDuration;
+        
+        // Determine if appointment is ongoing (currently in progress)
+        const isOngoing = it.status === 'approved' && 
+                         startTime <= now && 
+                         now <= endTime;
+        
+        if (isOngoing) {
+          ongoing.push(it);
+        } else if (it.status === 'approved' && startTime > now) {
+          // Upcoming approved appointments
+          upcoming.push(it);
+        } else if (it.status === 'pending') {
           pending.push(it);
-        } else if (it.status === 'approved') {
-          approved.push(it);
+        } else if (it.status === 'completed') {
+          completed.push(it);
         } else {
-          other.push(it);
+          // canceled, rejected, etc.
+          canceled.push(it);
         }
       }
+      
+      // Sort ongoing appointments by start time (earliest first)
+      ongoing.sort((a, b) => {
+        const aStart = a.startAt ? new Date(a.startAt).getTime() : 0;
+        const bStart = b.startAt ? new Date(b.startAt).getTime() : 0;
+        return aStart - bStart;
+      });
+      
+      // Sort upcoming appointments by start time (earliest first)
+      upcoming.sort((a, b) => {
+        const aStart = a.startAt ? new Date(a.startAt).getTime() : 0;
+        const bStart = b.startAt ? new Date(b.startAt).getTime() : 0;
+        return aStart - bStart;
+      });
       
       // Sort pending appointments by creation time (most recent first)
       pending.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
       
-      // Sort approved appointments by time (earliest first)
-      approved.sort((a, b) => (a.timeToNowMs ?? Infinity) - (b.timeToNowMs ?? Infinity));
+      // Sort completed appointments by actual appointment time (most recent first)
+      completed.sort((a, b) => {
+        const aStart = a.startAt ? new Date(a.startAt).getTime() : 0;
+        const bStart = b.startAt ? new Date(b.startAt).getTime() : 0;
+        return bStart - aStart; // Most recent first
+      });
       
-      // Sort other appointments by time (earliest first)
-      other.sort((a, b) => (a.timeToNowMs ?? Infinity) - (b.timeToNowMs ?? Infinity));
+      // Sort canceled appointments by actual appointment time (most recent first)
+      canceled.sort((a, b) => {
+        const aStart = a.startAt ? new Date(a.startAt).getTime() : 0;
+        const bStart = b.startAt ? new Date(b.startAt).getTime() : 0;
+        return bStart - aStart; // Most recent first
+      });
       
-      data = [...pending, ...approved, ...other];
+      data = [...ongoing, ...upcoming, ...pending, ...completed, ...canceled];
     } else {
-      // Status filter applied - sort by creation time (most recent first)
-      data = withComputed.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      // Status filter applied - sort by appropriate criteria based on status
+      if (status === 'approved') {
+        // For approved appointments, sort by start time (earliest first)
+        data = withComputed.sort((a, b) => {
+          const aStart = a.startAt ? new Date(a.startAt).getTime() : 0;
+          const bStart = b.startAt ? new Date(b.startAt).getTime() : 0;
+          return aStart - bStart;
+        });
+      } else if (status === 'completed' || status === 'cancelled' || status === 'rejected') {
+        // For completed/canceled appointments, sort by actual appointment time (most recent first)
+        data = withComputed.sort((a, b) => {
+          const aStart = a.startAt ? new Date(a.startAt).getTime() : 0;
+          const bStart = b.startAt ? new Date(b.startAt).getTime() : 0;
+          return bStart - aStart;
+        });
+      } else {
+        // For pending appointments, sort by creation time (most recent first)
+        data = withComputed.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      }
     }
 
     return res.json({ 
