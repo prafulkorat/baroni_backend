@@ -654,3 +654,37 @@ export const registerUserForMessaging = async (req, res) => {
         });
     }
 };
+
+// Clear chat token for authenticated user
+export const clearChatToken = async (req, res) => {
+    try {
+        const userId = String(req.user._id);
+        
+        // Find the user
+        const user = await User.findById(userId);
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: 'User not found'
+            });
+        }
+        
+        // Clear the chat token by setting it to null
+        await User.findByIdAndUpdate(userId, {
+            $unset: { chatToken: 1 }
+        });
+        
+        res.json({
+            success: true,
+            message: 'Chat token cleared successfully'
+        });
+    } catch (error) {
+        console.error('Clear chat token error:', error);
+        
+        res.status(500).json({
+            success: false,
+            message: 'Error clearing chat token',
+            error: error.message
+        });
+    }
+};
