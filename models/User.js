@@ -47,15 +47,27 @@ const userSchema = new mongoose.Schema(
     chatToken: { type: String, sparse: true },
     // Payment status for star promotion (initiated, pending, completed, refunded)
     paymentStatus: { type: String, enum: ['initiated', 'pending', 'completed', 'refunded'], default: null, index: true },
+    // Rating system fields for stars
+    averageRating: { type: Number, default: 0, min: 0, max: 5 },
+    totalReviews: { type: Number, default: 0, min: 0 },
   },
   { timestamps: true }
 );
 
-// Pre-save hook to set default about text for star users
+// Pre-save hook to set default about text and rating for star users
 userSchema.pre('save', function(next) {
-  // Only set default about if user is becoming a star and doesn't have an about text
-  if (this.role === 'star' && (!this.about || this.about.trim() === '')) {
-    this.about = "Coucou, c'est ta star 🌟 ! Je suis là pour te partager de la bonne humeur, de l'énergie et des dédicaces pleines d'amour.";
+  // Only set defaults if user is becoming a star
+  if (this.role === 'star') {
+    // Set default about text if not already set
+    if (!this.about || this.about.trim() === '') {
+      this.about = "Coucou, c'est ta star 🌟 ! Je suis là pour te partager de la bonne humeur, de l'énergie et des dédicaces pleines d'amour.";
+    }
+    
+    // Set default 4.9 rating and 1 review if this is a new star (no reviews yet)
+    if (this.totalReviews === 0) {
+      this.averageRating = 4.9;
+      this.totalReviews = 1;
+    }
   }
   next();
 });

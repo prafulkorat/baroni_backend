@@ -16,6 +16,7 @@ import { generateUniqueGoldBaroniId, generateUniqueBaroniId } from "../utils/bar
 import Review from "../models/Review.js";
 import { sanitizeUserData, sanitizeUserDataArray } from "../utils/userDataHelper.js";
 import NotificationHelper from "../utils/notificationHelper.js";
+import { createDefaultRating } from "../utils/defaultRatingHelper.js";
 
 /**
  * Get available baroni ID patterns for becoming a star
@@ -199,6 +200,9 @@ export const becomeStar = async (req, res) => {
                     about: "Coucou, c'est ta star 🌟 ! Je suis là pour te partager de la bonne humeur, de l'énergie et des dédicaces pleines d'amour."
                 } 
             });
+
+            // Create default 4.9 rating for the new star
+            await createDefaultRating(req.user._id);
 
             // Send star promotion notification for coin-only payments
             await sendStarPromotionNotification(req.user._id);

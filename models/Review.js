@@ -5,7 +5,7 @@ const reviewSchema = new mongoose.Schema(
     reviewerId: { 
       type: mongoose.Schema.Types.ObjectId, 
       ref: 'User', 
-      required: true, 
+      required: false, // Optional for system reviews
       index: true 
     },
     starId: { 
@@ -42,7 +42,7 @@ const reviewSchema = new mongoose.Schema(
     },
     reviewType: { 
       type: String, 
-      enum: ['appointment', 'dedication', 'live_show'], 
+      enum: ['appointment', 'dedication', 'live_show', 'system'], 
       required: true 
     }
   },

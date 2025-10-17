@@ -8,6 +8,7 @@ import mongoose from 'mongoose';
 import orangeMoneyService from './orangeMoneyService.js';
 import { TRANSACTION_STATUSES } from '../utils/transactionConstants.js';
 import NotificationHelper from '../utils/notificationHelper.js';
+import { createDefaultRating } from '../utils/defaultRatingHelper.js';
 
 /**
  * Process payment callback from Orange Money
@@ -80,6 +81,9 @@ export const processPaymentCallback = async (callbackData) => {
             },
             { session }
           );
+
+          // Create default 4.9 rating for the new star
+          await createDefaultRating(transaction.payerId);
 
           // Send star promotion notification to the new star
           await sendStarPromotionNotification(transaction, session);
