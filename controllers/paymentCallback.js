@@ -13,8 +13,21 @@ import { preparePhoneForExternalAPI } from '../utils/normalizeContact.js';
  */
 export const handlePaymentCallback = async (req, res) => {
   try {
+    // Log the complete callback request structure
+    console.log('=== PAYMENT CALLBACK RECEIVED ===');
+    console.log('Headers:', JSON.stringify(req.headers, null, 2));
+    console.log('Body:', JSON.stringify(req.body, null, 2));
+    console.log('Query:', JSON.stringify(req.query, null, 2));
+    console.log('Method:', req.method);
+    console.log('URL:', req.url);
+    console.log('IP:', req.ip);
+    console.log('User-Agent:', req.get('User-Agent'));
+    console.log('Content-Type:', req.get('Content-Type'));
+    console.log('================================');
+
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
+      console.log('Validation errors:', errors.array());
       const errorMessage = getFirstValidationError(errors);
       return res.status(400).json({ 
         success: false, 
@@ -23,6 +36,7 @@ export const handlePaymentCallback = async (req, res) => {
     }
 
     const callbackData = req.body;
+    console.log('Processing callback data:', callbackData);
     const result = await processPaymentCallback(callbackData);
 
     return res.status(200).json({

@@ -139,22 +139,47 @@ class OrangeMoneyService {
    * @returns {Object} Validated callback data
    */
   validateCallbackData(callbackData) {
+    console.log('=== ORANGE MONEY VALIDATION ===');
+    console.log('Input callback data:', JSON.stringify(callbackData, null, 2));
+    
     const { transactionId, status, motif, montant } = callbackData;
+    
+    console.log('Extracted fields:', {
+      transactionId,
+      status,
+      motif,
+      montant,
+      transactionIdType: typeof transactionId,
+      statusType: typeof status,
+      motifType: typeof motif,
+      montantType: typeof montant
+    });
 
     if (!transactionId || !status || !montant) {
+      console.log('Missing required fields:', {
+        hasTransactionId: !!transactionId,
+        hasStatus: !!status,
+        hasMontant: !!montant
+      });
       throw new Error('Missing required callback data');
     }
 
     if (!['OK', 'KO'].includes(status)) {
+      console.log('Invalid status:', status);
       throw new Error('Invalid payment status');
     }
 
-    return {
+    const validatedResult = {
       transactionId,
       status: status === 'OK' ? 'completed' : 'failed',
       motif: motif || 'NA',
       amount: parseFloat(montant)
     };
+    
+    console.log('Validated result:', JSON.stringify(validatedResult, null, 2));
+    console.log('================================');
+    
+    return validatedResult;
   }
 }
 

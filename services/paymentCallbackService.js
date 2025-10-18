@@ -19,23 +19,48 @@ export const processPaymentCallback = async (callbackData) => {
   const session = await mongoose.startSession();
 
   try {
+    console.log('=== PAYMENT CALLBACK PROCESSING ===');
+    console.log('Raw callback data:', JSON.stringify(callbackData, null, 2));
+    
     await session.withTransaction(async () => {
       // Validate callback data
+      console.log('Validating callback data...');
       const validatedData = orangeMoneyService.validateCallbackData(callbackData);
+      console.log('Validated data:', JSON.stringify(validatedData, null, 2));
+      
       const { transactionId, status, motif, amount } = validatedData;
 
       // Find transaction by external payment ID
+      console.log(`Looking for transaction with externalPaymentId: ${transactionId}`);
       const transaction = await Transaction.findOne({ 
         externalPaymentId: transactionId 
       }).session(session);
+
+      console.log('Found transaction:', transaction ? {
+        id: transaction._id,
+        type: transaction.type,
+        status: transaction.status,
+        amount: transaction.amount,
+        payerId: transaction.payerId,
+        receiverId: transaction.receiverId,
+        paymentMode: transaction.paymentMode,
+        coinAmount: transaction.coinAmount,
+        externalAmount: transaction.externalAmount,
+        externalPaymentId: transaction.externalPaymentId,
+        refundTimer: transaction.refundTimer,
+        createdAt: transaction.createdAt
+      } : 'No transaction found');
 
       if (!transaction) {
         throw new Error('Transaction not found');
       }
 
       if (![TRANSACTION_STATUSES.INITIATED, TRANSACTION_STATUSES.PENDING].includes(transaction.status)) {
+        console.log(`Transaction status ${transaction.status} is not processable`);
         throw new Error('Transaction is not in a processable status');
       }
+
+      console.log(`Processing payment with status: ${status}`);
 
       if (status === 'completed') {
         // Payment successful - move transaction to pending (escrow) and clear refund timer
@@ -86,21 +111,29 @@ export const processPaymentCallback = async (callbackData) => {
 
           // Create default 5 rating for the new star
           await createDefaultRating(transaction.payerId);
-
-          // Send star promotion notification to the new star
-          await sendStarPromotionNotification(transaction, session);
           
           console.log(`[PaymentCallback] Star promotion completed for user ${transaction.payerId}`);
         }
-
-        // Send appointment notification to star after payment success
-        await sendAppointmentNotificationAfterPayment(transaction, session);
       } else {
         // Payment failed - refund coins and mark as failed
         await refundHybridTransaction(transaction, session);
         await cancelLinkedEntitiesForTransaction(transaction, session);
       }
     });
+
+    // Send notifications AFTER transaction is committed (outside transaction)
+    try {
+      if (status === 'completed') {
+        // Send star promotion notification to the new star
+        await sendStarPromotionNotification(transaction, null);
+        
+        // Send appointment notification to star after payment success
+        await sendAppointmentNotificationAfterPayment(transaction, null);
+      }
+    } catch (notificationError) {
+      console.error('Error sending notifications (non-critical):', notificationError);
+      // Don't throw error to avoid breaking the payment callback
+    }
 
     return { success: true, message: 'Payment callback processed successfully' };
 
@@ -157,6 +190,7 @@ const refundHybridTransaction = async (transaction, session) => {
   if (transaction.type === 'become_star_payment') {
     console.log(`[PaymentCallback] Refunding star promotion for transaction ${transaction._id}, user ${transaction.payerId}`);
     
+    // Use $unset to remove baroniId instead of setting to null to avoid duplicate key error
     await User.updateMany(
       { 
         _id: transaction.payerId,
@@ -165,9 +199,11 @@ const refundHybridTransaction = async (transaction, session) => {
       { 
         $set: { 
           paymentStatus: 'refunded',
-          role: 'fan',
-          baroniId: null
-        } 
+          role: 'fan'
+        },
+        $unset: { 
+          baroniId: 1
+        }
       },
       { session }
     );
