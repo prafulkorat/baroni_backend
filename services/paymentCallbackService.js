@@ -22,7 +22,14 @@ export const processPaymentCallback = async (callbackData) => {
     console.log('=== PAYMENT CALLBACK PROCESSING ===');
     console.log('Raw callback data:', JSON.stringify(callbackData, null, 2));
     
-    await session.withTransaction(async () => {
+    // CRITICAL FIX: Add processing lock to prevent duplicate processing
+    const processingKey = `callback_${callbackData.transactionId}_${Date.now()}`;
+    console.log(`Processing with key: ${processingKey}`);
+    
+    // CRITICAL FIX: Remove session.withTransaction to avoid rollback issues
+    console.log('Starting callback processing without MongoDB transaction...');
+    
+    try {
       // Validate callback data
       console.log('Validating callback data...');
       const validatedData = orangeMoneyService.validateCallbackData(callbackData);
@@ -34,7 +41,7 @@ export const processPaymentCallback = async (callbackData) => {
       console.log(`Looking for transaction with externalPaymentId: ${transactionId}`);
       const transaction = await Transaction.findOne({ 
         externalPaymentId: transactionId 
-      }).session(session);
+      });
 
       console.log('Found transaction:', transaction ? {
         id: transaction._id,
@@ -55,41 +62,64 @@ export const processPaymentCallback = async (callbackData) => {
         throw new Error('Transaction not found');
       }
 
+      // CRITICAL FIX: Check if transaction is already completed to prevent infinite loop
+      if (transaction.status === TRANSACTION_STATUSES.COMPLETED) {
+        console.log(`Transaction ${transaction._id} is already completed - skipping to prevent infinite loop`);
+        return { success: true, message: 'Transaction already completed' };
+      }
+
       if (![TRANSACTION_STATUSES.INITIATED, TRANSACTION_STATUSES.PENDING].includes(transaction.status)) {
-        console.log(`Transaction status ${transaction.status} is not processable`);
-        throw new Error('Transaction is not in a processable status');
+        console.log(`Transaction status ${transaction.status} is not processable - skipping`);
+        return { success: true, message: 'Transaction already processed' };
       }
 
       console.log(`Processing payment with status: ${status}`);
 
       if (status === 'completed') {
-        // Payment successful - move transaction to pending (escrow) and clear refund timer
+        // Payment successful - move transaction to completed and clear refund timer
         console.log(`[PaymentCallback] Updating transaction status to completed`);
-        transaction.status = TRANSACTION_STATUSES.COMPLETED;
-        transaction.refundTimer = null;
-        await transaction.save({ session });
-        console.log(`[PaymentCallback] Transaction status updated successfully`);
+        
+        // CRITICAL FIX: Use findByIdAndUpdate to ensure atomic update
+        console.log(`[PaymentCallback] Before update - Transaction status: ${transaction.status}`);
+        
+        const updatedTransaction = await Transaction.findByIdAndUpdate(
+          transaction._id,
+          { 
+            $set: { 
+              status: TRANSACTION_STATUSES.COMPLETED,
+              refundTimer: null
+            }
+          },
+          { new: true }
+        );
+        
+        console.log(`[PaymentCallback] Transaction status updated successfully:`, {
+          id: updatedTransaction._id,
+          oldStatus: transaction.status,
+          newStatus: updatedTransaction.status,
+          updatedAt: updatedTransaction.updatedAt
+        });
+        
+        // Verify the update by querying again
+        const verifyTransaction = await Transaction.findById(transaction._id);
+        console.log(`[PaymentCallback] Verification - Transaction status: ${verifyTransaction.status}, updatedAt: ${verifyTransaction.updatedAt}`);
 
         // Reflect domain paymentStatus transitions to 'pending' once external payment succeeds
         await Appointment.updateMany(
           { transactionId: transaction._id },
-          { $set: { paymentStatus: 'pending' } },
-          { session }
+          { $set: { paymentStatus: 'pending' } }
         );
         await DedicationRequest.updateMany(
           { transactionId: transaction._id },
-          { $set: { paymentStatus: 'pending' } },
-          { session }
+          { $set: { paymentStatus: 'pending' } }
         );
         await LiveShow.updateMany(
           { transactionId: transaction._id },
-          { $set: { paymentStatus: 'pending' } },
-          { session }
+          { $set: { paymentStatus: 'pending' } }
         );
         await LiveShowAttendance.updateMany(
           { transactionId: transaction._id },
-          { $set: { paymentStatus: 'pending' } },
-          { session }
+          { $set: { paymentStatus: 'pending' } }
         );
 
         // Handle star promotion payment status updates
@@ -97,7 +127,7 @@ export const processPaymentCallback = async (callbackData) => {
           console.log(`[PaymentCallback] Processing star promotion for transaction ${transaction._id}, user ${transaction.payerId}`);
           
           // First, check the current user status
-          const currentUser = await User.findById(transaction.payerId).session(session);
+          const currentUser = await User.findById(transaction.payerId);
           console.log(`[PaymentCallback] Current user status:`, {
             id: currentUser._id,
             role: currentUser.role,
@@ -105,12 +135,11 @@ export const processPaymentCallback = async (callbackData) => {
             baroniId: currentUser.baroniId
           });
           
-          // Update user with more flexible conditions
-          const updateResult = await User.updateMany(
-            { 
-              _id: transaction.payerId,
-              paymentStatus: { $in: ['initiated', 'pending'] } // Accept both statuses
-            },
+          // CRITICAL FIX: Update user without paymentStatus condition to ensure update happens
+          console.log(`[PaymentCallback] Updating user ${transaction.payerId} to star role`);
+          
+          const updateResult = await User.findByIdAndUpdate(
+            transaction.payerId,
             { 
               $set: { 
                 paymentStatus: 'completed',
@@ -118,12 +147,18 @@ export const processPaymentCallback = async (callbackData) => {
                 about: "Coucou, c'est ta star 🌟 ! Je suis là pour te partager de la bonne humeur, de l'énergie et des dédicaces pleines d'amour."
               } 
             },
-            { session }
+            { new: true }
           );
           
           console.log(`[PaymentCallback] User update result:`, {
-            matchedCount: updateResult.matchedCount,
-            modifiedCount: updateResult.modifiedCount
+            matchedCount: updateResult ? 1 : 0,
+            modifiedCount: updateResult ? 1 : 0,
+            updatedUser: updateResult ? {
+              id: updateResult._id,
+              role: updateResult.role,
+              paymentStatus: updateResult.paymentStatus,
+              baroniId: updateResult.baroniId
+            } : null
           });
 
           // Create default 5 rating for the new star
@@ -133,14 +168,18 @@ export const processPaymentCallback = async (callbackData) => {
         }
       } else {
         // Payment failed - refund coins and mark as failed
-        await refundHybridTransaction(transaction, session);
-        await cancelLinkedEntitiesForTransaction(transaction, session);
+        await refundHybridTransaction(transaction, null);
+        await cancelLinkedEntitiesForTransaction(transaction, null);
       }
-    });
+      
+    } catch (processingError) {
+      console.error(`[PaymentCallback] Error in processing:`, processingError);
+      throw processingError;
+    }
 
-    console.log(`[PaymentCallback] Transaction committed successfully`);
+    console.log(`[PaymentCallback] Processing completed successfully`);
 
-    // Send notifications AFTER transaction is committed (outside transaction)
+    // Send notifications AFTER processing is completed
     try {
       if (status === 'completed') {
         console.log(`[PaymentCallback] Sending notifications...`);
@@ -163,7 +202,10 @@ export const processPaymentCallback = async (callbackData) => {
     console.error('Error processing payment callback:', error);
     throw error;
   } finally {
-    await session.endSession();
+    // Session cleanup
+    if (session) {
+      await session.endSession();
+    }
   }
 };
 
