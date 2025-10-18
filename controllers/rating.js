@@ -12,25 +12,32 @@ import NotificationHelper from '../utils/notificationHelper.js';
 // Helper function to calculate and update star's average rating
 const updateStarRating = async (starId) => {
   try {
+    // Calculate average using ALL reviews (both visible and hidden)
     const reviews = await Review.find({ 
       starId
     });
+    
+    console.log(`Updating rating for star ${starId}, found ${reviews.length} reviews`);
     
     if (reviews.length === 0) {
       await User.findByIdAndUpdate(starId, {
         averageRating: 0,
         totalReviews: 0
       });
+      console.log(`Updated star ${starId} with 0 rating and 0 reviews`);
       return;
     }
 
     const totalRating = reviews.reduce((sum, review) => sum + review.rating, 0);
     const averageRating = totalRating / reviews.length;
     
-    await User.findByIdAndUpdate(starId, {
+    const updatedUser = await User.findByIdAndUpdate(starId, {
       averageRating: Math.round(averageRating * 10) / 10, // Round to 1 decimal place
       totalReviews: reviews.length
-    });
+    }, { new: true });
+    
+    console.log(`Updated star ${starId} with average rating: ${Math.round(averageRating * 10) / 10} and total reviews: ${reviews.length}`);
+    console.log(`Updated user data:`, { averageRating: updatedUser?.averageRating, totalReviews: updatedUser?.totalReviews });
   } catch (error) {
     console.error('Error updating star rating:', error);
   }
@@ -85,7 +92,9 @@ export const submitAppointmentReview = async (req, res) => {
       rating,
       comment: comment?.trim(),
       appointmentId: appointmentId,
-      reviewType: 'appointment'
+      reviewType: 'appointment',
+      isVisible: true, // User-submitted reviews are visible by default
+      isDefaultRating: false
     });
 
     // Update star's average rating
@@ -173,7 +182,9 @@ export const submitDedicationReview = async (req, res) => {
       rating,
       comment: comment?.trim(),
       dedicationRequestId: dedicationRequestId,
-      reviewType: 'dedication'
+      reviewType: 'dedication',
+      isVisible: true, // User-submitted reviews are visible by default
+      isDefaultRating: false
     });
 
     // Update star's average rating
@@ -257,7 +268,9 @@ export const submitLiveShowReview = async (req, res) => {
       rating,
       comment: comment?.trim(),
       liveShowId: liveShowId,
-      reviewType: 'live_show'
+      reviewType: 'live_show',
+      isVisible: true, // User-submitted reviews are visible by default
+      isDefaultRating: false
     });
 
     // Update star's average rating
@@ -309,7 +322,8 @@ export const getStarReviews = async (req, res) => {
     }
 
     const reviews = await Review.find({ 
-      starId
+      starId,
+      isVisible: true // Only show visible reviews to users
     })
     .populate('reviewerId', 'name pseudo profilePic agoraKey')
     .sort({ createdAt: -1 });

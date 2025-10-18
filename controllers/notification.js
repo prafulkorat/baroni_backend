@@ -72,10 +72,18 @@ export const debugUserNotificationSettings = async (req, res) => {
 export const getUserNotifications = async (req, res) => {
   try {
     const userId = req.user._id;
-    const { type = null } = req.query;
+    const { type = null, page = 1, limit = 10 } = req.query;
 
+    // Validate pagination parameters
+    const pageNum = parseInt(page, 10) || 1;
+    const limitNum = parseInt(limit, 10) || 10;
+    
+    // Ensure limit is within reasonable bounds
+    const maxLimit = 100;
+    const finalLimit = Math.min(limitNum, maxLimit);
+    
     // Validate type filter
-    const allowedTypes = ['appointment', 'payment', 'rating', 'live_show', 'dedication', 'message', 'general'];
+    const allowedTypes = ['appointment', 'payment', 'rating', 'live_show', 'dedication', 'message', 'general', 'star_promotion', 'voip', 'push'];
     const typeFilter = type && allowedTypes.includes(type) ? type : null;
 
     const query = { user: userId };
@@ -83,10 +91,19 @@ export const getUserNotifications = async (req, res) => {
       query.type = typeFilter;
     }
 
-    // Get all notifications sorted by sentAt (latest first)
+    // Calculate skip for pagination
+    const skip = (pageNum - 1) * finalLimit;
+
+    // Get total count for pagination info
+    const totalCount = await Notification.countDocuments(query);
+    const totalPages = Math.ceil(totalCount / finalLimit);
+
+    // Get notifications with pagination, sorted by sentAt (latest first)
     const notifications = await Notification.find(query)
       .sort({ sentAt: -1 })
       .populate('user', 'name pseudo profilePic agoraKey')
+      .skip(skip)
+      .limit(finalLimit)
       .lean();
 
     // Add timeAgo to each notification
@@ -99,7 +116,15 @@ export const getUserNotifications = async (req, res) => {
       success: true,
       message: 'Notifications retrieved successfully',
       data: {
-        notifications: notificationsWithTimeAgo
+        notifications: notificationsWithTimeAgo,
+        pagination: {
+          currentPage: pageNum,
+          totalPages: totalPages,
+          totalNotifications: totalCount,
+          hasNextPage: pageNum < totalPages,
+          hasPrevPage: pageNum > 1,
+          limit: finalLimit
+        }
       }
     });
   } catch (error) {

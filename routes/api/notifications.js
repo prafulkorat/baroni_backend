@@ -1,6 +1,7 @@
 import express from 'express';
 import { requireAuth } from '../../middlewares/auth.js';
 import { updateFcmToken, updateApnsToken } from '../../controllers/auth.js';
+import { paginationQueryValidator } from '../../validators/commonValidators.js';
 import {
   getUserNotifications,
   deleteNotification,
@@ -26,7 +27,7 @@ router.patch('/apns-token', updateApnsToken);
 router.post('/test', sendTestNotification);
 
 // Get user notifications with pagination and filtering
-router.get('/', getUserNotifications);
+router.get('/', paginationQueryValidator, getUserNotifications);
 
 // Get notification statistics
 router.get('/stats', getNotificationStats);

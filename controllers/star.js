@@ -201,7 +201,7 @@ export const becomeStar = async (req, res) => {
                 } 
             });
 
-            // Create default 4.9 rating for the new star
+            // Create default 5 rating for the new star
             await createDefaultRating(req.user._id);
 
             // Send star promotion notification for coin-only payments

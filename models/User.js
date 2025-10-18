@@ -63,9 +63,10 @@ userSchema.pre('save', function(next) {
       this.about = "Coucou, c'est ta star 🌟 ! Je suis là pour te partager de la bonne humeur, de l'énergie et des dédicaces pleines d'amour.";
     }
     
-    // Set default 4.9 rating and 1 review if this is a new star (no reviews yet)
-    if (this.totalReviews === 0) {
-      this.averageRating = 4.9;
+    // Only set default rating if this is a completely new star (no reviews yet)
+    // Don't override existing ratings that might have been set by the rating system
+    if (this.isNew && this.totalReviews === 0) {
+      this.averageRating = 5;
       this.totalReviews = 1;
     }
   }

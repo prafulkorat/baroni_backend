@@ -218,7 +218,7 @@ Get comprehensive star profile with revenue and activity data.
       "lastLoginAt": "2024-01-01T00:00:00.000Z"
     },
     "rating": {
-      "average": 4.9,
+      "average": 5,
       "totalReviews": 90
     },
     "services": [

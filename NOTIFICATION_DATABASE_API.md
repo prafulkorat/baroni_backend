@@ -49,11 +49,13 @@ Retrieve all notifications for the authenticated user, sorted by latest first.
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `type` | String | null | Filter by notification type |
+| `page` | Integer | 1 | Page number (minimum: 1) |
+| `limit` | Integer | 10 | Items per page (minimum: 1, maximum: 100) |
 
 #### Example Request
 
 ```bash
-GET /api/notifications?type=appointment
+GET /api/notifications?type=appointment&page=1&limit=20
 ```
 
 #### Example Response
@@ -61,28 +63,37 @@ GET /api/notifications?type=appointment
 ```json
 {
   "success": true,
-    "data": {
-      "notifications": [
-        {
-          "_id": "64f1a2b3c4d5e6f7g8h9i0j1",
-          "user": "64f1a2b3c4d5e6f7g8h9i0j2",
-          "title": "Your video call with Star begins in 10 minutes",
-          "body": "Please check your network and be ready to join.",
+  "message": "Notifications retrieved successfully",
+  "data": {
+    "notifications": [
+      {
+        "_id": "64f1a2b3c4d5e6f7g8h9i0j1",
+        "user": "64f1a2b3c4d5e6f7g8h9i0j2",
+        "title": "Your video call with Star begins in 10 minutes",
+        "body": "Please check your network and be ready to join.",
+        "type": "appointment",
+        "data": {
+          "appointmentId": "64f1a2b3c4d5e6f7g8h9i0j3",
+          "starName": "John Doe"
+        },
+        "sentAt": "2023-09-01T10:30:00.000Z",
+        "timeAgo": "2h ago",
+        "deliveryStatus": "sent",
+        "relatedEntity": {
           "type": "appointment",
-          "data": {
-            "appointmentId": "64f1a2b3c4d5e6f7g8h9i0j3",
-            "starName": "John Doe"
-          },
-          "sentAt": "2023-09-01T10:30:00.000Z",
-          "timeAgo": "2h ago",
-          "deliveryStatus": "sent",
-          "relatedEntity": {
-            "type": "appointment",
-            "id": "64f1a2b3c4d5e6f7g8h9i0j3"
-          }
+          "id": "64f1a2b3c4d5e6f7g8h9i0j3"
         }
-      ]
+      }
+    ],
+    "pagination": {
+      "currentPage": 1,
+      "totalPages": 5,
+      "totalNotifications": 47,
+      "hasNextPage": true,
+      "hasPrevPage": false,
+      "limit": 10
     }
+  }
 }
 ```
 

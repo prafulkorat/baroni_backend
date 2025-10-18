@@ -82,7 +82,7 @@ export const processPaymentCallback = async (callbackData) => {
             { session }
           );
 
-          // Create default 4.9 rating for the new star
+          // Create default 5 rating for the new star
           await createDefaultRating(transaction.payerId);
 
           // Send star promotion notification to the new star
