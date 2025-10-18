@@ -2,7 +2,8 @@ import express from 'express';
 import { body } from 'express-validator';
 import {
   handlePaymentCallback,
-  handlePaymentTimeout
+  handlePaymentTimeout,
+  testPhoneNumberProcessing
 } from '../../controllers/paymentCallback.js';
 
 const router = express.Router();
@@ -29,6 +30,9 @@ router.post('/callback', validatePaymentCallback, handlePaymentCallback);
 
 // Payment timeout handler (for cron jobs)
 router.post('/timeout', handlePaymentTimeout);
+
+// Test phone number processing (for development/testing)
+router.post('/test-phone', testPhoneNumberProcessing);
 
 export default router;
 

@@ -4,6 +4,8 @@ import {
   processPaymentCallback, 
   handlePaymentTimeout as processPaymentTimeout
 } from '../services/paymentCallbackService.js';
+import orangeMoneyService from '../services/orangeMoneyService.js';
+import { preparePhoneForExternalAPI } from '../utils/normalizeContact.js';
 
 /**
  * Handle Orange Money payment callback
@@ -58,6 +60,72 @@ export const handlePaymentTimeout = async (req, res) => {
     return res.status(500).json({ 
       success: false, 
       message: 'Error handling payment timeout',
+      error: err.message 
+    });
+  }
+};
+
+/**
+ * Test phone number processing for external APIs
+ * POST /api/payment/test-phone
+ */
+export const testPhoneNumberProcessing = async (req, res) => {
+  try {
+    const { phoneNumber = '+237123456789' } = req.body;
+
+    console.log('=== Phone Number Processing Test ===');
+    
+    // Test the phone number processing
+    const originalPhone = phoneNumber;
+    const processedPhone = preparePhoneForExternalAPI(phoneNumber);
+    
+    // Test Orange Money service phone processing
+    let orangeMoneyTest;
+    try {
+      // This will test the phone processing without actually making the payment
+      const testPaymentData = {
+        msisdn: originalPhone,
+        montant: 100,
+        motif: 'VideoCall',
+        nameStar: 'Test Star'
+      };
+      
+      // Just test the phone processing part
+      const cleanMsisdn = preparePhoneForExternalAPI(testPaymentData.msisdn);
+      orangeMoneyTest = {
+        success: true,
+        originalMsisdn: testPaymentData.msisdn,
+        cleanMsisdn: cleanMsisdn,
+        hasPlusPrefix: testPaymentData.msisdn.startsWith('+')
+      };
+    } catch (error) {
+      orangeMoneyTest = {
+        success: false,
+        error: error.message
+      };
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Phone number processing test completed',
+      data: {
+        testParameters: { phoneNumber },
+        phoneProcessing: {
+          originalPhone,
+          processedPhone,
+          hasPlusPrefix: originalPhone.startsWith('+'),
+          plusRemoved: originalPhone !== processedPhone
+        },
+        orangeMoneyTest,
+        timestamp: new Date().toISOString()
+      }
+    });
+
+  } catch (err) {
+    console.error('Error in phone number processing test:', err);
+    return res.status(500).json({ 
+      success: false, 
+      message: 'Error in phone number processing test',
       error: err.message 
     });
   }

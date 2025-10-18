@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { preparePhoneForExternalAPI } from '../utils/normalizeContact.js';
 
 const ORANGE_MONEY_BASE_URL = process.env.ORANGE_MONEY_BASE_URL || 'http://35.242.129.85:80';
 const PROJECT_CODE = 'BR';
@@ -55,8 +56,18 @@ class OrangeMoneyService {
       const token = await this.getAccessToken();
 
       const { msisdn, montant, motif, nameStar, marchand } = paymentData;
+      
+      // Remove + prefix from phone number for Orange Money API (same as OTP flow)
+      const cleanMsisdn = preparePhoneForExternalAPI(msisdn);
+      
+      console.log('Orange Money Payment - Phone Number Processing:', {
+        originalMsisdn: msisdn,
+        cleanMsisdn: cleanMsisdn,
+        hasPlusPrefix: msisdn.startsWith('+')
+      });
+      
       const params = new URLSearchParams({
-        msisdn,
+        msisdn: cleanMsisdn,
         montant: montant.toString(),
         prefixe: PROJECT_CODE,
         motif

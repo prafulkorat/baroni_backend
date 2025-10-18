@@ -12,5 +12,12 @@ export const removePlusPrefix = (contact) => {
   return contact.startsWith('+') ? contact.slice(1) : contact;
 };
 
+// Helper function to prepare phone number for external APIs (Orange Money, SMS Gateway, etc.)
+export const preparePhoneForExternalAPI = (contact) => {
+  if (typeof contact !== 'string') return contact;
+  // Remove + prefix for external APIs (same as OTP flow)
+  return contact.startsWith('+') ? contact.slice(1) : contact;
+};
+
 
 
