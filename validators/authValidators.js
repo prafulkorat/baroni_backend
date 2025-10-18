@@ -21,7 +21,7 @@ export const registerValidator = [
     }),
   body('email').optional().isEmail().withMessage('Invalid email format'),
   body('password').optional().isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
-  body('role').optional().isIn(['fan', 'star', 'admin']).withMessage('Invalid role'),
+  // SECURITY FIX: Removed role field from registration - users always created as 'fan'
   body('fcmToken').optional().isString().withMessage('FCM token must be a string'),
   body('apnsToken').optional().isString().withMessage('APNs token must be a string'),
   body('voipToken').optional().isString().withMessage('VoIP token must be a string')

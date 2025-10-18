@@ -450,6 +450,24 @@ export const updateUserRole = async (req, res) => {
       });
     }
 
+    // SECURITY FIX: Validate star promotion payment before role change
+    if (role === 'star') {
+      // Check if user has completed star promotion payment
+      const Transaction = (await import('../models/Transaction.js')).default;
+      const starPayment = await Transaction.findOne({
+        payerId: userId,
+        type: 'become_star_payment',
+        status: 'completed'
+      });
+      
+      if (!starPayment) {
+        return res.status(400).json({
+          success: false,
+          message: 'User must complete star promotion payment before role change to star'
+        });
+      }
+    }
+
     user.role = role;
     await user.save();
 

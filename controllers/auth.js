@@ -176,8 +176,11 @@ export const register = async (req, res) => {
       return res.status(400).json({ success: false, message: errorMessage || 'Validation failed' });
     }
 
-  const { contact, email, password, role, fcmToken, apnsToken, voipToken, deviceType, isDev } = req.body;
+  const { contact, email, password, fcmToken, apnsToken, voipToken, deviceType, isDev } = req.body;
   const normalizedContact = typeof contact === 'string' ? normalizeContact(contact) : contact;
+  
+  // SECURITY FIX: Always create users as 'fan' - never allow direct star/admin creation
+  const userRole = 'fan';
 
     // Check if we have either contact or email
     if (!contact && !email) {
@@ -224,7 +227,7 @@ export const register = async (req, res) => {
       contact: normalizedContact,
       email: normalizedEmail,
       password: hashedPassword,
-      role,
+      role: userRole, // Always 'fan' - security fix
       ...(fcmToken ? { fcmToken } : {}),
       ...(apnsToken ? { apnsToken } : {}),
       ...(voipToken ? { voipToken } : {}),

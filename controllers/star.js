@@ -158,6 +158,8 @@ export const becomeStar = async (req, res) => {
         // Create hybrid transaction from fan to admin
         let transactionResult;
         try {
+            console.log(`[BecomeStar] Creating transaction for user ${req.user._id} with amount ${numericAmount}`);
+            
             transactionResult = await createHybridTransaction({
                 type: TRANSACTION_TYPES.BECOME_STAR_PAYMENT,
                 payerId: req.user._id,
@@ -168,11 +170,16 @@ export const becomeStar = async (req, res) => {
                 starName: req.user.name || '',
                 metadata: { plan }
             });
+            
+            console.log(`[BecomeStar] Transaction result:`, transactionResult);
         } catch (transactionError) {
+            console.error(`[BecomeStar] Transaction creation failed:`, transactionError);
             return res.status(400).json({ success: false, message: 'Transaction failed: ' + transactionError.message });
         }
 
         // Retrieve the transaction
+        console.log(`[BecomeStar] Retrieving transaction for user ${req.user._id}`);
+        
         const transaction = await Transaction.findOne({
             payerId: req.user._id,
             receiverId: adminUser._id,
@@ -180,7 +187,19 @@ export const becomeStar = async (req, res) => {
             status: { $in: ['pending', 'initiated'] }
         }).sort({ createdAt: -1 });
 
+        console.log(`[BecomeStar] Retrieved transaction:`, transaction ? {
+            id: transaction._id,
+            type: transaction.type,
+            status: transaction.status,
+            amount: transaction.amount,
+            paymentMode: transaction.paymentMode,
+            coinAmount: transaction.coinAmount,
+            externalAmount: transaction.externalAmount,
+            externalPaymentId: transaction.externalPaymentId
+        } : 'No transaction found');
+
         if (!transaction) {
+            console.error(`[BecomeStar] No transaction found for user ${req.user._id}`);
             return res.status(500).json({ success: false, message: 'Failed to retrieve transaction' });
         }
 

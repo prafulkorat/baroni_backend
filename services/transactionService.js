@@ -111,6 +111,22 @@ export const createHybridTransaction = async (transactionData) => {
       }], { session });
 
       createdTransaction = transaction[0];
+      
+      // Debug logging for transaction creation
+      console.log(`[TransactionCreated] Transaction created:`, {
+        transactionId: createdTransaction._id,
+        type: createdTransaction.type,
+        payerId: createdTransaction.payerId,
+        receiverId: createdTransaction.receiverId,
+        amount: createdTransaction.amount,
+        paymentMode: createdTransaction.paymentMode,
+        status: createdTransaction.status,
+        coinAmount: createdTransaction.coinAmount,
+        externalAmount: createdTransaction.externalAmount,
+        externalPaymentId: createdTransaction.externalPaymentId,
+        refundTimer: createdTransaction.refundTimer,
+        metadata: createdTransaction.metadata
+      });
     });
 
     return { 
