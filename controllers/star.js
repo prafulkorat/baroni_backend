@@ -77,6 +77,20 @@ export const becomeStar = async (req, res) => {
         // Check for pending commitments - fan must complete or cancel all before becoming star
         const userId = req.user._id;
 
+        // Check if user already has a pending star promotion payment
+        const existingStarPayment = await Transaction.findOne({
+            payerId: userId,
+            type: TRANSACTION_TYPES.BECOME_STAR_PAYMENT,
+            status: { $in: ['initiated', 'pending'] }
+        });
+
+        if (existingStarPayment) {
+            return res.status(400).json({
+                success: false,
+                message: 'You already have a pending star promotion payment. Please complete or cancel it before starting a new one.'
+            });
+        }
+
         const [pendingDedications, pendingAppointments, pendingLiveShows] = await Promise.all([
             // Check for pending or approved dedication requests where user is the fan
             DedicationRequest.countDocuments({
@@ -173,7 +187,7 @@ export const becomeStar = async (req, res) => {
         // Update user with payment status and baroniId (but don't change role yet)
         let updates = { 
             paymentStatus: transaction.status === 'initiated' ? 'initiated' : 'pending',
-            role: transaction.status === 'pending' ? 'star' : 'fan', // Just in case
+            role: 'fan', // Keep as fan until payment is completed
         };
 
         // Assign baroniId based on plan

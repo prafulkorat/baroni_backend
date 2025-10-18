@@ -66,7 +66,9 @@ export const processPaymentCallback = async (callbackData) => {
         );
 
         // Handle star promotion payment status updates
-        if (transaction.type.toUpperCase() === 'BECOME_STAR_PAYMENT') {
+        if (transaction.type === 'become_star_payment') {
+          console.log(`[PaymentCallback] Processing star promotion for transaction ${transaction._id}, user ${transaction.payerId}`);
+          
           await User.updateMany(
             { 
               _id: transaction.payerId,
@@ -87,6 +89,8 @@ export const processPaymentCallback = async (callbackData) => {
 
           // Send star promotion notification to the new star
           await sendStarPromotionNotification(transaction, session);
+          
+          console.log(`[PaymentCallback] Star promotion completed for user ${transaction.payerId}`);
         }
 
         // Send appointment notification to star after payment success
@@ -150,7 +154,9 @@ const refundHybridTransaction = async (transaction, session) => {
   await transaction.save({ session });
 
   // Handle star promotion refund - revert user back to fan
-  if (transaction.type.toUpperCase() === 'BECOME_STAR_PAYMENT') {
+  if (transaction.type === 'become_star_payment') {
+    console.log(`[PaymentCallback] Refunding star promotion for transaction ${transaction._id}, user ${transaction.payerId}`);
+    
     await User.updateMany(
       { 
         _id: transaction.payerId,
@@ -165,6 +171,8 @@ const refundHybridTransaction = async (transaction, session) => {
       },
       { session }
     );
+    
+    console.log(`[PaymentCallback] Star promotion refunded for user ${transaction.payerId}`);
   }
 };
 
