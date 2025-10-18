@@ -64,9 +64,11 @@ export const processPaymentCallback = async (callbackData) => {
 
       if (status === 'completed') {
         // Payment successful - move transaction to pending (escrow) and clear refund timer
+        console.log(`[PaymentCallback] Updating transaction status to completed`);
         transaction.status = TRANSACTION_STATUSES.COMPLETED;
         transaction.refundTimer = null;
         await transaction.save({ session });
+        console.log(`[PaymentCallback] Transaction status updated successfully`);
 
         // Reflect domain paymentStatus transitions to 'pending' once external payment succeeds
         await Appointment.updateMany(
@@ -94,10 +96,20 @@ export const processPaymentCallback = async (callbackData) => {
         if (transaction.type === 'become_star_payment') {
           console.log(`[PaymentCallback] Processing star promotion for transaction ${transaction._id}, user ${transaction.payerId}`);
           
-          await User.updateMany(
+          // First, check the current user status
+          const currentUser = await User.findById(transaction.payerId).session(session);
+          console.log(`[PaymentCallback] Current user status:`, {
+            id: currentUser._id,
+            role: currentUser.role,
+            paymentStatus: currentUser.paymentStatus,
+            baroniId: currentUser.baroniId
+          });
+          
+          // Update user with more flexible conditions
+          const updateResult = await User.updateMany(
             { 
               _id: transaction.payerId,
-              paymentStatus: 'initiated'
+              paymentStatus: { $in: ['initiated', 'pending'] } // Accept both statuses
             },
             { 
               $set: { 
@@ -108,6 +120,11 @@ export const processPaymentCallback = async (callbackData) => {
             },
             { session }
           );
+          
+          console.log(`[PaymentCallback] User update result:`, {
+            matchedCount: updateResult.matchedCount,
+            modifiedCount: updateResult.modifiedCount
+          });
 
           // Create default 5 rating for the new star
           await createDefaultRating(transaction.payerId);
@@ -121,20 +138,25 @@ export const processPaymentCallback = async (callbackData) => {
       }
     });
 
+    console.log(`[PaymentCallback] Transaction committed successfully`);
+
     // Send notifications AFTER transaction is committed (outside transaction)
     try {
       if (status === 'completed') {
+        console.log(`[PaymentCallback] Sending notifications...`);
         // Send star promotion notification to the new star
         await sendStarPromotionNotification(transaction, null);
         
         // Send appointment notification to star after payment success
         await sendAppointmentNotificationAfterPayment(transaction, null);
+        console.log(`[PaymentCallback] Notifications sent successfully`);
       }
     } catch (notificationError) {
       console.error('Error sending notifications (non-critical):', notificationError);
       // Don't throw error to avoid breaking the payment callback
     }
 
+    console.log(`[PaymentCallback] Payment callback processing completed successfully`);
     return { success: true, message: 'Payment callback processed successfully' };
 
   } catch (error) {
