@@ -3,7 +3,7 @@ import { getFirstValidationError } from '../utils/validationHelper.js';
 import Availability from '../models/Availability.js';
 import Appointment from '../models/Appointment.js';
 import { createTransaction, createHybridTransaction, completeTransaction, cancelTransaction } from '../services/transactionService.js';
-import { TRANSACTION_TYPES, TRANSACTION_DESCRIPTIONS, createTransactionDescription } from '../utils/transactionConstants.js';
+import { TRANSACTION_TYPES, TRANSACTION_DESCRIPTIONS, createTransactionDescription, TRANSACTION_STATUSES } from '../utils/transactionConstants.js';
 import Transaction from '../models/Transaction.js'; // Added missing import for Transaction
 import NotificationHelper from '../utils/notificationHelper.js';
 import { deleteConversationBetweenUsers } from '../services/messagingCleanup.js';
@@ -725,15 +725,72 @@ export const completeAppointment = async (req, res) => {
     }
     const { id } = req.params;
     const { callDuration } = req.body;
-    const appt = await Appointment.findOne({ _id: id, starId: req.user._id });
-    if (!appt) return res.status(404).json({ success: false, message: 'Appointment not found' });
-    if (appt.status !== 'approved') return res.status(400).json({ success: false, message: 'Only approved appointments can be completed' });
+    
+    console.log(`[CompleteAppointment] Completing appointment ${id} with call duration ${callDuration} minutes by user ${req.user._id}`);
+    
+    const appt = await Appointment.findOne({ _id: id });
+    if (!appt) {
+      console.log(`[CompleteAppointment] Appointment ${id} not found`);
+      return res.status(404).json({ success: false, message: 'Appointment not found' });
+    }
+    
+    console.log(`[CompleteAppointment] Found appointment:`, {
+      id: appt._id,
+      status: appt.status,
+      starId: appt.starId,
+      fanId: appt.fanId,
+      date: appt.date,
+      time: appt.time,
+      price: appt.price,
+      paymentStatus: appt.paymentStatus,
+      transactionId: appt.transactionId
+    });
+    
+    if (appt.status !== 'approved') {
+      console.log(`[CompleteAppointment] Appointment ${id} status is ${appt.status}, cannot complete`);
+      return res.status(400).json({ success: false, message: 'Only approved appointments can be completed' });
+    }
 
     // Complete the transaction and transfer coins to star
     if (appt.transactionId) {
       try {
-        await completeTransaction(appt.transactionId);
+        console.log(`[CompleteAppointment] Checking transaction ${appt.transactionId} status before completion`);
+        
+        // First check the transaction status
+        const transaction = await Transaction.findById(appt.transactionId);
+        if (!transaction) {
+          console.log(`[CompleteAppointment] Transaction ${appt.transactionId} not found`);
+          return res.status(404).json({
+            success: false,
+            message: 'Transaction not found'
+          });
+        }
+        
+        console.log(`[CompleteAppointment] Transaction ${appt.transactionId} current status:`, {
+          id: transaction._id,
+          status: transaction.status,
+          amount: transaction.amount,
+          payerId: transaction.payerId,
+          receiverId: transaction.receiverId,
+          type: transaction.type
+        });
+        
+        // Only complete if transaction is pending
+        if (transaction.status === TRANSACTION_STATUSES.PENDING) {
+          console.log(`[CompleteAppointment] Completing transaction ${appt.transactionId}`);
+          await completeTransaction(appt.transactionId);
+          console.log(`[CompleteAppointment] Transaction ${appt.transactionId} completed successfully`);
+        } else if (transaction.status === TRANSACTION_STATUSES.COMPLETED) {
+          console.log(`[CompleteAppointment] Transaction ${appt.transactionId} is already completed`);
+        } else {
+          console.log(`[CompleteAppointment] Transaction ${appt.transactionId} status is ${transaction.status}, cannot complete`);
+          return res.status(400).json({
+            success: false,
+            message: `Transaction status is ${transaction.status}, cannot complete appointment`
+          });
+        }
       } catch (transactionError) {
+        console.error(`[CompleteAppointment] Failed to complete transaction ${appt.transactionId}:`, transactionError);
         return res.status(500).json({
           success: false,
           message: 'Failed to complete transaction: ' + transactionError.message
@@ -741,11 +798,21 @@ export const completeAppointment = async (req, res) => {
       }
     }
 
+    console.log(`[CompleteAppointment] Updating appointment ${id} to completed status with call duration ${callDuration}`);
+    
     appt.status = 'completed';
     appt.paymentStatus = 'completed';
     appt.completedAt = new Date();
     appt.callDuration = callDuration;
     const updated = await appt.save();
+    
+    console.log(`[CompleteAppointment] Appointment ${id} updated successfully:`, {
+      id: updated._id,
+      status: updated.status,
+      paymentStatus: updated.paymentStatus,
+      completedAt: updated.completedAt,
+      callDuration: updated.callDuration
+    });
 
     // Send completion notification
     try {

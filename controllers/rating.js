@@ -58,19 +58,47 @@ export const submitAppointmentReview = async (req, res) => {
 
     const { appointmentId, rating, comment } = req.body;
 
-    // Validate appointment exists and is completed
-    const appointment = await Appointment.findOne({
-      _id: appointmentId,
-      fanId: req.user._id,
-      status: 'completed'
-    });
+    console.log(`[Rating] Submitting review for appointment ${appointmentId} by user ${req.user._id}`);
 
-    if (!appointment) {
+    // First, check if appointment exists at all
+    const appointmentExists = await Appointment.findById(appointmentId);
+    console.log(`[Rating] Appointment exists:`, appointmentExists ? {
+      id: appointmentExists._id,
+      fanId: appointmentExists.fanId,
+      starId: appointmentExists.starId,
+      status: appointmentExists.status,
+      paymentStatus: appointmentExists.paymentStatus
+    } : 'No appointment found');
+
+    if (!appointmentExists) {
       return res.status(404).json({ 
         success: false, 
-        message: 'Completed appointment not found' 
+        message: 'Appointment not found' 
       });
     }
+
+    // Check if appointment is completed
+    if (appointmentExists.status !== 'completed') {
+      return res.status(400).json({ 
+        success: false, 
+        message: `Appointment is not completed. Current status: ${appointmentExists.status}` 
+      });
+    }
+
+    // Check if user is the fan who booked this appointment
+    if (appointmentExists.fanId.toString() !== req.user._id.toString()) {
+      console.log(`[Rating] User mismatch:`, {
+        appointmentFanId: appointmentExists.fanId.toString(),
+        currentUserId: req.user._id.toString(),
+        match: appointmentExists.fanId.toString() === req.user._id.toString()
+      });
+      return res.status(403).json({ 
+        success: false, 
+        message: 'You can only review appointments you booked' 
+      });
+    }
+
+    const appointment = appointmentExists;
 
     // Check if review already exists
     const existingReview = await Review.findOne({
