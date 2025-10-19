@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import User from '../models/User.js';
 import Category from '../models/Category.js';
 import Dedication from '../models/Dedication.js';
@@ -95,14 +96,49 @@ export const getDashboard = async (req, res) => {
         popularStarsQuery
       ]);
 
+      // Calculate ratings for all stars
+      const allStars = [...stars, ...popularStars];
+      const starIds = [...new Set(allStars.map(star => star._id.toString()))];
+      
+      // Get ratings for all stars in one query
+      const ratingsAgg = await Review.aggregate([
+        { $match: { starId: { $in: starIds.map(id => new mongoose.Types.ObjectId(id)) } } },
+        { $group: { _id: '$starId', avg: { $avg: '$rating' }, count: { $sum: 1 } } }
+      ]);
+      
+      // Create ratings map
+      const ratingsMap = {};
+      ratingsAgg.forEach(rating => {
+        ratingsMap[rating._id.toString()] = {
+          average: Number((rating.avg || 0).toFixed(2)),
+          count: rating.count || 0
+        };
+      });
+
       // Randomly select top 5 popular stars from the fetched results
       const shuffledPopularStars = [...popularStars].sort(() => Math.random() - 0.5);
-      const top5PopularStars = shuffledPopularStars.slice(0, 5).map(sanitizeUser);
+      const top5PopularStars = shuffledPopularStars.slice(0, 5).map(star => {
+        const sanitized = sanitizeUser(star);
+        const starRating = ratingsMap[star._id.toString()] || { average: 0, count: 0 };
+        return {
+          ...sanitized,
+          averageRating: starRating.average,
+          totalReviews: starRating.count
+        };
+      });
 
       return res.json({
         success: true,
         data: {
-          stars: stars.map(sanitizeUser),
+          stars: stars.map(star => {
+            const sanitized = sanitizeUser(star);
+            const starRating = ratingsMap[star._id.toString()] || { average: 0, count: 0 };
+            return {
+              ...sanitized,
+              averageRating: starRating.average,
+              totalReviews: starRating.count
+            };
+          }),
           popularStars: top5PopularStars,
           categories: categories.map(cat => ({
             id: cat._id,

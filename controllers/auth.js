@@ -729,20 +729,36 @@ export const me = async (req, res) => {
     let extra = {};
 
     if (user.role === 'star' || user.role === 'admin') {
-      const [dedicationsRes, servicesRes, dedicationSamples] = await Promise.all([
+      const [dedicationsRes, servicesRes, dedicationSamples, ratingAgg] = await Promise.all([
         Dedication.find({ userId: user._id }).sort({ createdAt: -1 }),
         Service.find({ userId: user._id }).sort({ createdAt: -1 }),
         DedicationSample.find({ userId: user._id }).sort({ createdAt: -1 }),
+        // Calculate rating from reviews table
+        Review.aggregate([
+          { $match: { starId: user._id } },
+          { $group: { _id: '$starId', avg: { $avg: '$rating' }, count: { $sum: 1 } } }
+        ])
       ]);
+      
       const allservices = [
         ...dedicationsRes.map(d => ({ id: d._id, type: d.type, price: d.price, userId: d.userId, createdAt: d.createdAt, updatedAt: d.updatedAt, itemType: 'dedication' })),
         ...servicesRes.map(s => ({ id: s._id, type: s.type, price: s.price, userId: s.userId, createdAt: s.createdAt, updatedAt: s.updatedAt, itemType: 'service' }))
       ].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+      
+      // Calculate proper rating from reviews
+      const starRating = ratingAgg && ratingAgg.length > 0
+        ? { 
+            average: Number((ratingAgg[0].avg || 0).toFixed(2)), 
+            count: ratingAgg[0].count || 0 
+          }
+        : { average: 0, count: 0 };
+      
       extra = {
         allservices,
         dedications: dedicationsRes.map((d) => ({ id: d._id, type: d.type, price: d.price, userId: d.userId, createdAt: d.createdAt, updatedAt: d.updatedAt })),
         services: servicesRes.map((s) => ({ id: s._id, type: s.type, price: s.price, userId: s.userId, createdAt: s.createdAt, updatedAt: s.updatedAt })),
         dedicationSamples: dedicationSamples.map((x) => ({ id: x._id, type: x.type, video: x.video, description: x.description, userId: x.userId, createdAt: x.createdAt, updatedAt: x.updatedAt })),
+        rating: starRating
       };
     }
 
