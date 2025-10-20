@@ -17,6 +17,7 @@ import Appointment from '../models/Appointment.js';
 import ContactSupport from '../models/ContactSupport.js';
 import Transaction from '../models/Transaction.js';
 import LiveShowAttendance from '../models/LiveShowAttendance.js';
+import Review from '../models/Review.js';
 import mongoose from 'mongoose';
 import { normalizeContact, removePlusPrefix } from '../utils/normalizeContact.js';
 import { generateUniqueAgoraKey } from '../utils/agoraKeyGenerator.js';
@@ -379,10 +380,7 @@ export const completeProfile = async (req, res) => {
     let { dedications, services, dedicationSamples } = req.body;
 
 
-    if (pseudo) {
-      const exists = await User.exists({ _id: { $ne: user._id }, pseudo });
-      if (exists) return res.status(409).json({ success: false, message: 'Pseudo already in use' });
-    }
+    // Pseudo (nickname) is no longer enforced to be unique
 
     if (email) user.email = email.toLowerCase();
     if (contact) user.contact = contact;

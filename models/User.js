@@ -8,7 +8,7 @@ const userSchema = new mongoose.Schema(
     password: { type: String },
     coinBalance: { type: Number, default: 20, min: 0 },
     name: { type: String, trim: true },
-    pseudo: { type: String, trim: true, unique: true, sparse: true },
+    pseudo: { type: String, trim: true },
     profilePic: { type: String,default: 'https://res.cloudinary.com/ddnpvm2yk/image/upload/v1759868390/placeholder_aws6oc.png' },
     preferredLanguage: { type: String },
     preferredCurrency: { type: String, default: 'F' },
@@ -53,6 +53,9 @@ const userSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+// Ensure legacy unique index on `pseudo` is removed if it exists
+userSchema.index({ pseudo: 1 }, { unique: false, sparse: false, name: 'pseudo_1_non_unique' });
 
 // Pre-save hook to set default about text and rating for star users
 userSchema.pre('save', function(next) {
