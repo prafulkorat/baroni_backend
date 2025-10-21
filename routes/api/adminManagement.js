@@ -18,7 +18,10 @@ import {
   getStarDedicationSamples,
   addStarDedicationSample,
   updateStarDedicationSample,
-  deleteStarDedicationSample
+  deleteStarDedicationSample,
+  toggleFeaturedStar,
+  getFeaturedStars,
+  bulkUpdateFeaturedStars
 } from '../../controllers/starManagement.js';
 import {
   getAllReviews,
@@ -174,5 +177,16 @@ router.delete('/reported-users/:reportId', deleteReportValidator, deleteReport);
 
 // Get reported users statistics
 router.get('/reported-users-stats', getReportedUsersStatsValidator, getReportedUsersStats);
+
+// ==================== FEATURED STAR MANAGEMENT ROUTES ====================
+
+// Toggle featured star status for a specific star
+router.patch('/stars/:starId/feature', toggleFeaturedStar);
+
+// Get all featured stars
+router.get('/featured-stars', getFeaturedStars);
+
+// Bulk update featured stars
+router.patch('/stars/bulk-feature', bulkUpdateFeaturedStars);
 
 export default router;

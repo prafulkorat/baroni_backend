@@ -900,3 +900,197 @@ export const getAllStars = async (req, res) => {
     });
   }
 };
+
+// ==================== FEATURED STAR MANAGEMENT ====================
+
+// Toggle featured star status
+export const toggleFeaturedStar = async (req, res) => {
+  try {
+    const admin = req.user;
+    if (!admin || admin.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Admin access required'
+      });
+    }
+
+    const { starId } = req.params;
+    const { feature_star } = req.body;
+
+    if (!mongoose.Types.ObjectId.isValid(starId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid star ID'
+      });
+    }
+
+    if (typeof feature_star !== 'boolean') {
+      return res.status(400).json({
+        success: false,
+        message: 'feature_star must be a boolean value (true/false)'
+      });
+    }
+
+    const star = await User.findById(starId);
+    if (!star || star.role !== 'star') {
+      return res.status(404).json({
+        success: false,
+        message: 'Star not found'
+      });
+    }
+
+    // Update featured star status
+    star.feature_star = feature_star;
+    await star.save();
+
+    return res.json({
+      success: true,
+      message: `Star ${feature_star ? 'featured' : 'unfeatured'} successfully`,
+      data: {
+        star: {
+          id: star._id,
+          name: star.name,
+          pseudo: star.pseudo,
+          baroniId: star.baroniId,
+          feature_star: star.feature_star
+        }
+      }
+    });
+
+  } catch (err) {
+    console.error('Toggle featured star error:', err);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to toggle featured star status'
+    });
+  }
+};
+
+// Get all featured stars
+export const getFeaturedStars = async (req, res) => {
+  try {
+    const admin = req.user;
+    if (!admin || admin.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Admin access required'
+      });
+    }
+
+    const { page = 1, limit = 20 } = req.query;
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    const featuredStars = await User.find({
+      role: 'star',
+      feature_star: true,
+      isDeleted: { $ne: true }
+    })
+      .populate('profession', 'name')
+      .select('name pseudo baroniId profilePic country profession feature_star createdAt')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit))
+      .lean();
+
+    const totalFeaturedStars = await User.countDocuments({
+      role: 'star',
+      feature_star: true,
+      isDeleted: { $ne: true }
+    });
+
+    return res.json({
+      success: true,
+      message: 'Featured stars retrieved successfully',
+      data: {
+        featuredStars: featuredStars.map(star => ({
+          id: star._id,
+          name: star.name,
+          pseudo: star.pseudo,
+          baroniId: star.baroniId,
+          profilePic: star.profilePic,
+          country: star.country,
+          profession: star.profession,
+          feature_star: star.feature_star,
+          createdAt: star.createdAt
+        })),
+        pagination: {
+          page: parseInt(page),
+          limit: parseInt(limit),
+          total: totalFeaturedStars,
+          pages: Math.ceil(totalFeaturedStars / parseInt(limit))
+        }
+      }
+    });
+
+  } catch (err) {
+    console.error('Get featured stars error:', err);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to get featured stars'
+    });
+  }
+};
+
+// Bulk update featured stars
+export const bulkUpdateFeaturedStars = async (req, res) => {
+  try {
+    const admin = req.user;
+    if (!admin || admin.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Admin access required'
+      });
+    }
+
+    const { starIds, feature_star } = req.body;
+
+    if (!Array.isArray(starIds) || starIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'starIds must be a non-empty array'
+      });
+    }
+
+    if (typeof feature_star !== 'boolean') {
+      return res.status(400).json({
+        success: false,
+        message: 'feature_star must be a boolean value (true/false)'
+      });
+    }
+
+    // Validate all star IDs
+    const invalidIds = starIds.filter(id => !mongoose.Types.ObjectId.isValid(id));
+    if (invalidIds.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid star IDs: ${invalidIds.join(', ')}`
+      });
+    }
+
+    // Update all stars
+    const result = await User.updateMany(
+      { 
+        _id: { $in: starIds },
+        role: 'star',
+        isDeleted: { $ne: true }
+      },
+      { feature_star }
+    );
+
+    return res.json({
+      success: true,
+      message: `${result.modifiedCount} stars ${feature_star ? 'featured' : 'unfeatured'} successfully`,
+      data: {
+        modifiedCount: result.modifiedCount,
+        matchedCount: result.matchedCount
+      }
+    });
+
+  } catch (err) {
+    console.error('Bulk update featured stars error:', err);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to bulk update featured stars'
+    });
+  }
+};

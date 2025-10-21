@@ -50,6 +50,8 @@ const userSchema = new mongoose.Schema(
     // Rating system fields for stars
     averageRating: { type: Number, default: 0, min: 0, max: 5 },
     totalReviews: { type: Number, default: 0, min: 0 },
+    // Featured star flag - managed by admin
+    feature_star: { type: Boolean, default: false, index: true },
   },
   { timestamps: true }
 );

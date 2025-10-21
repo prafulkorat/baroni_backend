@@ -9,6 +9,11 @@ import {
   updateAdminProfile,
   databaseCleanup
 } from '../../controllers/admin.js';
+import {
+  toggleFeaturedStar,
+  getFeaturedStars,
+  bulkUpdateFeaturedStars
+} from '../../controllers/starManagement.js';
 import adminDashboardRouter from './adminDashboard.js';
 import {
   adminSignInValidator,
@@ -38,5 +43,57 @@ router.post('/database-cleanup', databaseCleanup);
 
 // Dashboard routes
 router.use('/dashboard', adminDashboardRouter);
+
+// Featured Star Management routes
+router.patch('/stars/:starId/feature', requireAuth, requireRole('admin'), toggleFeaturedStar);
+router.get('/featured-stars', requireAuth, requireRole('admin'), getFeaturedStars);
+router.patch('/stars/bulk-feature', requireAuth, requireRole('admin'), bulkUpdateFeaturedStars);
+
+// Debug endpoint to check featured stars count
+router.get('/debug/featured-stars-count', requireAuth, requireRole('admin'), async (req, res) => {
+  try {
+    const User = (await import('../../models/User.js')).default;
+    
+    const totalFeaturedStars = await User.countDocuments({
+      role: 'star',
+      feature_star: true,
+      isDeleted: { $ne: true }
+    });
+
+    const featuredStarsWithCompleteProfile = await User.countDocuments({
+      role: 'star',
+      feature_star: true,
+      isDeleted: { $ne: true },
+      name: { $exists: true, $ne: null, $ne: '' },
+      pseudo: { $exists: true, $ne: null, $ne: '' },
+      about: { $exists: true, $ne: null, $ne: '' },
+      profession: { $exists: true, $ne: null }
+    });
+
+    const featuredStarsBasic = await User.countDocuments({
+      role: 'star',
+      feature_star: true,
+      isDeleted: { $ne: true },
+      name: { $exists: true, $ne: null, $ne: '' },
+      pseudo: { $exists: true, $ne: null, $ne: '' }
+    });
+
+    res.json({
+      success: true,
+      data: {
+        totalFeaturedStars,
+        featuredStarsWithCompleteProfile,
+        featuredStarsBasic,
+        message: `Total: ${totalFeaturedStars}, Complete Profile: ${featuredStarsWithCompleteProfile}, Basic: ${featuredStarsBasic}`
+      }
+    });
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get featured stars count',
+      error: err.message
+    });
+  }
+});
 
 export default router;

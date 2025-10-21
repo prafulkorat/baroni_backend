@@ -22,31 +22,9 @@ export const getDashboard = async (req, res) => {
       // Fan dashboard: stars with filled details, categories, and upcoming shows
       const { country } = req.query || {};
 
-      // Build star criteria
-      const starCriteria = {
-        role: 'star',
-        isDeleted: { $ne: true }, // Exclude deleted users from dashboard
-        // Only include stars that have filled up their details
-        $and: [
-          { name: { $exists: true, $ne: null } },
-          { name: { $ne: '' } },
-          { pseudo: { $exists: true, $ne: null } },
-          { pseudo: { $ne: '' } },
-          { about: { $exists: true, $ne: null } },
-          { about: { $ne: '' } },
-          { profession: { $exists: true, $ne: null } }
-        ]
-      };
+      // Removed starCriteria - no longer needed
 
-      if (country) {
-        starCriteria.country = country;
-      }
-
-      const starsQuery = User.find(starCriteria)
-        .populate('profession')
-        .select('name pseudo profilePic about profession availableForBookings baroniId')
-        .sort({ profileImpressions: -1, createdAt: -1 })
-        .limit(20);
+      // Removed stars query - no longer needed
 
       const categoriesQuery = Category.find().sort({ name: 1 });
 
@@ -69,35 +47,63 @@ export const getDashboard = async (req, res) => {
         .sort({ date: 1 })
         .limit(10);
 
-      // Query for top 5 popular stars (based on profile impressions) with random sorting
-      const popularStarsQuery = User.find({
-        role: 'star',
-        isDeleted: { $ne: true }, // Exclude deleted users from popular stars
-        profileImpressions: { $gt: 0 }, // Only stars with some profile views
-        $and: [
-          { name: { $exists: true, $ne: null } },
-          { name: { $ne: '' } },
-          { pseudo: { $exists: true, $ne: null } },
-          { pseudo: { $ne: '' } },
-          { about: { $exists: true, $ne: null } },
-          { about: { $ne: '' } },
-          { profession: { $exists: true, $ne: null } }
-        ]
-      })
-        .populate('profession')
-        .select('name pseudo profilePic about profession availableForBookings baroniId profileImpressions')
-        .sort({ profileImpressions: -1 })
-        .limit(20); // Get more than 5 to allow for random selection
+      // Removed popularStars query - no longer needed
 
-      const [stars, categories, upcomingShows, popularStars] = await Promise.all([
-        starsQuery,
+      // Query for featured stars specifically - more flexible criteria
+      const featuredStarsCriteria = {
+        role: 'star',
+        feature_star: true,
+        isDeleted: { $ne: true },
+        // Basic requirements - only check for essential fields like getAllStars
+        name: { $exists: true, $ne: null, $ne: '' },
+        pseudo: { $exists: true, $ne: null, $ne: '' }
+      };
+
+      if (country) {
+        featuredStarsCriteria.country = country;
+      }
+
+      const featuredStarsQuery = User.find(featuredStarsCriteria)
+        .populate('profession')
+        .select('name pseudo profilePic about profession availableForBookings baroniId feature_star')
+        .sort({ profileImpressions: -1, createdAt: -1 })
+        .limit(10);
+
+      // Query for available stars from same country
+      const availableStarsCriteria = {
+        role: 'star',
+        isDeleted: { $ne: true },
+        availableForBookings: true,
+        hidden: { $ne: true },
+        // Basic requirements - only check for essential fields
+        name: { $exists: true, $ne: null, $ne: '' },
+        pseudo: { $exists: true, $ne: null, $ne: '' }
+      };
+
+      // Only filter by country if user has a country
+      if (country && country.trim()) {
+        availableStarsCriteria.country = country;
+      }
+
+      const availableStarsQuery = User.find(availableStarsCriteria)
+        .populate('profession')
+        .select('name pseudo profilePic about profession availableForBookings baroniId feature_star country')
+        .sort({ feature_star: -1, profileImpressions: -1, createdAt: -1 })
+        .limit(15);
+
+      const [categories, upcomingShows, featuredStars, availableStars] = await Promise.all([
         categoriesQuery,
         liveShowsQuery,
-        popularStarsQuery
+        featuredStarsQuery,
+        availableStarsQuery
       ]);
 
-      // Calculate ratings for all stars
-      const allStars = [...stars, ...popularStars];
+      // Debug: Log counts
+      console.log('Featured stars found:', featuredStars.length);
+      console.log('Available stars found:', availableStars.length);
+
+      // Calculate ratings for featured and available stars only
+      const allStars = [...featuredStars, ...availableStars];
       const starIds = [...new Set(allStars.map(star => star._id.toString()))];
       
       // Get ratings for all stars in one query
@@ -115,22 +121,12 @@ export const getDashboard = async (req, res) => {
         };
       });
 
-      // Randomly select top 5 popular stars from the fetched results
-      const shuffledPopularStars = [...popularStars].sort(() => Math.random() - 0.5);
-      const top5PopularStars = shuffledPopularStars.slice(0, 5).map(star => {
-        const sanitized = sanitizeUser(star);
-        const starRating = ratingsMap[star._id.toString()] || { average: 0, count: 0 };
-        return {
-          ...sanitized,
-          averageRating: starRating.average,
-          totalReviews: starRating.count
-        };
-      });
+      // Removed top5PopularStars code - no longer needed
 
       return res.json({
         success: true,
         data: {
-          stars: stars.map(star => {
+          featuredStars: featuredStars.map(star => {
             const sanitized = sanitizeUser(star);
             const starRating = ratingsMap[star._id.toString()] || { average: 0, count: 0 };
             return {
@@ -139,7 +135,15 @@ export const getDashboard = async (req, res) => {
               totalReviews: starRating.count
             };
           }),
-          popularStars: top5PopularStars,
+          availableStars: availableStars.map(star => {
+            const sanitized = sanitizeUser(star);
+            const starRating = ratingsMap[star._id.toString()] || { average: 0, count: 0 };
+            return {
+              ...sanitized,
+              averageRating: starRating.average,
+              totalReviews: starRating.count
+            };
+          }),
           categories: categories.map(cat => ({
             id: cat._id,
             name: cat.name,
