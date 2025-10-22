@@ -1091,7 +1091,7 @@ const sendStarPromotionNotification = async (userId) => {
         };
 
         const options = {
-            relatedEntity: { type: 'user', id: user._id }
+            // No relatedEntity needed for star promotion notifications
         };
 
         // Send notification to the new star

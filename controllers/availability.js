@@ -308,6 +308,47 @@ export const createAvailability = async (req, res) => {
             });
 
             if (existingAvailability) {
+                // Check if there are any active appointments for this availability
+                const activeAppointments = await Appointment.find({
+                    starId: req.user._id,
+                    availabilityId: existingAvailability._id,
+                    status: { $in: ['pending', 'approved'] }
+                });
+
+                if (activeAppointments.length > 0) {
+                    // Check if we're trying to add new slots that conflict with booked slots
+                    const existingSlots = existingAvailability.timeSlots || [];
+                    const newSlots = normalizedTimeSlots;
+                    const existingSlotsMap = new Map();
+                    existingSlots.forEach((slot) => {
+                        existingSlotsMap.set(slot.slot, slot);
+                    });
+
+                    // Get all booked time slots from active appointments
+                    const bookedSlots = new Set();
+                    activeAppointments.forEach(apt => {
+                        bookedSlots.add(apt.time);
+                    });
+
+                    // Check if any new slots conflict with booked slots
+                    const conflictingSlots = newSlots.filter(newSlot => {
+                        // Check if this new slot conflicts with any booked slot
+                        return bookedSlots.has(newSlot.slot);
+                    });
+                    
+                    if (conflictingSlots.length > 0) {
+                        const appointmentDetails = activeAppointments.map(apt => ({
+                            appointmentId: apt._id,
+                            date: apt.date,
+                            time: apt.time,
+                            status: apt.status,
+                            fanId: apt.fanId
+                        }));
+
+                        throw new Error(`Cannot add time slots that are already booked. The following slots are already taken: ${conflictingSlots.map(s => s.slot).join(', ')}. Please choose different time slots. Details: ${JSON.stringify(appointmentDetails)}`);
+                    }
+                }
+
                 const existingSlots = existingAvailability.timeSlots || [];
                 const newSlots = normalizedTimeSlots;
                 const existingSlotsMap = new Map();
@@ -626,6 +667,57 @@ export const updateAvailability = async (req, res) => {
         }
         if (Array.isArray(timeSlots)) {
             try {
+                // Check if there are any active appointments for this availability
+                const activeAppointments = await Appointment.find({
+                    starId: req.user._id,
+                    availabilityId: item._id,
+                    status: { $in: ['pending', 'approved'] }
+                });
+
+                if (activeAppointments.length > 0) {
+                    // Check if we're trying to add new slots that conflict with booked slots
+                    const existingSlots = item.timeSlots || [];
+                    const newSlots = timeSlots;
+                    const existingSlotsMap = new Map();
+                    existingSlots.forEach((slot) => {
+                        existingSlotsMap.set(slot.slot, slot);
+                    });
+
+                    // Get all booked time slots from active appointments
+                    const bookedSlots = new Set();
+                    activeAppointments.forEach(apt => {
+                        bookedSlots.add(apt.time);
+                    });
+
+                    // Check if any new slots conflict with booked slots
+                    const conflictingSlots = [];
+                    newSlots.forEach(newSlot => {
+                        const slotString = typeof newSlot === 'string' ? newSlot : newSlot.slot;
+                        const normalizedSlot = normalizeTimeSlotString(slotString);
+                        
+                        // Check if this is a new slot (not existing) and conflicts with booked slots
+                        if (!existingSlotsMap.has(normalizedSlot) && bookedSlots.has(normalizedSlot)) {
+                            conflictingSlots.push(normalizedSlot);
+                        }
+                    });
+                    
+                    if (conflictingSlots.length > 0) {
+                        const appointmentDetails = activeAppointments.map(apt => ({
+                            appointmentId: apt._id,
+                            date: apt.date,
+                            time: apt.time,
+                            status: apt.status,
+                            fanId: apt.fanId
+                        }));
+
+                        return res.status(400).json({
+                            success: false,
+                            message: `Cannot add time slots that are already booked. The following slots are already taken: ${conflictingSlots.join(', ')}. Please choose different time slots.`,
+                            data: { appointmentDetails }
+                        });
+                    }
+                }
+
                 // If updating time slots for today, validate they're not in the past
                 const today = new Date();
                 today.setHours(0, 0, 0, 0);

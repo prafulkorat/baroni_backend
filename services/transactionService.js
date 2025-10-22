@@ -52,17 +52,25 @@ export const createHybridTransaction = async (transactionData) => {
       let paymentMode = PAYMENT_MODES.COIN;
       let externalPaymentId = null;
 
+      console.log(`[TransactionService] Payment calculation for user ${payerId}:`, {
+        totalAmount: amount,
+        coinBalance: coinBalance,
+        payerName: payer.name || payer.pseudo || 'Unknown'
+      });
+
       // Determine payment split
       if (coinBalance >= amount) {
         // User has enough coins - pay with coins only
         coinAmount = amount;
         externalAmount = 0;
         paymentMode = PAYMENT_MODES.COIN;
+        console.log(`[TransactionService] Sufficient coins: Using ${coinAmount} coins only`);
       } else {
         // User doesn't have enough coins - use hybrid payment
         coinAmount = coinBalance;
         externalAmount = amount - coinBalance;
         paymentMode = PAYMENT_MODES.HYBRID;
+        console.log(`[TransactionService] Insufficient coins: Using ${coinAmount} coins + ${externalAmount} external payment`);
 
         // Initiate external payment
         const motif = orangeMoneyService.mapTransactionTypeToMotif(type);
@@ -87,11 +95,15 @@ export const createHybridTransaction = async (transactionData) => {
 
       // Deduct coins from payer (if any)
       if (coinAmount > 0) {
+        console.log(`[TransactionService] Deducting ${coinAmount} coins from user ${payerId}`);
         await User.findByIdAndUpdate(
           payerId,
           { $inc: { coinBalance: -coinAmount } },
           { session, new: true }
         );
+        console.log(`[TransactionService] Successfully deducted ${coinAmount} coins`);
+      } else {
+        console.log(`[TransactionService] No coins to deduct (coinAmount: ${coinAmount})`);
       }
 
       // Create transaction record

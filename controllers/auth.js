@@ -543,15 +543,56 @@ export const completeProfile = async (req, res) => {
     } catch (err) {
       console.error('User save error:', err);
       if (err.code === 11000) {
-        // Duplicate key error
+        // Duplicate key error - check which field is causing the issue
         const field = Object.keys(err.keyValue)[0];
-        return res.status(409).json({ 
-          success: false, 
-          message: `${field} already exists`,
-          field: field
-        });
+        
+        // Pseudo is no longer unique, so don't treat it as an error
+        if (field === 'pseudo') {
+          console.log('Pseudo uniqueness error detected - pseudo should not be unique');
+          console.log('This indicates there might be an old unique index in the database.');
+          console.log('Attempting to resolve by removing pseudo uniqueness constraint...');
+          
+          // Try to save the user without any pseudo modification first
+          // If that fails, it means there's definitely a unique constraint
+          try {
+            // First attempt: try to save as-is (in case the error was transient)
+            updated = await user.save();
+            updatedUser = await User.findById(updated._id).populate('profession');
+            console.log('User saved successfully on retry - pseudo uniqueness error was transient');
+          } catch (retryErr) {
+            if (retryErr.code === 11000 && Object.keys(retryErr.keyValue)[0] === 'pseudo') {
+              console.log('Confirmed: Pseudo uniqueness constraint exists in database');
+              console.log('This needs to be fixed at the database level by removing unique indexes on pseudo');
+              
+              // For now, modify pseudo to make it unique temporarily
+              const originalPseudo = user.pseudo;
+              user.pseudo = `${originalPseudo}_${Date.now()}`;
+              
+              try {
+                updated = await user.save();
+                updatedUser = await User.findById(updated._id).populate('profession');
+                console.log(`Pseudo temporarily modified from '${originalPseudo}' to '${user.pseudo}' due to database constraint`);
+                console.log('WARNING: This is a temporary fix. The database unique index on pseudo should be removed.');
+              } catch (finalErr) {
+                console.error('Final save attempt failed:', finalErr);
+                throw finalErr;
+              }
+            } else {
+              console.error('Retry save failed with different error:', retryErr);
+              throw retryErr;
+            }
+          }
+        } else {
+          // Other fields that should be unique (email, contact, baroniId, agoraKey)
+          return res.status(409).json({ 
+            success: false, 
+            message: `${field} already exists`,
+            field: field
+          });
+        }
+      } else {
+        throw err; // Re-throw to be caught by outer catch
       }
-      throw err; // Re-throw to be caught by outer catch
     }
 
     let extra = {};
