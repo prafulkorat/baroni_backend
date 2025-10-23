@@ -46,7 +46,8 @@ export const getAllUsers = async (req, res) => {
         { name: { $regex: search, $options: 'i' } },
         { pseudo: { $regex: search, $options: 'i' } },
         { baroniId: { $regex: search, $options: 'i' } },
-        { email: { $regex: search, $options: 'i' } }
+        { email: { $regex: search, $options: 'i' } },
+        { contact: { $regex: search, $options: 'i' } }
       ];
     }
 
@@ -126,6 +127,7 @@ export const getAllUsers = async (req, res) => {
           name: user.name,
           pseudo: user.pseudo,
           email: user.email,
+          contact: user.contact,
           profilePic: user.profilePic,
           role: user.role,
           country: user.country,
@@ -189,6 +191,7 @@ export const getUserDetails = async (req, res) => {
 
     const user = await User.findById(userId)
       .populate('profession', 'name')
+      .populate('favorites', 'name pseudo profilePic role')
       .lean();
 
     if (!user) {
@@ -268,24 +271,44 @@ export const getUserDetails = async (req, res) => {
         user: {
           id: user._id,
           baroniId: user.baroniId,
+          contact: user.contact,
+          email: user.email,
+          password: user.password ? '[HIDDEN]' : null,
+          coinBalance: user.coinBalance,
           name: user.name,
           pseudo: user.pseudo,
-          email: user.email,
-          contact: user.contact,
           profilePic: user.profilePic,
-          role: user.role,
+          preferredLanguage: user.preferredLanguage,
+          preferredCurrency: user.preferredCurrency,
           country: user.country,
-          profession: user.profession,
           about: user.about,
           location: user.location,
+          profession: user.profession,
+          role: user.role,
           availableForBookings: user.availableForBookings,
-          hidden: user.hidden,
           appNotification: user.appNotification,
-          coinBalance: user.coinBalance,
+          hidden: user.hidden,
+          fcmToken: user.fcmToken,
+          apnsToken: user.apnsToken,
+          voipToken: user.voipToken,
           deviceType: user.deviceType,
           isDev: user.isDev,
+          favorites: user.favorites,
+          isDeleted: user.isDeleted,
+          deletedAt: user.deletedAt,
+          providers: user.providers,
+          passwordResetToken: user.passwordResetToken ? '[HIDDEN]' : null,
+          passwordResetExpires: user.passwordResetExpires,
+          profileImpressions: user.profileImpressions,
+          sessionVersion: user.sessionVersion,
+          agoraKey: user.agoraKey,
+          chatToken: user.chatToken ? '[HIDDEN]' : null,
+          paymentStatus: user.paymentStatus,
+          averageRating: user.averageRating,
+          totalReviews: user.totalReviews,
+          feature_star: user.feature_star,
           createdAt: user.createdAt,
-          lastLoginAt: user.lastLoginAt
+          updatedAt: user.updatedAt
         },
         services,
         dedicationSamples,

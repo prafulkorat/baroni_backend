@@ -893,8 +893,11 @@ export const getStarById = async (req, res) => {
         starData.averageRating = avg;
         starData.totalReviews = count;
 
-        // fetch latest 5 reviews for this star
-        const latestReviews = await Review.find({ starId: id })
+        // fetch latest 5 reviews for this star (only visible ones)
+        const latestReviews = await Review.find({ 
+            starId: id,
+            isVisible: true // Only show visible reviews to users
+        })
             .populate('reviewerId', 'name pseudo profilePic agoraKey')
             .sort({ createdAt: -1 })
             .limit(5);

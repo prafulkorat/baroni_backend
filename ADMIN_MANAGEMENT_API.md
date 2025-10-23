@@ -24,7 +24,7 @@ Get all users with filtering, searching, and pagination.
 **Query Parameters:**
 - `page` (optional): Page number (default: 1)
 - `limit` (optional): Items per page (default: 20, max: 100)
-- `search` (optional): Search by name, pseudo, baroniId, or email
+- `search` (optional): Search by name, pseudo, baroniId, email, or contact
 - `role` (optional): Filter by role (fan, star, all)
 - `country` (optional): Filter by country
 - `status` (optional): Filter by status (active, blocked, all)
@@ -44,6 +44,7 @@ Get all users with filtering, searching, and pagination.
         "name": "John Doe",
         "pseudo": "johndoe",
         "email": "john@example.com",
+        "contact": "+1234567890",
         "profilePic": "url",
         "role": "star",
         "country": "USA",
@@ -95,24 +96,59 @@ Get detailed information about a specific user.
     "user": {
       "id": "user_id",
       "baroniId": "BR12345",
+      "contact": "+1234567890",
+      "email": "john@example.com",
+      "password": "[HIDDEN]",
+      "coinBalance": 100,
       "name": "John Doe",
       "pseudo": "johndoe",
-      "email": "john@example.com",
-      "contact": "+1234567890",
       "profilePic": "url",
-      "role": "star",
+      "preferredLanguage": "en",
+      "preferredCurrency": "F",
       "country": "USA",
-      "profession": "Actor",
       "about": "About text",
       "location": "Los Angeles",
+      "profession": "Actor",
+      "role": "star",
       "availableForBookings": true,
-      "hidden": false,
       "appNotification": true,
-      "coinBalance": 100,
+      "hidden": false,
+      "fcmToken": "fcm_token_here",
+      "apnsToken": "apns_token_here",
+      "voipToken": "voip_token_here",
       "deviceType": "ios",
       "isDev": false,
+      "favorites": [
+        {
+          "id": "favorite_user_id",
+          "name": "Favorite User",
+          "pseudo": "favoriteuser",
+          "profilePic": "url",
+          "role": "star"
+        }
+      ],
+      "isDeleted": false,
+      "deletedAt": null,
+      "providers": {
+        "google": {
+          "id": "google_id"
+        },
+        "apple": {
+          "id": "apple_id"
+        }
+      },
+      "passwordResetToken": "[HIDDEN]",
+      "passwordResetExpires": "2024-01-01T00:00:00.000Z",
+      "profileImpressions": 150,
+      "sessionVersion": 1,
+      "agoraKey": "1234567",
+      "chatToken": "[HIDDEN]",
+      "paymentStatus": "completed",
+      "averageRating": 4.5,
+      "totalReviews": 25,
+      "feature_star": true,
       "createdAt": "2024-01-01T00:00:00.000Z",
-      "lastLoginAt": "2024-01-01T00:00:00.000Z"
+      "updatedAt": "2024-01-01T00:00:00.000Z"
     },
     "services": [],
     "dedicationSamples": [],

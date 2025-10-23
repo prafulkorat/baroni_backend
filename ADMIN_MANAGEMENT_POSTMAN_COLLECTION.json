@@ -2489,6 +2489,646 @@
           }
         }
       ]
+    },
+    {
+      "name": "Appointment Manager APIs",
+      "item": [
+        {
+          "name": "Get Appointments with Filters",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/appointments?page=1&limit=20&search=&category=video_calls&status=pending&startDate=&endDate=&sortBy=createdAt&sortOrder=desc",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "appointments"],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "20"
+                },
+                {
+                  "key": "search",
+                  "value": ""
+                },
+                {
+                  "key": "category",
+                  "value": "video_calls"
+                },
+                {
+                  "key": "status",
+                  "value": "pending"
+                },
+                {
+                  "key": "startDate",
+                  "value": ""
+                },
+                {
+                  "key": "endDate",
+                  "value": ""
+                },
+                {
+                  "key": "sortBy",
+                  "value": "createdAt"
+                },
+                {
+                  "key": "sortOrder",
+                  "value": "desc"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Appointment Statistics",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/appointments/statistics?period=current_month&category=all",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "appointments", "statistics"],
+              "query": [
+                {
+                  "key": "period",
+                  "value": "current_month"
+                },
+                {
+                  "key": "category",
+                  "value": "all"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Approve Appointment",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"adminNotes\": \"Appointment approved by admin\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/admin/appointments/:appointmentId/approve",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "appointments", ":appointmentId", "approve"],
+              "variable": [
+                {
+                  "key": "appointmentId",
+                  "value": "APPOINTMENT_ID_HERE"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Reject Appointment",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"Schedule conflict\",\n  \"adminNotes\": \"Appointment rejected due to scheduling conflict\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/admin/appointments/:appointmentId/reject",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "appointments", ":appointmentId", "reject"],
+              "variable": [
+                {
+                  "key": "appointmentId",
+                  "value": "APPOINTMENT_ID_HERE"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Reschedule Appointment",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"newDateTime\": \"2025-07-26T10:30:00.000Z\",\n  \"reason\": \"Star requested reschedule\",\n  \"adminNotes\": \"Rescheduled to accommodate star's availability\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/admin/appointments/:appointmentId/reschedule",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "appointments", ":appointmentId", "reschedule"],
+              "variable": [
+                {
+                  "key": "appointmentId",
+                  "value": "APPOINTMENT_ID_HERE"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Cancel Appointment",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"User requested cancellation\",\n  \"refundAmount\": 2000,\n  \"adminNotes\": \"Appointment cancelled with full refund\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/admin/appointments/:appointmentId/cancel",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "appointments", ":appointmentId", "cancel"],
+              "variable": [
+                {
+                  "key": "appointmentId",
+                  "value": "APPOINTMENT_ID_HERE"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Appointment Details",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/appointments/:appointmentId",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "appointments", ":appointmentId"],
+              "variable": [
+                {
+                  "key": "appointmentId",
+                  "value": "APPOINTMENT_ID_HERE"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Live Show Appointments",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/appointments/live-shows?page=1&limit=20&status=completed&startDate=&endDate=",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "appointments", "live-shows"],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "20"
+                },
+                {
+                  "key": "status",
+                  "value": "completed"
+                },
+                {
+                  "key": "startDate",
+                  "value": ""
+                },
+                {
+                  "key": "endDate",
+                  "value": ""
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Dedication Appointments",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/appointments/dedications?page=1&limit=20&status=all&startDate=&endDate=",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "appointments", "dedications"],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "20"
+                },
+                {
+                  "key": "status",
+                  "value": "all"
+                },
+                {
+                  "key": "startDate",
+                  "value": ""
+                },
+                {
+                  "key": "endDate",
+                  "value": ""
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Call Logs APIs",
+      "item": [
+        {
+          "name": "Get Call Logs Statistics",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/call-logs/statistics?period=current_month",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "call-logs", "statistics"],
+              "query": [
+                {
+                  "key": "period",
+                  "value": "current_month"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Call Logs with Filters",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/call-logs?page=1&limit=20&status=all&startDate=&endDate=&search=&sortBy=createdAt&sortOrder=desc",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "call-logs"],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "20"
+                },
+                {
+                  "key": "status",
+                  "value": "all"
+                },
+                {
+                  "key": "startDate",
+                  "value": ""
+                },
+                {
+                  "key": "endDate",
+                  "value": ""
+                },
+                {
+                  "key": "search",
+                  "value": ""
+                },
+                {
+                  "key": "sortBy",
+                  "value": "createdAt"
+                },
+                {
+                  "key": "sortOrder",
+                  "value": "desc"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Completed Call Logs",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/call-logs/completed?page=1&limit=20&startDate=&endDate=&search=",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "call-logs", "completed"],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "20"
+                },
+                {
+                  "key": "startDate",
+                  "value": ""
+                },
+                {
+                  "key": "endDate",
+                  "value": ""
+                },
+                {
+                  "key": "search",
+                  "value": ""
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Missed Call Logs",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/call-logs/missed?page=1&limit=20&startDate=&endDate=&search=",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "call-logs", "missed"],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "20"
+                },
+                {
+                  "key": "startDate",
+                  "value": ""
+                },
+                {
+                  "key": "endDate",
+                  "value": ""
+                },
+                {
+                  "key": "search",
+                  "value": ""
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Call Log Details",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/call-logs/:callLogId",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "call-logs", ":callLogId"],
+              "variable": [
+                {
+                  "key": "callLogId",
+                  "value": "CALL_LOG_ID_HERE"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Call Logs by Star",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/call-logs/star/:starId?page=1&limit=20&status=all&startDate=&endDate=",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "call-logs", "star", ":starId"],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "20"
+                },
+                {
+                  "key": "status",
+                  "value": "all"
+                },
+                {
+                  "key": "startDate",
+                  "value": ""
+                },
+                {
+                  "key": "endDate",
+                  "value": ""
+                }
+              ],
+              "variable": [
+                {
+                  "key": "starId",
+                  "value": "STAR_ID_HERE"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Call Logs by User",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/call-logs/user/:userId?page=1&limit=20&status=all&startDate=&endDate=",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "call-logs", "user", ":userId"],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "20"
+                },
+                {
+                  "key": "status",
+                  "value": "all"
+                },
+                {
+                  "key": "startDate",
+                  "value": ""
+                },
+                {
+                  "key": "endDate",
+                  "value": ""
+                }
+              ],
+              "variable": [
+                {
+                  "key": "userId",
+                  "value": "USER_ID_HERE"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update Call Log Status",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"completed\",\n  \"actualDuration\": 14,\n  \"adminNotes\": \"Call completed successfully\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/admin/call-logs/:callLogId/status",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "call-logs", ":callLogId", "status"],
+              "variable": [
+                {
+                  "key": "callLogId",
+                  "value": "CALL_LOG_ID_HERE"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Call Log Analytics",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/call-logs/analytics?period=current_month&groupBy=day",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "call-logs", "analytics"],
+              "query": [
+                {
+                  "key": "period",
+                  "value": "current_month"
+                },
+                {
+                  "key": "groupBy",
+                  "value": "day"
+                }
+              ]
+            }
+          }
+        }
+      ]
     }
   ],
   "event": [

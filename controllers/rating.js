@@ -349,6 +349,7 @@ export const getStarReviews = async (req, res) => {
       });
     }
 
+    // Get only visible reviews for the list
     const reviews = await Review.find({ 
       starId,
       isVisible: true // Only show visible reviews to users
@@ -356,6 +357,7 @@ export const getStarReviews = async (req, res) => {
     .populate('reviewerId', 'name pseudo profilePic agoraKey')
     .sort({ createdAt: -1 });
 
+    // Get star's actual rating data (includes all reviews for calculation)
     const star = await User.findById(starId).select('averageRating totalReviews');
 
     return res.json({
@@ -372,7 +374,8 @@ export const getStarReviews = async (req, res) => {
         })),
         star: {
           averageRating: star?.averageRating || 0,
-          totalReviews: reviews.length
+          totalReviews: star?.totalReviews || 0, // Use actual total from database (includes hidden reviews)
+          visibleReviews: reviews.length // Add count of visible reviews
         }
       }
     });
@@ -384,7 +387,7 @@ export const getStarReviews = async (req, res) => {
 // Get user's submitted reviews
 export const getMyReviews = async (req, res) => {
   try {
-    // If the requester is a star, return all reviews received for the star
+    // If the requester is a star, return all reviews received for the star (including hidden ones for stars to see)
     // If the requester is a fan, return reviews submitted by the fan
     const isStar = req.user.role === 'star';
     const filter = isStar ? { starId: req.user._id } : { reviewerId: req.user._id };
@@ -404,7 +407,9 @@ export const getMyReviews = async (req, res) => {
           // If star is requesting, include reviewer details; otherwise include star details
           ...(isStar
             ? {
-                reviewer: review.reviewerId ? sanitizeUserData(review.reviewerId) : null
+                reviewer: review.reviewerId ? sanitizeUserData(review.reviewerId) : null,
+                isVisible: review.isVisible, // Stars can see visibility status
+                isDefaultRating: review.isDefaultRating
               }
             : {
                 star: review.starId ? sanitizeUserData(review.starId) : null
