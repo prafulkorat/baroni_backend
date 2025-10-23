@@ -56,7 +56,7 @@ export const sanitizeUserData = (user) => {
 
   // Handle boolean fields - ensure they have proper boolean values
   const booleanFields = [
-    'availableForBookings', 'appNotification', 'hidden', 'isDeleted'
+    'availableForBookings', 'appNotification', 'hidden', 'isDeleted', 'feature_star'
   ];
 
   booleanFields.forEach(field => {
@@ -133,6 +133,7 @@ export const createSanitizedUserResponse = (user) => {
     availableForBookings: sanitized.availableForBookings,
     appNotification: sanitized.appNotification,
     hidden: sanitized.hidden,
+    feature_star: sanitized.feature_star,
     coinBalance: sanitized.coinBalance,
     agoraKey: sanitized.agoraKey,
     profileImpressions: sanitized.profileImpressions,
