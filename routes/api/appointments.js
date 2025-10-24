@@ -15,6 +15,11 @@ const createAppointmentValidator = [
   body('price').isNumeric().withMessage('Price must be a number').isFloat({ min: 0 }).withMessage('Price must be greater than or equal to 0'),
 ];
 
+const rescheduleAppointmentValidator = [
+  body('availabilityId').isMongoId().withMessage('Invalid availability ID'),
+  body('timeSlotId').isMongoId().withMessage('Invalid time slot ID'),
+];
+
 router.post('/', createAppointmentValidator, createAppointment);
 router.get('/', [...paginationQueryValidator, ...appointmentStatusQueryValidator], listAppointments);
 router.get('/:id', idParamValidator, getAppointmentDetails);
@@ -23,9 +28,16 @@ router.post('/:id/reject', requireRole('star', 'admin'), idParamValidator, rejec
 router.post('/:id/cancel', idParamValidator, cancelAppointment);
 router.post('/:id/reschedule', [
   idParamValidator,
-  body('availabilityId').isMongoId(),
-  body('timeSlotId').isMongoId(),
-], rescheduleAppointment);
+  ...rescheduleAppointmentValidator
+], (req, res, next) => {
+  console.log('Reschedule route hit:', req.params.id);
+  next();
+}, rescheduleAppointment);
+
+// Test route to verify router is working
+router.get('/test', (req, res) => {
+  res.json({ success: true, message: 'Appointments router is working' });
+});
 router.post('/:id/complete', [
   idParamValidator,
   body('callDuration').isNumeric().withMessage('Call duration must be a number').isFloat({ min: 0 }).withMessage('Call duration must be greater than or equal to 0')

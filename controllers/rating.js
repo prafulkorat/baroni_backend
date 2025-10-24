@@ -388,9 +388,11 @@ export const getStarReviews = async (req, res) => {
 export const getMyReviews = async (req, res) => {
   try {
     // If the requester is a star, return all reviews received for the star (including hidden ones for stars to see)
-    // If the requester is a fan, return reviews submitted by the fan
+    // If the requester is a fan, return reviews submitted by the fan (only visible ones)
     const isStar = req.user.role === 'star';
-    const filter = isStar ? { starId: req.user._id } : { reviewerId: req.user._id };
+    const filter = isStar 
+      ? { starId: req.user._id } 
+      : { reviewerId: req.user._id, isVisible: true }; // Only show visible reviews for fans
 
     const reviews = await Review.find(filter)
       .populate(isStar ? 'reviewerId' : 'starId', 'name pseudo profilePic agoraKey')

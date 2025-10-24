@@ -86,7 +86,7 @@ export const getUserNotifications = async (req, res) => {
     const allowedTypes = ['appointment', 'payment', 'rating', 'live_show', 'dedication', 'message', 'general', 'star_promotion', 'voip', 'push'];
     const typeFilter = type && allowedTypes.includes(type) ? type : null;
 
-    const query = { user: userId };
+    const query = { user: userId, type: { $ne: 'voip' } }; // Exclude VoIP notifications
     if (typeFilter) {
       query.type = typeFilter;
     }

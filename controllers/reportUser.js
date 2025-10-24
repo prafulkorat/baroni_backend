@@ -1,6 +1,7 @@
 import { validationResult } from 'express-validator';
 import { getFirstValidationError } from '../utils/validationHelper.js';
 import ReportUser from '../models/ReportUser.js';
+import User from '../models/User.js';
 import mongoose from 'mongoose';
 import { sanitizeUserData } from '../utils/userDataHelper.js';
 
@@ -20,19 +21,57 @@ export const createReport = async (req, res) => {
       return res.status(400).json({ success: false, message: errorMessage || 'Validation failed' });
     }
 
-    const { reportedUserId } = req.body;
+    const { reportedUserId, reason, description } = req.body;
+
+    // Check if the reported user exists and get their role
+    const reportedUser = await User.findById(reportedUserId);
+    if (!reportedUser) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Reported user not found' 
+      });
+    }
+
+    // Check if user is trying to report themselves
+    if (reportedUserId.toString() === req.user._id.toString()) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'You cannot report yourself' 
+      });
+    }
+
+    // Check if user has already reported this user
+    const existingReport = await ReportUser.findOne({
+      reporterId: req.user._id,
+      reportedUserId: reportedUserId
+    });
+
+    if (existingReport) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'You have already reported this user' 
+      });
+    }
 
     const created = await ReportUser.create({
       reporterId: req.user._id,
-      reportedUserId
+      reportedUserId,
+      reportedUserRole: reportedUser.role,
+      reason: reason?.trim(),
+      description: description?.trim()
     });
 
     const populated = await ReportUser.findById(created._id)
-      .populate('reporterId', '-password -passwordResetToken -passwordResetExpires')
-      .populate('reportedUserId', '-password -passwordResetToken -passwordResetExpires');
+      .populate('reporterId', 'name pseudo profilePic baroniId role')
+      .populate('reportedUserId', 'name pseudo profilePic baroniId role');
 
-    return res.status(201).json({ success: true, data: sanitize(populated) });
+    return res.status(201).json({ 
+      success: true, 
+      message: 'User reported successfully',
+      data: sanitize(populated) 
+    });
   } catch (err) {
+    console.error('Create report error:', err);
     return res.status(500).json({ success: false, message: err.message });
   }
 };

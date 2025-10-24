@@ -8,6 +8,7 @@ import Transaction from '../models/Transaction.js'; // Added missing import for 
 import NotificationHelper from '../utils/notificationHelper.js';
 import { deleteConversationBetweenUsers } from '../services/messagingCleanup.js';
 import { sanitizeUserData } from '../utils/userDataHelper.js';
+import mongoose from 'mongoose';
 
 const toUser = (u) => u ? sanitizeUserData(u) : null;
 
@@ -34,6 +35,8 @@ const sanitize = (doc) => ({
   // Keep transaction status light; paymentStatus covers domain payment lifecycle
   completedAt: doc.completedAt,
   callDuration: typeof doc.callDuration === 'number' ? doc.callDuration : undefined,
+  ...(doc.isRescheduled !== undefined ? { isRescheduled: doc.isRescheduled } : {}),
+  ...(doc.parentAppointment ? { parentAppointment: doc.parentAppointment } : {}),
   createdAt: doc.createdAt,
   updatedAt: doc.updatedAt,
 });
@@ -636,18 +639,29 @@ export const rescheduleAppointment = async (req, res) => {
 
     const filter = { _id: id };
     if (req.user.role !== 'admin') filter.fanId = req.user._id;
-    const appt = await Appointment.findOne(filter);
-    if (!appt) return res.status(404).json({ success: false, message: 'Appointment not found' });
-    if (appt.status === 'cancelled') return res.status(400).json({ success: false, message: 'Cannot reschedule a cancelled appointment' });
+    const existingAppointment = await Appointment.findOne(filter)
+      .populate('starId', 'name pseudo baroniId')
+      .populate('fanId', 'name pseudo baroniId');
+    
+    if (!existingAppointment) return res.status(404).json({ success: false, message: 'Appointment not found' });
+    
+    console.log(`[RescheduleAppointment] Found appointment ${id} with status: ${existingAppointment.status}`);
+    
+    // Allow rescheduling regardless of current status
 
     // Verify new availability belongs to the same star and slot is available
-    const availability = await Availability.findOne({ _id: availabilityId, userId: appt.starId });
-    if (!availability) return res.status(404).json({ success: false, message: 'Availability not found for this star' });
+    const newAvailability = await Availability.findOne({ _id: availabilityId, userId: existingAppointment.starId._id });
+    if (!newAvailability) return res.status(404).json({ success: false, message: 'Availability not found for this star' });
+
+    // Find the specific time slot
+    const newTimeSlot = newAvailability.timeSlots.find(slot => slot._id.toString() === timeSlotId.toString());
+    if (!newTimeSlot) return res.status(404).json({ success: false, message: 'Time slot not found' });
+    if (newTimeSlot.status !== 'available') return res.status(409).json({ success: false, message: 'Time slot unavailable' });
 
     // Validate that the rescheduled date is not in the past
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    const rescheduleDate = new Date(availability.date);
+    const rescheduleDate = new Date(newAvailability.date);
 
     if (rescheduleDate < today) {
       return res.status(400).json({
@@ -660,58 +674,95 @@ export const rescheduleAppointment = async (req, res) => {
     const isToday = rescheduleDate.getTime() === today.getTime();
     if (isToday) {
       const now = new Date();
-      const currentTime = now.getHours() * 60 + now.getMinutes();
-
-      const timeMatch = availability.timeSlots.find(s => String(s._id) === String(timeSlotId))?.slot?.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)/i);
-      if (timeMatch) {
-        let hour = parseInt(timeMatch[1], 10);
-        const minute = parseInt(timeMatch[2], 10);
-        const ampm = timeMatch[3].toUpperCase();
-
-        if (ampm === 'PM' && hour !== 12) hour += 12;
-        if (ampm === 'AM' && hour === 12) hour = 0;
-
-        const slotTime = hour * 60 + minute;
-        if (slotTime <= currentTime) {
-          return res.status(400).json({
-            success: false,
-            message: `Cannot reschedule appointments to past time slots. Time slot is in the past.`
-          });
-        }
+      const slotTime = new Date(`${newAvailability.date} ${newTimeSlot.slot.split(' - ')[0]}`);
+      
+      if (slotTime <= now) {
+        return res.status(400).json({
+          success: false,
+          message: 'Cannot reschedule to past time slots'
+        });
       }
     }
 
-    const newSlot = availability.timeSlots.find((s) => String(s._id) === String(timeSlotId));
-    if (!newSlot) return res.status(404).json({ success: false, message: 'Time slot not found' });
-    if (newSlot.status === 'unavailable') return res.status(409).json({ success: false, message: 'Time slot unavailable' });
+    // Start transaction to ensure data consistency
+    const session = await mongoose.startSession();
+    session.startTransaction();
 
-    // If previously approved, free the old slot
-    if (appt.status === 'approved') {
-      const oldAvailability = await Availability.findOne({ _id: appt.availabilityId, userId: appt.starId });
-      if (oldAvailability) {
-        const oldSlot = oldAvailability.timeSlots.find((s) => String(s._id) === String(appt.timeSlotId));
-        if (oldSlot && oldSlot.status === 'unavailable') {
-          oldSlot.status = 'available';
-          await oldAvailability.save();
-        }
+    try {
+      // Update the old appointment status to rescheduled
+      await Appointment.findByIdAndUpdate(
+        id,
+        { status: 'rescheduled' },
+        { session }
+      );
+
+      // Create new appointment with reschedule flags
+      const newAppointment = await Appointment.create([{
+        starId: existingAppointment.starId._id,
+        fanId: existingAppointment.fanId._id,
+        availabilityId: newAvailability._id,
+        timeSlotId: timeSlotId,
+        date: newAvailability.date,
+        time: newTimeSlot.slot,
+        price: existingAppointment.price, // Use same price as original
+        status: 'pending',
+        paymentStatus: 'completed', // No payment needed for reschedule
+        transactionId: existingAppointment.transactionId, // Use same transaction
+        isRescheduled: true,
+        parentAppointment: id
+      }], { session });
+
+      // Reserve the new slot
+      await Availability.updateOne(
+        { _id: availabilityId, userId: existingAppointment.starId._id, 'timeSlots._id': timeSlotId },
+        { $set: { 'timeSlots.$.status': 'unavailable' } },
+        { session }
+      );
+
+      // Release the old slot
+      await Availability.updateOne(
+        { _id: existingAppointment.availabilityId, userId: existingAppointment.starId._id, 'timeSlots._id': existingAppointment.timeSlotId },
+        { $set: { 'timeSlots.$.status': 'available' } },
+        { session }
+      );
+
+      await session.commitTransaction();
+      session.endSession();
+
+      // Populate the new appointment with related data (after transaction is committed)
+      const populatedNewAppointment = await Appointment.findById(newAppointment[0]._id)
+        .populate('starId', 'name pseudo baroniId profilePic')
+        .populate('fanId', 'name pseudo baroniId profilePic')
+        .populate('availabilityId');
+
+      // Send notification to star about reschedule (after transaction is committed)
+      try {
+        await NotificationHelper.sendAppointmentNotification('APPOINTMENT_RESCHEDULED', populatedNewAppointment, { 
+          currentUserId: req.user._id,
+          originalAppointmentId: id
+        });
+      } catch (notificationError) {
+        console.error('Error sending reschedule notification:', notificationError);
+        // Don't fail the request if notification fails
       }
+
+      return res.status(201).json({
+        success: true,
+        message: 'Appointment rescheduled successfully',
+        data: {
+          newAppointment: sanitize(populatedNewAppointment),
+          originalAppointmentId: id
+        }
+      });
+
+    } catch (error) {
+      await session.abortTransaction();
+      session.endSession();
+      throw error;
     }
 
-    // Update appointment to new slot and reset status to pending for re-approval
-    appt.availabilityId = availabilityId;
-    appt.timeSlotId = timeSlotId;
-    appt.date = availability.date;
-    appt.time = newSlot.slot;
-    appt.status = 'pending';
-    const updated = await appt.save();
-    return res.json({ 
-      success: true, 
-      message: 'Appointment rescheduled successfully',
-      data: {
-        appointment: sanitize(updated)
-      }
-    });
   } catch (err) {
+    console.error('Reschedule appointment error:', err);
     return res.status(500).json({ success: false, message: err.message });
   }
 };
