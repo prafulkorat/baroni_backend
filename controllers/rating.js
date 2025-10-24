@@ -387,11 +387,10 @@ export const getStarReviews = async (req, res) => {
 // Get user's submitted reviews
 export const getMyReviews = async (req, res) => {
   try {
-    // If the requester is a star, return all reviews received for the star (including hidden ones for stars to see)
-    // If the requester is a fan, return reviews submitted by the fan (only visible ones)
+    // Return only visible reviews for all users
     const isStar = req.user.role === 'star';
     const filter = isStar 
-      ? { starId: req.user._id } 
+      ? { starId: req.user._id, isVisible: true } // Only show visible reviews for stars
       : { reviewerId: req.user._id, isVisible: true }; // Only show visible reviews for fans
 
     const reviews = await Review.find(filter)
@@ -410,7 +409,6 @@ export const getMyReviews = async (req, res) => {
           ...(isStar
             ? {
                 reviewer: review.reviewerId ? sanitizeUserData(review.reviewerId) : null,
-                isVisible: review.isVisible, // Stars can see visibility status
                 isDefaultRating: review.isDefaultRating
               }
             : {
