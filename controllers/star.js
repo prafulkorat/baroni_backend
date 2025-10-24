@@ -833,6 +833,21 @@ export const getStarById = async (req, res) => {
             starData.isMessage = false;
         }
 
+        // Check if star has available time slots and update availableForBookings accordingly
+        const hasAvailableTimeSlots = await Availability.findOne({
+            userId: id,
+            'timeSlots.status': 'available'
+        });
+
+        // Update availableForBookings logic based on time slot availability
+        if (starData.availableForBookings === true) {
+            // If availableForBookings is true, check if there are available time slots
+            starData.availableForBookings = hasAvailableTimeSlots ? true : false;
+        } else {
+            // If availableForBookings is false, keep it false
+            starData.availableForBookings = false;
+        }
+
         // ---- Conversation fetch ----
         let conversation = null;
         if (req.user) {

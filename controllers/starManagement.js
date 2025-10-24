@@ -6,6 +6,7 @@ import Transaction from '../models/Transaction.js';
 import Appointment from '../models/Appointment.js';
 import DedicationRequest from '../models/DedicationRequest.js';
 import LiveShow from '../models/LiveShow.js';
+import Availability from '../models/Availability.js';
 import mongoose from 'mongoose';
 
 // Get star profile details with comprehensive information
@@ -117,6 +118,23 @@ export const getStarProfile = async (req, res) => {
       })
     ]);
 
+    // Check if star has available time slots
+    const hasAvailableTimeSlots = await Availability.findOne({
+      userId: star._id,
+      'timeSlots.status': 'available'
+    });
+
+    // Update availableForBookings logic based on time slot availability
+    let finalAvailableForBookings = star.availableForBookings;
+    
+    if (star.availableForBookings === true) {
+      // If availableForBookings is true, check if there are available time slots
+      finalAvailableForBookings = hasAvailableTimeSlots ? true : false;
+    } else {
+      // If availableForBookings is false, keep it false
+      finalAvailableForBookings = false;
+    }
+
     return res.json({
       success: true,
       message: 'Star profile retrieved successfully',
@@ -134,7 +152,7 @@ export const getStarProfile = async (req, res) => {
           profession: star.profession,
           about: star.about,
           location: star.location,
-          availableForBookings: star.availableForBookings,
+          availableForBookings: finalAvailableForBookings,
           hidden: star.hidden,
           appNotification: star.appNotification,
           coinBalance: star.coinBalance,
