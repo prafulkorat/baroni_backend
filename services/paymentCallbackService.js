@@ -188,6 +188,10 @@ export const processPaymentCallback = async (callbackData) => {
         
         // Send appointment notification to star after payment success
         await sendAppointmentNotificationAfterPayment(transaction, null);
+        
+        // Send dedication request notification to star after payment success
+        await sendDedicationRequestNotificationAfterPayment(transaction, null);
+        
         console.log(`[PaymentCallback] Notifications sent successfully`);
       }
     } catch (notificationError) {
@@ -400,6 +404,44 @@ const sendAppointmentNotificationAfterPayment = async (transaction, session) => 
     }
   } catch (error) {
     console.error('Error sending appointment notification after payment:', error);
+    // Don't throw error to avoid breaking the payment callback
+  }
+};
+
+/**
+ * Send dedication request notification to star after payment success
+ * @param {Object} transaction - Transaction object
+ * @param {Object} session - MongoDB session
+ */
+const sendDedicationRequestNotificationAfterPayment = async (transaction, session) => {
+  try {
+    // Only send notification for dedication request payments
+    if (transaction.type === 'dedication_request_payment') {
+      // Find the dedication request
+      const dedicationRequest = await DedicationRequest.findOne({ 
+        transactionId: transaction._id 
+      }).session(session);
+      
+      if (dedicationRequest) {
+        // Check if this is a hybrid payment (external payment completed)
+        // Coin-only payments are handled immediately in dedication request creation
+        const isHybridPayment = transaction.externalAmount && transaction.externalAmount > 0;
+        
+        if (isHybridPayment) {
+          console.log(`[PaymentCallback] Sending dedication request notification for hybrid payment - transaction ${transaction._id}, dedicationRequest ${dedicationRequest._id}`);
+          // Send dedication request notification to star for hybrid payments
+          await NotificationHelper.sendDedicationNotification('DEDICATION_REQUEST_CREATED', dedicationRequest, { 
+            currentUserId: dedicationRequest.fanId 
+          });
+        } else {
+          console.log(`[PaymentCallback] Skipping notification for coin-only payment - transaction ${transaction._id}, dedicationRequest ${dedicationRequest._id}`);
+        }
+      } else {
+        console.log(`[PaymentCallback] No dedication request found for transaction ${transaction._id}`);
+      }
+    }
+  } catch (error) {
+    console.error('Error sending dedication request notification after payment:', error);
     // Don't throw error to avoid breaking the payment callback
   }
 };

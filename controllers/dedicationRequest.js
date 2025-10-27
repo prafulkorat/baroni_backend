@@ -115,9 +115,12 @@ export const createDedicationRequest = async (req, res) => {
       transactionId: transaction._id
     });
 
-    // Notify star
+    // Notify star ONLY if payment is already complete (pending status)
+    // If paymentStatus is 'initiated', wait for external payment to complete before notifying
     try {
-      await NotificationHelper.sendDedicationNotification('DEDICATION_REQUEST_CREATED', created, { currentUserId: req.user._id });
+      if (created.paymentStatus === 'pending') {
+        await NotificationHelper.sendDedicationNotification('DEDICATION_REQUEST_CREATED', created, { currentUserId: req.user._id });
+      }
     } catch (notificationError) {
       console.error('Error sending dedication notification:', notificationError);
     }
@@ -152,6 +155,8 @@ export const listDedicationRequests = async (req, res) => {
       filter.fanId = req.user._id;
     } else if (req.user.role === 'star') {
       filter.starId = req.user._id;
+      // Star should only see requests where payment is complete (not 'initiated')
+      filter.paymentStatus = { $ne: 'initiated' };
     } else if (req.user.role === 'admin') {
       // Admin can see all requests - no filter applied
     } else {
@@ -224,6 +229,11 @@ export const getDedicationRequest = async (req, res) => {
         item.starId._id.toString() !== req.user._id.toString()) {
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
+    
+    // Stars should not be able to access requests where payment is not complete
+    if (req.user.role === 'star' && item.paymentStatus === 'initiated') {
+      return res.status(403).json({ success: false, message: 'Request not available - payment pending' });
+    }
 
     return res.json({ 
       success: true, 
@@ -256,6 +266,11 @@ export const approveDedicationRequest = async (req, res) => {
     const item = await DedicationRequest.findOne(filter);
 
     if (!item) return res.status(404).json({ success: false, message: 'Request not found or already processed' });
+
+    // Stars cannot approve requests where payment is not complete
+    if (req.user.role === 'star' && item.paymentStatus === 'initiated') {
+      return res.status(403).json({ success: false, message: 'Cannot approve - payment not complete' });
+    }
 
     item.status = 'approved';
     item.approvedAt = new Date();
@@ -300,6 +315,11 @@ export const rejectDedicationRequest = async (req, res) => {
     const item = await DedicationRequest.findOne(filter);
 
     if (!item) return res.status(404).json({ success: false, message: 'Request not found or already processed' });
+
+    // Stars cannot reject requests where payment is not complete
+    if (req.user.role === 'star' && item.paymentStatus === 'initiated') {
+      return res.status(403).json({ success: false, message: 'Cannot reject - payment not complete' });
+    }
 
     item.status = 'rejected';
     item.rejectedAt = new Date();
