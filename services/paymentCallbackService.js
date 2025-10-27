@@ -399,7 +399,7 @@ const sendAppointmentNotificationAfterPayment = async (transaction, session) => 
       if (appointment) {
         // Check if this is a hybrid payment (external payment completed)
         // Coin-only payments are handled immediately in appointment creation
-        const isHybridPayment = transaction.metadata && transaction.metadata.externalAmount > 0;
+        const isHybridPayment = transaction.externalAmount && transaction.externalAmount > 0;
         
         if (isHybridPayment) {
           console.log(`[PaymentCallback] Sending appointment notification for hybrid payment - transaction ${transaction._id}, appointment ${appointment._id}`);

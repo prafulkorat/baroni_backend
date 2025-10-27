@@ -77,6 +77,14 @@ export const getAppointmentDetails = async (req, res) => {
         message: 'Appointment not found'
       });
     }
+    
+    // Stars should not be able to access appointments where payment is not complete
+    if (req.user.role === 'star' && appointment.paymentStatus === 'initiated') {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Appointment not available - payment pending' 
+      });
+    }
 
     // Add computed fields similar to listAppointments
     const parseStartDate = (dateStr, timeStr) => {
@@ -304,6 +312,11 @@ export const listAppointments = async (req, res) => {
     const isStar = req.user.role === 'star' || req.user.role === 'admin';
     const filter = isStar ? { starId: req.user._id } : { fanId: req.user._id };
     
+    // Stars should only see appointments where payment is complete (not 'initiated')
+    if (req.user.role === 'star') {
+      filter.paymentStatus = { $ne: 'initiated' };
+    }
+    
     // Optional date filtering: exact date or range via startDate/endDate (expects YYYY-MM-DD strings)
     const { date, startDate, endDate, status, page = 1, limit = 10 } = req.query || {};
     
@@ -492,6 +505,11 @@ export const approveAppointment = async (req, res) => {
     const appt = await Appointment.findOne({ _id: id, starId: req.user._id });
     if (!appt) return res.status(404).json({ success: false, message: 'Appointment not found' });
     if (appt.status !== 'pending') return res.status(400).json({ success: false, message: 'Only pending can be approved' });
+    
+    // Stars cannot approve appointments where payment is not complete
+    if (appt.paymentStatus === 'initiated') {
+      return res.status(403).json({ success: false, message: 'Cannot approve - payment not complete' });
+    }
 
     appt.status = 'approved';
     const updated = await appt.save();
@@ -535,6 +553,11 @@ export const rejectAppointment = async (req, res) => {
     const appt = await Appointment.findOne({ _id: id, starId: req.user._id });
     if (!appt) return res.status(404).json({ success: false, message: 'Appointment not found' });
     if (appt.status !== 'pending') return res.status(400).json({ success: false, message: 'Only pending can be rejected' });
+    
+    // Stars cannot reject appointments where payment is not complete
+    if (appt.paymentStatus === 'initiated') {
+      return res.status(403).json({ success: false, message: 'Cannot reject - payment not complete' });
+    }
     appt.status = 'rejected';
     // Cancel and refund the pending transaction, if any
     if (appt.transactionId) {
