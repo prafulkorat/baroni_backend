@@ -29,34 +29,43 @@ export const processPaymentCallback = async (callbackData) => {
     // CRITICAL FIX: Remove session.withTransaction to avoid rollback issues
     console.log('Starting callback processing without MongoDB transaction...');
     
+    // Declare variables in outer scope
+    let status = null;
+    let transaction = null;
+    
     try {
       // Validate callback data
       console.log('Validating callback data...');
       const validatedData = orangeMoneyService.validateCallbackData(callbackData);
       console.log('Validated data:', JSON.stringify(validatedData, null, 2));
       
-      const { transactionId, status, motif, amount } = validatedData;
+      const { transactionId, status: callbackStatus, motif, amount } = validatedData;
+      status = callbackStatus;
 
       // Find transaction by external payment ID
       console.log(`Looking for transaction with externalPaymentId: ${transactionId}`);
-      const transaction = await Transaction.findOne({ 
+      transaction = await Transaction.findOne({ 
         externalPaymentId: transactionId 
       });
 
-      console.log('Found transaction:', transaction ? {
-        id: transaction._id,
-        type: transaction.type,
-        status: transaction.status,
-        amount: transaction.amount,
-        payerId: transaction.payerId,
-        receiverId: transaction.receiverId,
-        paymentMode: transaction.paymentMode,
-        coinAmount: transaction.coinAmount,
-        externalAmount: transaction.externalAmount,
-        externalPaymentId: transaction.externalPaymentId,
-        refundTimer: transaction.refundTimer,
-        createdAt: transaction.createdAt
-      } : 'No transaction found');
+      if (transaction) {
+        console.log('Found transaction:', {
+          id: transaction._id,
+          type: transaction.type,
+          status: transaction.status,
+          amount: transaction.amount,
+          payerId: transaction.payerId,
+          receiverId: transaction.receiverId,
+          paymentMode: transaction.paymentMode,
+          coinAmount: transaction.coinAmount,
+          externalAmount: transaction.externalAmount,
+          externalPaymentId: transaction.externalPaymentId,
+          refundTimer: transaction.refundTimer,
+          createdAt: transaction.createdAt
+        });
+      } else {
+        console.log('No transaction found');
+      }
 
       if (!transaction) {
         throw new Error('Transaction not found');
@@ -181,7 +190,7 @@ export const processPaymentCallback = async (callbackData) => {
 
     // Send notifications AFTER processing is completed
     try {
-      if (status === 'completed') {
+      if (status === 'completed' && transaction) {
         console.log(`[PaymentCallback] Sending notifications...`);
         // Send star promotion notification to the new star
         await sendStarPromotionNotification(transaction, null);
