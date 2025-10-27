@@ -192,8 +192,11 @@ export const processPaymentCallback = async (callbackData) => {
     try {
       if (status === 'completed' && transaction) {
         console.log(`[PaymentCallback] Sending notifications...`);
-        // Send star promotion notification to the new star
-        await sendStarPromotionNotification(transaction, null);
+        
+        // Only send star promotion notification for become_star_payment type
+        if (transaction.type === 'become_star_payment') {
+          await sendStarPromotionNotification(transaction, null);
+        }
         
         // Send appointment notification to star after payment success
         await sendAppointmentNotificationAfterPayment(transaction, null);
@@ -490,9 +493,9 @@ const sendStarPromotionNotification = async (transaction, session) => {
       isMessage: false
     };
 
-    const options = {
-      relatedEntity: { type: 'user', id: user._id }
-    };
+    // Don't set relatedEntity for star promotion notifications
+    // as it's user-specific and not related to other entities
+    const options = {};
 
     // Send notification to the new star
     await notificationService.sendToUser(user._id.toString(), notificationData, data, options);
