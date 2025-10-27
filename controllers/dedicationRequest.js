@@ -233,31 +233,49 @@ export const listDedicationRequests = async (req, res) => {
       };
     });
 
+    const approvedWithoutVideo = [];
     const pending = [];
+    const approvedWithVideo = [];
     const future = [];
     const past = [];
     const cancelled = [];
+    
     for (const it of withComputed) {
-      if (it.status === 'cancelled') {
+      if (it.status === 'cancelled' || it.status === 'rejected') {
         cancelled.push(it);
       } else if (it.status === 'pending') {
         pending.push(it);
-      } else if (typeof it.timeToNowMs === 'number' && it.timeToNowMs >= 0) {
-        future.push(it);
-      } else {
-        past.push(it);
+      } else if (it.status === 'approved') {
+        // Check if video is uploaded
+        if (!it.videoUrl) {
+          approvedWithoutVideo.push(it);
+        } else {
+          approvedWithVideo.push(it);
+        }
+      } else if (it.status === 'completed') {
+        if (typeof it.timeToNowMs === 'number' && it.timeToNowMs >= 0) {
+          future.push(it);
+        } else {
+          past.push(it);
+        }
       }
     }
+    
+    // Sort approved without video by approval time (most recent first)
+    approvedWithoutVideo.sort((a, b) => new Date(b.approvedAt || b.createdAt).getTime() - new Date(a.approvedAt || a.createdAt).getTime());
     // Sort pending by creation time (most recent first)
     pending.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    // Sort approved with video by approval time (most recent first)
+    approvedWithVideo.sort((a, b) => new Date(b.approvedAt || b.createdAt).getTime() - new Date(a.approvedAt || a.createdAt).getTime());
     // Sort future by event time (nearest first)
     future.sort((a, b) => (a.timeToNowMs ?? Infinity) - (b.timeToNowMs ?? Infinity));
     // Sort past by event time (most recent first)
     past.sort((a, b) => Math.abs(b.timeToNowMs ?? 0) - Math.abs(a.timeToNowMs ?? 0));
     // Sort cancelled by update time (most recent first)
     cancelled.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
-    // Return pending first, then future, then past, then cancelled
-    const data = [...pending, ...future, ...past, ...cancelled];
+    
+    // Return: approved without video first, then pending, then approved with video, then future, then past, then cancelled
+    const data = [...approvedWithoutVideo, ...pending, ...approvedWithVideo, ...future, ...past, ...cancelled];
 
     return res.json({ 
       success: true, 
