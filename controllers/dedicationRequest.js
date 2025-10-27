@@ -10,6 +10,7 @@ import NotificationHelper from '../utils/notificationHelper.js';
 const { normalizeContact } = await import('../utils/normalizeContact.js');
 import { deleteConversationBetweenUsers } from '../services/messagingCleanup.js';
 import { sanitizeUserData } from '../utils/userDataHelper.js';
+import Review from '../models/Review.js';
 
 const sanitize = (doc) => ({
   id: doc._id,
@@ -173,11 +174,63 @@ export const listDedicationRequests = async (req, res) => {
       .populate({ path: 'starId', select: '-password -passwordResetToken -passwordResetExpires' })
       .sort({ createdAt: -1 });
 
+    // Get all dedication request IDs to fetch reviews
+    const dedicationRequestIds = items.map(item => item._id);
+    
+    // Create a map of dedication request ID to review
+    const reviewMap = {};
+    
+    // Fetch reviews only if there are items and there are completed dedication requests
+    if (dedicationRequestIds.length > 0) {
+      const reviews = await Review.find({
+        dedicationRequestId: { $in: dedicationRequestIds },
+        reviewType: 'dedication'
+      }).select('dedicationRequestId rating comment createdAt');
+
+      reviews.forEach(review => {
+        reviewMap[review.dedicationRequestId.toString()] = {
+          rating: review.rating,
+          comment: review.comment,
+          createdAt: review.createdAt
+        };
+      });
+    }
+
     const withComputed = items.map((doc) => {
       const base = sanitize(doc);
       const eventAt = base.eventDate ? new Date(base.eventDate) : undefined;
       const timeToNowMs = eventAt ? (eventAt.getTime() - Date.now()) : undefined;
-      return { ...base, eventAt: eventAt ? eventAt.toISOString() : undefined, timeToNowMs };
+      
+      // Add review information for all dedication requests
+      const reviewInfo = {};
+      
+      if (base.status === 'completed') {
+        const review = reviewMap[base.id];
+        reviewInfo.is_review_completed = !!review;
+        if (review) {
+          reviewInfo.review_rating = review.rating;
+          reviewInfo.review_comment = review.comment;
+          reviewInfo.review_created_at = review.createdAt;
+        } else {
+          // If no review exists, set to null
+          reviewInfo.review_rating = null;
+          reviewInfo.review_comment = null;
+          reviewInfo.review_created_at = null;
+        }
+      } else {
+        // For non-completed statuses, set is_review_completed to false and all review fields to null
+        reviewInfo.is_review_completed = false;
+        reviewInfo.review_rating = null;
+        reviewInfo.review_comment = null;
+        reviewInfo.review_created_at = null;
+      }
+      
+      return { 
+        ...base, 
+        eventAt: eventAt ? eventAt.toISOString() : undefined, 
+        timeToNowMs,
+        ...reviewInfo
+      };
     });
 
     const future = [];
@@ -235,11 +288,46 @@ export const getDedicationRequest = async (req, res) => {
       return res.status(403).json({ success: false, message: 'Request not available - payment pending' });
     }
 
+    // Get review information for all dedication requests
+    let reviewInfo = {};
+    
+    if (item.status === 'completed') {
+      const review = await Review.findOne({
+        dedicationRequestId: item._id,
+        reviewType: 'dedication'
+      }).select('rating comment createdAt');
+      
+      if (review) {
+        reviewInfo.is_review_completed = true;
+        reviewInfo.review_rating = review.rating;
+        reviewInfo.review_comment = review.comment;
+        reviewInfo.review_created_at = review.createdAt;
+      } else {
+        // If no review exists, set is_review_completed to false and all review fields to null
+        reviewInfo.is_review_completed = false;
+        reviewInfo.review_rating = null;
+        reviewInfo.review_comment = null;
+        reviewInfo.review_created_at = null;
+      }
+    } else {
+      // For non-completed statuses, set is_review_completed to false and all review fields to null
+      reviewInfo.is_review_completed = false;
+      reviewInfo.review_rating = null;
+      reviewInfo.review_comment = null;
+      reviewInfo.review_created_at = null;
+    }
+
+    const sanitizedItem = sanitize(item);
+    const responseData = {
+      ...sanitizedItem,
+      ...reviewInfo
+    };
+
     return res.json({ 
       success: true, 
       message: 'Dedication request retrieved successfully',
       data: {
-        dedicationRequest: sanitize(item)
+        dedicationRequest: responseData
       }
     });
   } catch (err) {
