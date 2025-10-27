@@ -14,17 +14,26 @@ export const requireAuth = async (req, res, next) => {
       return res.status(401).json({ success: false, message: 'User not found' });
     }
     // Enforce single active session: token must include sessionVersion matching current user
-    if (typeof decoded.sessionVersion === 'number' && typeof user.sessionVersion === 'number') {
-      if (decoded.sessionVersion !== user.sessionVersion) {
-        // If the difference is small (1-2), allow it (user might have logged in from another device recently)
-        const versionDifference = user.sessionVersion - decoded.sessionVersion;
-        if (versionDifference <= 2 && versionDifference > 0) {
-          // Allow recent login from another device
-        } else {
-          return res.status(401).json({ success: false, message: 'Unauthorized' });
-        }
-      }
+    // REQUIRE sessionVersion for all tokens - this is mandatory
+    if (typeof decoded.sessionVersion !== 'number') {
+      console.log(`[AUTH] Token rejected: User ${decoded.userId} token has no sessionVersion (old token format)`);
+      return res.status(401).json({ success: false, message: 'Session expired. Please login again.' });
     }
+    
+    // If user doesn't have sessionVersion yet (migration case), set it
+    if (typeof user.sessionVersion !== 'number') {
+      console.log(`[AUTH] User ${decoded.userId} missing sessionVersion, setting to ${decoded.sessionVersion}`);
+      await User.findByIdAndUpdate(decoded.userId, { sessionVersion: decoded.sessionVersion });
+      user.sessionVersion = decoded.sessionVersion;
+    }
+    
+    // SessionVersion must match exactly
+    if (decoded.sessionVersion !== user.sessionVersion) {
+      console.log(`[AUTH] Token rejected: User ${decoded.userId} token sessionVersion ${decoded.sessionVersion} != current ${user.sessionVersion} (logged out by new login)`);
+      return res.status(401).json({ success: false, message: 'Session expired. Please login again.' });
+    }
+    
+    console.log(`[AUTH] Token valid: User ${decoded.userId} token sessionVersion ${decoded.sessionVersion} matches current ${user.sessionVersion}`);
     req.user = user;
     req.auth = decoded;
     return next();

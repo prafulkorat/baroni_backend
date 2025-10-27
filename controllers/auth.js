@@ -348,23 +348,40 @@ export const login = async (req, res) => {
       console.log(`User ${user._id} setting isDev to ${booleanIsDev} (converted from ${typeof isDev}: ${isDev})`);
     }
 
-    // Increment sessionVersion to invalidate tokens from other devices
+    // ALWAYS increment sessionVersion to invalidate tokens from other devices
+    // This must happen regardless of whether other fields are updated
+    const oldSessionVersion = user.sessionVersion || 0;
     user.sessionVersion = (typeof user.sessionVersion === 'number' ? user.sessionVersion : 0) + 1;
     updateData.sessionVersion = user.sessionVersion;
+    
+    console.log(`[LOGIN] User ${user._id} sessionVersion: ${oldSessionVersion} -> ${user.sessionVersion} (incrementing to invalidate old tokens)`);
 
     // Update user with new tokens and session version
-    if (Object.keys(updateData).length > 0 || Object.keys(unsetData).length > 0) {
-      const finalUpdateData = { ...updateData };
-      if (Object.keys(unsetData).length > 0) {
-        finalUpdateData.$unset = unsetData;
-      }
-      await User.findByIdAndUpdate(user._id, finalUpdateData);
+    // Always update session version to ensure logout works properly
+    const finalUpdateData = { ...updateData };
+    if (Object.keys(unsetData).length > 0) {
+      finalUpdateData.$unset = unsetData;
     }
+    
+    console.log(`[LOGIN] Updating user ${user._id} in database with:`, JSON.stringify(finalUpdateData));
+    const updatedUser = await User.findByIdAndUpdate(user._id, finalUpdateData, { new: true });
+    
+    // Ensure we have the latest sessionVersion
+    const finalSessionVersion = updatedUser?.sessionVersion || user.sessionVersion;
+    console.log(`[LOGIN] Updated user ${user._id} sessionVersion to: ${finalSessionVersion}`);
 
-    const accessToken = createAccessToken({ userId: user._id, sessionVersion: user.sessionVersion });
-    const refreshToken = createRefreshToken({ userId: user._id, sessionVersion: user.sessionVersion });
+    const accessToken = createAccessToken({ userId: user._id, sessionVersion: finalSessionVersion });
+    const refreshToken = createRefreshToken({ userId: user._id, sessionVersion: finalSessionVersion });
+    
+    console.log(`[LOGIN] Generated tokens with sessionVersion: ${finalSessionVersion} for user ${user._id}`);
+    console.log(`[LOGIN] Old tokens with sessionVersion < ${finalSessionVersion} will be rejected`);
 
-    return res.json({ success: true, message: 'Login successful', data: sanitizeUser(user), tokens: { accessToken, refreshToken } });
+    return res.json({ 
+      success: true, 
+      message: 'Login successful', 
+      data: sanitizeUser(updatedUser || user), 
+      tokens: { accessToken, refreshToken } 
+    });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
