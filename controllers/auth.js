@@ -200,16 +200,32 @@ export const register = async (req, res) => {
     }
 
     const normalizedEmail = email ? email.toLowerCase() : undefined;
+    
+    // Check if email or contact already exists
     const orQueries = [];
     if (normalizedEmail) orQueries.push({ email: normalizedEmail });
     if (normalizedContact) orQueries.push({ contact: normalizedContact });
-
-    const existing = orQueries.length ? await User.findOne({ $or: orQueries }) : null;
-    if (existing) {
-      return res.status(409).json({
-        success: false,
-        message: 'Email or contact already in use'
-      });
+    
+    if (orQueries.length > 0) {
+      const existingUser = await User.findOne({ $or: orQueries });
+      if (existingUser) {
+        // Determine which field(s) already exist
+        let errorMessage = '';
+        if (normalizedEmail && existingUser.email === normalizedEmail && normalizedContact && existingUser.contact === normalizedContact) {
+          errorMessage = 'Email and contact number are already in use';
+        } else if (normalizedEmail && existingUser.email === normalizedEmail) {
+          errorMessage = 'Email already in use';
+        } else if (normalizedContact && existingUser.contact === normalizedContact) {
+          errorMessage = 'Contact number already in use';
+        } else {
+          errorMessage = 'Email or contact number already in use';
+        }
+        
+        return res.status(409).json({
+          success: false,
+          message: errorMessage
+        });
+      }
     }
 
   // Do not generate baroni ID at registration; Baroni ID is for stars only
