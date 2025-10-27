@@ -632,9 +632,14 @@ export const cancelAppointment = async (req, res) => {
     appt.status = 'cancelled';
     const updated = await appt.save();
 
-    // Notify counterpart only: if star cancelled, notify fan; if fan cancelled, notify star
+    // Notify counterpart only if payment was complete
+    // If paymentStatus is 'initiated', star never saw the appointment, so don't notify them
     try {
-      await NotificationHelper.sendAppointmentNotification('APPOINTMENT_CANCELLED', updated, { currentUserId: req.user._id });
+      if (updated.paymentStatus !== 'initiated') {
+        await NotificationHelper.sendAppointmentNotification('APPOINTMENT_CANCELLED', updated, { currentUserId: req.user._id });
+      } else {
+        console.log(`[CancelAppointment] Skipping notification - payment not complete (paymentStatus: ${updated.paymentStatus})`);
+      }
     } catch (notificationError) {
       console.error('Error sending appointment cancellation notification:', notificationError);
     }

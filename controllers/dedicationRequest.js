@@ -233,22 +233,31 @@ export const listDedicationRequests = async (req, res) => {
       };
     });
 
+    const pending = [];
     const future = [];
     const past = [];
     const cancelled = [];
     for (const it of withComputed) {
       if (it.status === 'cancelled') {
         cancelled.push(it);
+      } else if (it.status === 'pending') {
+        pending.push(it);
       } else if (typeof it.timeToNowMs === 'number' && it.timeToNowMs >= 0) {
         future.push(it);
       } else {
         past.push(it);
       }
     }
+    // Sort pending by creation time (most recent first)
+    pending.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    // Sort future by event time (nearest first)
     future.sort((a, b) => (a.timeToNowMs ?? Infinity) - (b.timeToNowMs ?? Infinity));
-    past.sort((a, b) => Math.abs(a.timeToNowMs ?? 0) - Math.abs(b.timeToNowMs ?? 0));
+    // Sort past by event time (most recent first)
+    past.sort((a, b) => Math.abs(b.timeToNowMs ?? 0) - Math.abs(a.timeToNowMs ?? 0));
+    // Sort cancelled by update time (most recent first)
     cancelled.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
-    const data = [...future, ...past, ...cancelled];
+    // Return pending first, then future, then past, then cancelled
+    const data = [...pending, ...future, ...past, ...cancelled];
 
     return res.json({ 
       success: true, 
@@ -594,9 +603,14 @@ export const cancelDedicationRequest = async (req, res) => {
     item.cancelledAt = new Date();
     const updated = await item.save();
 
-    // Notify counterpart only
+    // Notify counterpart only if payment was complete
+    // If paymentStatus is 'initiated', star never saw the request, so don't notify them
     try {
-      await NotificationHelper.sendDedicationNotification('DEDICATION_CANCELLED', updated, { currentUserId: req.user._id });
+      if (updated.paymentStatus !== 'initiated') {
+        await NotificationHelper.sendDedicationNotification('DEDICATION_CANCELLED', updated, { currentUserId: req.user._id });
+      } else {
+        console.log(`[CancelDedicationRequest] Skipping notification - payment not complete (paymentStatus: ${updated.paymentStatus})`);
+      }
     } catch (notificationError) {
       console.error('Error sending dedication cancellation notification:', notificationError);
     }

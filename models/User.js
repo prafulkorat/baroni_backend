@@ -6,7 +6,7 @@ const userSchema = new mongoose.Schema(
     contact: { type: String, trim: true, unique: true, sparse: true },
     email: { type: String, trim: true, lowercase: true, unique: true, sparse: true },
     password: { type: String },
-    coinBalance: { type: Number, default: 20, min: 0 },
+    coinBalance: { type: Number, default: 0, min: 0 },
     name: { type: String, trim: true },
     pseudo: { type: String, trim: true },
     profilePic: { type: String,default: 'https://res.cloudinary.com/ddnpvm2yk/image/upload/v1759868390/placeholder_aws6oc.png' },
@@ -71,7 +71,7 @@ userSchema.pre('save', function(next) {
     // Only set default rating if this is a completely new star (no reviews yet)
     // Don't override existing ratings that might have been set by the rating system
     if (this.isNew && this.totalReviews === 0) {
-      this.averageRating = 5;
+      this.averageRating = 4.9;
       this.totalReviews = 1;
     }
   }
