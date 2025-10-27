@@ -30,15 +30,15 @@ export const updateGlobalConfigValidation = [
     .withMessage('hideApplyToBecomeStar must be a boolean'),
   
   // Service Limits
-  body('serviceLimits.maxLiveShowDuration')
+  body('serviceLimits.liveShowDuration')
     .optional()
     .isInt({ min: 1, max: 1440 })
     .withMessage('Max live show duration must be between 1 and 1440 minutes'),
-  body('serviceLimits.maxVideoCallDuration')
+  body('serviceLimits.videoCallDuration')
     .optional()
     .isInt({ min: 1, max: 1440 })
     .withMessage('Max video call duration must be between 1 and 1440 minutes'),
-  body('serviceLimits.defaultCallTime')
+  body('serviceLimits.slotDuration')
     .optional()
     .isInt({ min: 1, max: 1440 })
     .withMessage('Default call time must be between 1 and 1440 minutes'),

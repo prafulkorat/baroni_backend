@@ -28,12 +28,12 @@ This document describes the complete API system for managing Global Configuratio
       "isTestUser": false,
       "hideApplyToBecomeStar": false,
       "serviceLimits": {
-        "maxLiveShowDuration": 16,
-        "maxVideoCallDuration": 16,
-        "defaultCallTime": 16,
-        "dedicationUploadSize": 16,
+        "liveShowDuration": 20,
+        "videoCallDuration": 5,
+        "slotDuration": 20,
+        "dedicationUploadSize": 20,
         "maxLiveShowParticipants": 10000,
-        "reconnectionTimeout": 16
+        "reconnectionTimeout": 5
       },
       "idVerificationFees": {
         "standardIdPrice": 0,

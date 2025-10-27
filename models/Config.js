@@ -10,9 +10,9 @@ const configSchema = new mongoose.Schema(
     
     // Service Limits & Defaults
     serviceLimits: {
-      maxLiveShowDuration: { type: Number, default: 16 }, // in minutes
-      maxVideoCallDuration: { type: Number, default: 16 }, // in minutes
-      defaultCallTime: { type: Number, default: 16 }, // in minutes
+      liveShowDuration: { type: Number, default: 16 }, // in minutes
+      videoCallDuration: { type: Number, default: 16 }, // in minutes
+      slotDuration: { type: Number, default: 16 }, // in minutes
       dedicationUploadSize: { type: Number, default: 16 }, // in MB
       maxLiveShowParticipants: { type: Number, default: 10000 },
       reconnectionTimeout: { type: Number, default: 16 } // in minutes
