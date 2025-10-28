@@ -2,7 +2,9 @@ import Transaction from '../models/Transaction.js';
 import User from '../models/User.js';
 import mongoose from 'mongoose';
 import orangeMoneyService from './orangeMoneyService.js';
-import { TRANSACTION_STATUSES, PAYMENT_MODES } from '../utils/transactionConstants.js';
+import { TRANSACTION_STATUSES, PAYMENT_MODES, TRANSACTION_TYPES } from '../utils/transactionConstants.js';
+import NotificationHelper from '../utils/notificationHelper.js';
+import { addToEscrow } from './starWalletService.js';
 
 /**
  * Create a hybrid transaction with coin + external payment logic
@@ -274,17 +276,77 @@ const completeTransactionInternal = async (transactionId, session) => {
     throw new Error('Transaction is not in pending status');
   }
 
-  // Add coins to receiver
-  await User.findByIdAndUpdate(
-    transaction.receiverId,
-    { $inc: { coinBalance: transaction.amount } },
-    { session, new: true }
-  );
+  // Check if receiver is a star and transaction is for appointment/dedication
+  const receiver = await User.findById(transaction.receiverId).session(session);
+  const isAppointmentOrDedication = transaction.type === TRANSACTION_TYPES.APPOINTMENT_PAYMENT || 
+                                      transaction.type === TRANSACTION_TYPES.DEDICATION_REQUEST_PAYMENT;
+  
+  if (receiver && receiver.role === 'star' && isAppointmentOrDedication) {
+    // For stars, add to escrow instead of directly to balance
+    try {
+      const Appointment = (await import('../models/Appointment.js')).default;
+      const DedicationRequest = (await import('../models/DedicationRequest.js')).default;
+      
+      let appointmentId = null;
+      let dedicationId = null;
+      
+      // Try to find the appointment or dedication request
+      const appointment = await Appointment.findOne({ transactionId }).session(session);
+      const dedicationRequest = await DedicationRequest.findOne({ transactionId }).session(session);
+      
+      if (appointment) {
+        appointmentId = appointment._id;
+      }
+      if (dedicationRequest) {
+        dedicationId = dedicationRequest._id;
+      }
+      
+      // Add to escrow
+      await addToEscrow(
+        transaction.receiverId,
+        transaction.amount,
+        {
+          fanId: transaction.payerId,
+          appointmentId,
+          dedicationId,
+          transactionId: transaction._id,
+          type: transaction.type === TRANSACTION_TYPES.APPOINTMENT_PAYMENT ? 'appointment' : 'dedication'
+        },
+        session
+      );
+    } catch (escrowError) {
+      console.error('Error adding to escrow, falling back to coin balance:', escrowError);
+      // Fallback to old behavior if escrow fails
+      await User.findByIdAndUpdate(
+        transaction.receiverId,
+        { $inc: { coinBalance: transaction.amount } },
+        { session, new: true }
+      );
+    }
+  } else {
+    // For non-star or non-appointment/dedication transactions, add coins normally
+    await User.findByIdAndUpdate(
+      transaction.receiverId,
+      { $inc: { coinBalance: transaction.amount } },
+      { session, new: true }
+    );
+  }
 
   // Update transaction status to completed
   transaction.status = TRANSACTION_STATUSES.COMPLETED;
   transaction.refundTimer = null; // Clear refund timer
   await transaction.save({ session });
+
+  // Fallback: for coin-only appointment payments, ensure star gets booking notification
+  try {
+    if (transaction.type === TRANSACTION_TYPES.APPOINTMENT_PAYMENT && transaction.paymentMode === PAYMENT_MODES.COIN) {
+      const Appointment = (await import('../models/Appointment.js')).default;
+      const appt = await Appointment.findOne({ transactionId: transaction._id }).session(session);
+      if (appt) {
+        await NotificationHelper.sendAppointmentNotification('APPOINTMENT_CREATED', appt, { currentUserId: appt.fanId });
+      }
+    }
+  } catch (_notifyErr) {}
 };
 
 /**

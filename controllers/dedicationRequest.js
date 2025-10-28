@@ -10,6 +10,7 @@ import NotificationHelper from '../utils/notificationHelper.js';
 const { normalizeContact } = await import('../utils/normalizeContact.js');
 import { deleteConversationBetweenUsers } from '../services/messagingCleanup.js';
 import { sanitizeUserData } from '../utils/userDataHelper.js';
+import { moveEscrowToJackpot, refundEscrow } from '../services/starWalletService.js';
 import Review from '../models/Review.js';
 
 const sanitize = (doc) => ({
@@ -439,6 +440,17 @@ export const rejectDedicationRequest = async (req, res) => {
     item.status = 'rejected';
     item.rejectedAt = new Date();
 
+    // Refund escrow if payment was pending (before we set it to refunded)
+    if (item.paymentStatus === 'pending') {
+      try {
+        await refundEscrow(item.starId, null, item._id);
+      } catch (escrowError) {
+        console.error('Failed to refund escrow for rejected dedication request:', escrowError);
+      }
+    }
+    
+    item.paymentStatus = 'refunded';
+
     // Cancel and refund the pending transaction, if any
     if (item.transactionId) {
       try {
@@ -497,8 +509,18 @@ export const uploadDedicationVideo = async (req, res) => {
     // Upload video to storage
     item.videoUrl = await uploadVideo(req.file.buffer);
     
+    // Move escrow to jackpot for the star
+    try {
+      await moveEscrowToJackpot(item.starId, null, item._id);
+      console.log(`[UploadDedicationVideo] Moved escrow to jackpot for star ${item.starId}`);
+    } catch (walletError) {
+      console.error(`[UploadDedicationVideo] Failed to move escrow to jackpot:`, walletError);
+      // Continue with dedication completion even if wallet update fails
+    }
+    
     // Automatically mark as completed when video is uploaded
     item.status = 'completed';
+    item.paymentStatus = 'completed';
     item.completedAt = new Date();
     
     const updated = await item.save();
@@ -607,6 +629,15 @@ export const cancelDedicationRequest = async (req, res) => {
 
     if (!item) return res.status(404).json({ success: false, message: 'Request not found or cannot be cancelled' });
 
+    // Refund escrow if payment was pending
+    if (item.paymentStatus === 'pending') {
+      try {
+        await refundEscrow(item.starId, null, item._id);
+      } catch (escrowError) {
+        console.error('Failed to refund escrow for cancelled dedication request:', escrowError);
+      }
+    }
+    
     // Cancel the transaction and refund coins if it's pending
     if (item.transactionId) {
       try {
@@ -618,6 +649,7 @@ export const cancelDedicationRequest = async (req, res) => {
     }
 
     item.status = 'cancelled';
+    item.paymentStatus = 'refunded';
     item.cancelledAt = new Date();
     const updated = await item.save();
 

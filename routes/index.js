@@ -30,6 +30,7 @@ import adminCallLogsRouter from './api/adminCallLogs.js';
 import eventsRouter from './api/events.js';
 import adsRouter from './api/ads.js';
 import supportManagerRouter from './api/supportManager.js';
+import adminWalletRouter from './api/adminWallet.js';
 
 const router = express.Router();
 
@@ -61,6 +62,7 @@ router.use('/admin/management', adminManagementRouter);
 router.use('/admin/rating-management', adminRatingManagementRouter);
 router.use('/admin/appointments', adminAppointmentManagementRouter);
 router.use('/admin/call-logs', adminCallLogsRouter);
+router.use('/admin/wallet', adminWalletRouter);
 router.use('/events', eventsRouter);
 router.use('/ads', adsRouter);
 router.use('/support-manager', supportManagerRouter);

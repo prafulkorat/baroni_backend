@@ -8,6 +8,7 @@ import Transaction from '../models/Transaction.js'; // Added missing import for 
 import NotificationHelper from '../utils/notificationHelper.js';
 import { deleteConversationBetweenUsers } from '../services/messagingCleanup.js';
 import { sanitizeUserData } from '../utils/userDataHelper.js';
+import { moveEscrowToJackpot, refundEscrow } from '../services/starWalletService.js';
 import mongoose from 'mongoose';
 
 const toUser = (u) => u ? sanitizeUserData(u) : null;
@@ -559,6 +560,18 @@ export const rejectAppointment = async (req, res) => {
       return res.status(403).json({ success: false, message: 'Cannot reject - payment not complete' });
     }
     appt.status = 'rejected';
+    
+    // Refund escrow if payment was pending (before we set it to refunded)
+    if (appt.paymentStatus === 'pending') {
+      try {
+        await refundEscrow(appt.starId, appt._id, null);
+      } catch (escrowError) {
+        console.error('Failed to refund escrow for rejected appointment:', escrowError);
+      }
+    }
+    
+    appt.paymentStatus = 'refunded';
+    
     // Cancel and refund the pending transaction, if any
     if (appt.transactionId) {
       try {
@@ -611,6 +624,15 @@ export const cancelAppointment = async (req, res) => {
     if (!appt) return res.status(404).json({ success: false, message: 'Appointment not found' });
     if (appt.status === 'cancelled') return res.status(400).json({ success: false, message: 'Already cancelled' });
 
+    // Refund escrow if payment was pending
+    if (appt.paymentStatus === 'pending') {
+      try {
+        await refundEscrow(appt.starId, appt._id, null);
+      } catch (escrowError) {
+        console.error('Failed to refund escrow for cancelled appointment:', escrowError);
+      }
+    }
+    
     // Cancel the transaction and refund coins if it's pending
     if (appt.transactionId && appt.status === 'pending') {
       try {
@@ -630,6 +652,7 @@ export const cancelAppointment = async (req, res) => {
     } catch (_e) {}
 
     appt.status = 'cancelled';
+    appt.paymentStatus = 'refunded';
     const updated = await appt.save();
 
     // Notify counterpart only if payment was complete
@@ -878,6 +901,15 @@ export const completeAppointment = async (req, res) => {
     }
 
     console.log(`[CompleteAppointment] Updating appointment ${id} to completed status with call duration ${callDuration}`);
+    
+    // Move escrow to jackpot for the star
+    try {
+      await moveEscrowToJackpot(appt.starId, appt._id, null);
+      console.log(`[CompleteAppointment] Moved escrow to jackpot for star ${appt.starId}`);
+    } catch (walletError) {
+      console.error(`[CompleteAppointment] Failed to move escrow to jackpot:`, walletError);
+      // Continue with appointment completion even if wallet update fails
+    }
     
     appt.status = 'completed';
     appt.paymentStatus = 'completed';

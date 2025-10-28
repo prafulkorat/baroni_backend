@@ -6,9 +6,11 @@ import LiveShow from '../models/LiveShow.js';
 import LiveShowAttendance from '../models/LiveShowAttendance.js';
 import mongoose from 'mongoose';
 import orangeMoneyService from './orangeMoneyService.js';
-import { TRANSACTION_STATUSES } from '../utils/transactionConstants.js';
+import { TRANSACTION_STATUSES, TRANSACTION_TYPES } from '../utils/transactionConstants.js';
 import NotificationHelper from '../utils/notificationHelper.js';
 import { createDefaultRating } from '../utils/defaultRatingHelper.js';
+import { addToEscrow, getOrCreateStarWallet } from './starWalletService.js';
+import StarTransaction from '../models/StarTransaction.js';
 
 /**
  * Process payment callback from Orange Money
@@ -131,6 +133,41 @@ export const processPaymentCallback = async (callbackData) => {
           { $set: { paymentStatus: 'pending' } }
         );
 
+        // Deposit into star escrow for appointment/dedication payments (idempotent)
+        try {
+          if (
+            transaction.type === TRANSACTION_TYPES.APPOINTMENT_PAYMENT ||
+            transaction.type === TRANSACTION_TYPES.DEDICATION_REQUEST_PAYMENT
+          ) {
+            const existingStarTxn = await StarTransaction.findOne({ transactionId: transaction._id });
+            if (!existingStarTxn) {
+              let appointmentId = null;
+              let dedicationId = null;
+              const appt = await Appointment.findOne({ transactionId: transaction._id });
+              const ded = await DedicationRequest.findOne({ transactionId: transaction._id });
+              if (appt) appointmentId = appt._id;
+              if (ded) dedicationId = ded._id;
+
+              await addToEscrow(
+                transaction.receiverId,
+                transaction.amount,
+                {
+                  fanId: transaction.payerId,
+                  appointmentId,
+                  dedicationId,
+                  transactionId: transaction._id,
+                  type: transaction.type === TRANSACTION_TYPES.APPOINTMENT_PAYMENT ? 'appointment' : 'dedication'
+                }
+              );
+              console.log(`[PaymentCallback] Escrow deposited for transaction ${transaction._id}`);
+            } else {
+              console.log(`[PaymentCallback] Skipping escrow deposit - star transaction already exists for ${transaction._id}`);
+            }
+          }
+        } catch (escrowErr) {
+          console.error('[PaymentCallback] Error depositing to escrow:', escrowErr);
+        }
+
         // Handle star promotion payment status updates
         if (transaction.type === 'become_star_payment') {
           console.log(`[PaymentCallback] Processing star promotion for transaction ${transaction._id}, user ${transaction.payerId}`);
@@ -173,6 +210,14 @@ export const processPaymentCallback = async (callbackData) => {
           // Create default 5 rating for the new star
           await createDefaultRating(transaction.payerId);
           
+          // Ensure star wallet exists
+          try {
+            await getOrCreateStarWallet(transaction.payerId);
+            console.log(`[PaymentCallback] Star wallet ensured for user ${transaction.payerId}`);
+          } catch (walletErr) {
+            console.error('[PaymentCallback] Failed to ensure star wallet:', walletErr);
+          }
+
           console.log(`[PaymentCallback] Star promotion completed for user ${transaction.payerId}`);
         }
       } else {
@@ -300,6 +345,13 @@ const cancelLinkedEntitiesForTransaction = async (transaction, session) => {
     appt.status = 'cancelled';
     appt.paymentStatus = 'refunded';
     await appt.save({ session });
+    // Also refund star escrow if any exists for this transaction
+    try {
+      const { refundEscrow } = await import('./starWalletService.js');
+      await refundEscrow(appt.starId, appt._id, null);
+    } catch (escrowErr) {
+      console.error('[PaymentCallback] Failed to refund escrow for cancelled appointment:', escrowErr);
+    }
     try {
       const Availability = (await import('../models/Availability.js')).default;
       await Availability.updateOne(
@@ -315,6 +367,16 @@ const cancelLinkedEntitiesForTransaction = async (transaction, session) => {
     { $set: { status: 'cancelled', paymentStatus: 'refunded', cancelledAt: new Date() } },
     { session }
   );
+  // Refund star escrow for dedication requests
+  try {
+    const { refundEscrow } = await import('./starWalletService.js');
+    const dedIds = await DedicationRequest.find({ transactionId: transaction._id }, { _id: 1, starId: 1 }).session(session);
+    for (const d of dedIds) {
+      await refundEscrow(d.starId, null, d._id);
+    }
+  } catch (escrowErr) {
+    console.error('[PaymentCallback] Failed to refund escrow for cancelled dedication(s):', escrowErr);
+  }
 
   // Cancel live show created with a hosting payment that failed
   const hostingShow = await LiveShow.findOne({ transactionId: transaction._id }).session(session);

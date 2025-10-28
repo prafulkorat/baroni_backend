@@ -10,7 +10,7 @@ import Appointment from "../models/Appointment.js";
 import DedicationRequest from "../models/DedicationRequest.js";
 import Transaction from "../models/Transaction.js";
 import Conversation from "../models/Conversation.js";
-import { createTransaction, completeTransaction, createHybridTransaction } from "../services/transactionService.js";
+import { createTransaction, completeTransaction, createHybridTransaction, cancelTransaction } from "../services/transactionService.js";
 import { TRANSACTION_DESCRIPTIONS, TRANSACTION_TYPES, createTransactionDescription } from "../utils/transactionConstants.js";
 import { generateUniqueGoldBaroniId, generateUniqueBaroniId } from "../utils/baroniIdGenerator.js";
 import Review from "../models/Review.js";
@@ -77,7 +77,8 @@ export const becomeStar = async (req, res) => {
         // Check for pending commitments - fan must complete or cancel all before becoming star
         const userId = req.user._id;
 
-        // Check if user already has a pending star promotion payment
+        // Allow users to make multiple payment attempts
+        // Don't cancel existing pending payments - fans can retry anytime
         const existingStarPayment = await Transaction.findOne({
             payerId: userId,
             type: TRANSACTION_TYPES.BECOME_STAR_PAYMENT,
@@ -85,12 +86,9 @@ export const becomeStar = async (req, res) => {
         });
 
         if (existingStarPayment) {
-            return res.status(400).json({
-                success: false,
-                message: 'You already have a pending star promotion payment. Please complete or cancel it before starting a new one.'
-            });
+            console.log(`[BecomeStar] User ${userId} already has a pending payment ${existingStarPayment._id}, creating new one anyway`);
         }
-
+        
         const [pendingDedications, pendingAppointments, pendingLiveShows] = await Promise.all([
             // Check for pending or approved dedication requests where user is the fan
             DedicationRequest.countDocuments({
