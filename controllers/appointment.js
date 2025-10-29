@@ -10,6 +10,7 @@ import { deleteConversationBetweenUsers } from '../services/messagingCleanup.js'
 import { sanitizeUserData } from '../utils/userDataHelper.js';
 import { moveEscrowToJackpot, refundEscrow } from '../services/starWalletService.js';
 import mongoose from 'mongoose';
+import Conversation from '../models/Conversation.js';
 
 const toUser = (u) => u ? sanitizeUserData(u) : null;
 
@@ -373,6 +374,37 @@ export const listAppointments = async (req, res) => {
       return d;
     };
 
+    // Pre-fetch all conversations between fan-star pairs for better performance
+    // Get unique fan-star pairs from appointments
+    const userPairs = new Set();
+    items.forEach(doc => {
+      if (doc.fanId?._id && doc.starId?._id) {
+        const fanId = String(doc.fanId._id);
+        const starId = String(doc.starId._id);
+        const pairKey = [fanId, starId].sort().join(',');
+        userPairs.add(pairKey);
+      }
+    });
+    
+    // Fetch conversations for all pairs using $all operator
+    const conversationPromises = Array.from(userPairs).map(pairKey => {
+      const [id1, id2] = pairKey.split(',');
+      return Conversation.findOne({
+        participants: { $all: [id1, id2] }
+      }).lean();
+    });
+    
+    const conversations = await Promise.all(conversationPromises);
+    
+    // Create a map for quick lookup: sorted participants array -> conversationId
+    const conversationMap = new Map();
+    conversations.forEach(conv => {
+      if (conv) {
+        const sortedParticipants = [...conv.participants].sort();
+        conversationMap.set(sortedParticipants.join(','), conv._id.toString());
+      }
+    });
+
     const withComputed = items.map((doc) => {
       const base = sanitize(doc);
       let timeSlotObj = undefined;
@@ -382,7 +414,16 @@ export const listAppointments = async (req, res) => {
       }
       const startAt = parseStartDate(base.date, base.time);
       const timeToNowMs = startAt.getTime() - Date.now();
-      return { ...base, timeSlot: timeSlotObj, startAt: isNaN(startAt.getTime()) ? undefined : startAt.toISOString(), timeToNowMs };
+      
+      // Find conversation between fan and star
+      let conversationId = null;
+      if (doc.fanId?._id && doc.starId?._id) {
+        const participants = [String(doc.fanId._id), String(doc.starId._id)].sort();
+        const key = participants.join(',');
+        conversationId = conversationMap.get(key) || null;
+      }
+      
+      return { ...base, timeSlot: timeSlotObj, startAt: isNaN(startAt.getTime()) ? undefined : startAt.toISOString(), timeToNowMs, conversationId };
     });
 
     // Apply proper sorting logic based on appointment status and time

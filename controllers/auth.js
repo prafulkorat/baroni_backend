@@ -835,8 +835,8 @@ export const me = async (req, res) => {
     }
 
     if (user.role === 'fan') {
-      // Get fan's transactions only
-      const transactions = await Transaction.find({ payerId: user._id })
+      // Get fan's successful transactions only
+      const transactions = await Transaction.find({ payerId: user._id, status: 'completed' })
         .populate('receiverId', 'name pseudo profilePic role agoraKey')
         .sort({ createdAt: -1 })
         .limit(20);
@@ -855,9 +855,7 @@ export const me = async (req, res) => {
         })),
         transactionStats: {
           totalTransactions: transactions.length,
-          totalSpent: transactions
-            .filter(txn => txn.status === 'completed')
-            .reduce((sum, txn) => sum + txn.amount, 0)
+          totalSpent: transactions.reduce((sum, txn) => sum + txn.amount, 0)
         }
       };
     }

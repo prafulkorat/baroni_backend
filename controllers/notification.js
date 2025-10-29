@@ -86,8 +86,10 @@ export const getUserNotifications = async (req, res) => {
     const allowedTypes = ['appointment', 'payment', 'rating', 'live_show', 'dedication', 'message', 'general', 'star_promotion', 'voip', 'push'];
     const typeFilter = type && allowedTypes.includes(type) ? type : null;
 
-    const query = { user: userId, type: { $ne: 'voip' } }; // Exclude VoIP notifications
-    if (typeFilter) {
+    // Exclude VoIP and chat/message notifications from the list view
+    const query = { user: userId, type: { $nin: ['voip', 'message'] } };
+    // If an allowed non-chat type filter is provided, apply it; chat stays hidden
+    if (typeFilter && typeFilter !== 'message' && typeFilter !== 'voip') {
       query.type = typeFilter;
     }
 
@@ -177,7 +179,7 @@ export const getNotificationStats = async (req, res) => {
     const userId = req.user._id;
 
     const stats = await Notification.aggregate([
-      { $match: { user: userId } },
+      { $match: { user: userId, type: { $nin: ['voip', 'message'] } } },
       {
         $group: {
           _id: null,
