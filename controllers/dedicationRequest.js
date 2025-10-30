@@ -509,7 +509,18 @@ export const uploadDedicationVideo = async (req, res) => {
     // Upload video to storage
     item.videoUrl = await uploadVideo(req.file.buffer);
     
-    // Move escrow to jackpot for the star
+    // Ensure transaction is completed (coin-only transactions are pending until completion)
+    if (item.transactionId) {
+      try {
+        await completeTransaction(item.transactionId);
+        console.log(`[UploadDedicationVideo] Completed transaction ${item.transactionId} before finalizing dedication`);
+      } catch (transactionError) {
+        console.error('[UploadDedicationVideo] Failed to complete transaction before finalizing dedication:', transactionError);
+        // Continue; reconciliation can be handled later
+      }
+    }
+
+    // Move escrow to jackpot for the star after completion
     try {
       await moveEscrowToJackpot(item.starId, null, item._id);
       console.log(`[UploadDedicationVideo] Moved escrow to jackpot for star ${item.starId}`);
