@@ -20,7 +20,7 @@ const appointmentSchema = new mongoose.Schema(
     externalPaymentId: { type: String, index: true },
     coinAmountReserved: { type: Number, min: 0, default: 0 },
     completedAt: { type: Date },
-    callDuration: { type: Number, min: 0 }, // Duration in minutes
+    callDuration: { type: Number, min: 0 }, // Duration in seconds
     // Reschedule fields
     isRescheduled: { type: Boolean, default: false, index: true },
     parentAppointment: { type: mongoose.Schema.Types.ObjectId, ref: 'Appointment', default: null, index: true },

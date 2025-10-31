@@ -29,8 +29,9 @@ export const getCallLogsStatistics = async (req, res) => {
       ])
     ]);
 
-    // Format average duration
-    const avgDurationMinutes = averageDuration[0]?.avgDuration || 0;
+    // Format average duration (convert from seconds to minutes)
+    const avgDurationSeconds = averageDuration[0]?.avgDuration || 0;
+    const avgDurationMinutes = avgDurationSeconds / 60;
     const avgDurationFormatted = formatDuration(avgDurationMinutes);
 
     res.json({
@@ -162,8 +163,8 @@ export const getCallLogsWithFilters = async (req, res) => {
         callType: '15 min Video Call', // Default or from service
         status: appointment.status,
         scheduledDuration: 15, // Default or from service
-        actualDuration: appointment.callDuration || 0,
-        actualDurationFormatted: formatDuration(appointment.callDuration || 0),
+        actualDuration: appointment.callDuration ? (appointment.callDuration / 60) : 0, // Convert seconds to minutes
+        actualDurationFormatted: formatDuration(appointment.callDuration ? (appointment.callDuration / 60) : 0),
         price: appointment.status === 'completed' ? appointment.price : 0,
         timestamp: appointment.createdAt,
         scheduledDateTime: new Date(`${appointment.date}T${appointment.time}`)
@@ -283,8 +284,8 @@ export const getCompletedCallLogs = async (req, res) => {
         callType: '15 min Video Call',
         status: 'completed',
         scheduledDuration: 15,
-        actualDuration: appointment.callDuration || 0,
-        actualDurationFormatted: formatDuration(appointment.callDuration || 0),
+        actualDuration: appointment.callDuration ? (appointment.callDuration / 60) : 0, // Convert seconds to minutes
+        actualDurationFormatted: formatDuration(appointment.callDuration ? (appointment.callDuration / 60) : 0),
         price: appointment.price,
         timestamp: appointment.createdAt,
         scheduledDateTime: new Date(`${appointment.date}T${appointment.time}`)
@@ -579,8 +580,8 @@ export const getCallLogsByStar = async (req, res) => {
         callType: '15 min Video Call',
         status: appointment.status,
         scheduledDuration: 15,
-        actualDuration: appointment.callDuration || 0,
-        actualDurationFormatted: formatDuration(appointment.callDuration || 0),
+        actualDuration: appointment.callDuration ? (appointment.callDuration / 60) : 0, // Convert seconds to minutes
+        actualDurationFormatted: formatDuration(appointment.callDuration ? (appointment.callDuration / 60) : 0),
         price: appointment.status === 'completed' ? appointment.price : 0,
         timestamp: appointment.createdAt,
         scheduledDateTime: new Date(`${appointment.date}T${appointment.time}`)
@@ -680,8 +681,8 @@ export const getCallLogsByUser = async (req, res) => {
         callType: '15 min Video Call',
         status: appointment.status,
         scheduledDuration: 15,
-        actualDuration: appointment.callDuration || 0,
-        actualDurationFormatted: formatDuration(appointment.callDuration || 0),
+        actualDuration: appointment.callDuration ? (appointment.callDuration / 60) : 0, // Convert seconds to minutes
+        actualDurationFormatted: formatDuration(appointment.callDuration ? (appointment.callDuration / 60) : 0),
         price: appointment.status === 'completed' ? appointment.price : 0,
         timestamp: appointment.createdAt,
         scheduledDateTime: new Date(`${appointment.date}T${appointment.time}`)
@@ -732,7 +733,8 @@ export const updateCallLogStatus = async (req, res) => {
     // Update appointment based on status
     if (status === 'completed') {
       appointment.status = 'completed';
-      appointment.callDuration = actualDuration;
+      // Convert minutes to seconds for storage
+      appointment.callDuration = actualDuration * 60;
       appointment.completedAt = new Date();
     } else if (status === 'missed') {
       appointment.status = 'cancelled';
@@ -752,7 +754,7 @@ export const updateCallLogStatus = async (req, res) => {
           status: appointment.status,
           star: appointment.starId,
           user: appointment.fanId,
-          actualDuration: appointment.callDuration,
+          actualDuration: appointment.callDuration ? (appointment.callDuration / 60) : 0, // Convert seconds to minutes
           adminNotes: appointment.adminNotes
         }
       }

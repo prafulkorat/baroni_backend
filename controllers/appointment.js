@@ -36,7 +36,7 @@ const sanitize = (doc) => ({
   transactionId: doc.transactionId,
   // Keep transaction status light; paymentStatus covers domain payment lifecycle
   completedAt: doc.completedAt,
-  callDuration: typeof doc.callDuration === 'number' ? doc.callDuration : undefined,
+  callDuration: typeof doc.callDuration === 'number' ? doc.callDuration / 60 : undefined, // Convert seconds to minutes for display
   ...(doc.isRescheduled !== undefined ? { isRescheduled: doc.isRescheduled } : {}),
   ...(doc.parentAppointment ? { parentAppointment: doc.parentAppointment } : {}),
   createdAt: doc.createdAt,
@@ -867,7 +867,7 @@ export const completeAppointment = async (req, res) => {
       return res.status(400).json({ success: false, message: errorMessage || 'Validation failed' });
     }
     const { id } = req.params;
-    const { callDuration } = req.body;
+    const { callDuration } = req.body; // callDuration is in minutes from request
     
     console.log(`[CompleteAppointment] Completing appointment ${id} with call duration ${callDuration} minutes by user ${req.user._id}`);
     
@@ -955,7 +955,8 @@ export const completeAppointment = async (req, res) => {
     appt.status = 'completed';
     appt.paymentStatus = 'completed';
     appt.completedAt = new Date();
-    appt.callDuration = callDuration;
+    // Convert minutes to seconds for storage
+    appt.callDuration = callDuration * 60;
     const updated = await appt.save();
     
     console.log(`[CompleteAppointment] Appointment ${id} updated successfully:`, {
