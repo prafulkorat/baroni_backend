@@ -260,6 +260,15 @@ export const createAppointment = async (req, res) => {
     // Convert local time to UTC based on fan's country
     const utcStartTime = convertLocalToUTC(availability.date, slot.slot, fanCountry);
 
+    // Log UTC time for debugging
+    console.log(`[CreateAppointment] Appointment UTC conversion:`, {
+      date: availability.date,
+      time: slot.slot,
+      country: fanCountry || 'unknown',
+      utcStartTime: utcStartTime.toISOString(),
+      utcTimestamp: utcStartTime.getTime()
+    });
+
     const created = await Appointment.create({
       starId,
       fanId: req.user._id,
@@ -272,6 +281,13 @@ export const createAppointment = async (req, res) => {
       status: 'pending',
       paymentStatus: transaction.status === 'initiated' ? 'initiated' : 'pending',
       transactionId: transaction._id,
+    });
+
+    // Verify UTC time was stored correctly
+    console.log(`[CreateAppointment] Appointment created with UTC time:`, {
+      appointmentId: created._id,
+      storedUtcStartTime: created.utcStartTime?.toISOString(),
+      storedUtcTimestamp: created.utcStartTime?.getTime()
     });
 
     // Reserve the slot immediately for all bookings (hybrid or coin-only)
