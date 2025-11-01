@@ -227,13 +227,15 @@ export const storeMessage = async (req, res) => {
     }
 
     // Create message data object
+    // IMPORTANT: isRead should always be false for new messages
+    // Only the receiver can mark messages as read via markMessagesAsRead endpoint
     const messageData = {
         conversationId: actualConversationId,
         senderId: authSenderId,
         receiverId: effectiveReceiverId,
         message: message || '',
         type: type || 'text',
-        isRead: false
+        isRead: false // Always false when message is created - receiver must mark as read
     };
 
     // Handle image upload if file is provided
@@ -530,19 +532,22 @@ export const markMessagesAsRead = async (req, res) => {
         }
 
         // Mark ALL messages in this conversation as read for the current user
-        // Mark all messages where current user is the receiver (set isRead to true)
-        // This ensures all messages in the conversation are marked as read for this user
+        // IMPORTANT: Only mark messages where current user is the RECEIVER (not sender)
+        // Sender's own messages should never be marked as read automatically
+        // This ensures proper read tracking: only messages you received can be marked as read
         const result = await MessageModel.updateMany(
             {
                 conversationId: conversationId,
-                receiverId: userId // All messages where current user is the receiver
+                receiverId: userId, // Only messages where current user is the receiver
+                senderId: { $ne: userId } // Exclude messages where user is the sender (double safety)
             },
             {
                 $set: { isRead: true }
             }
         );
 
-        console.log(`[MarkMessagesAsRead] Marked ${result.modifiedCount} messages as read for conversation ${conversationId} by user ${userId}`);
+        console.log(`[MarkMessagesAsRead] Marked ${result.modifiedCount} messages as read for conversation ${conversationId}`);
+        console.log(`[MarkMessagesAsRead] User ${userId} marked ${result.modifiedCount} received messages as read (sender messages excluded)`);
 
         res.json({
             success: true,
