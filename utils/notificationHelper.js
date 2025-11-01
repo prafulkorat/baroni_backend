@@ -33,6 +33,8 @@ class NotificationHelper {
       }
 
       if (!user.fcmToken && !user.apnsToken && !user.voipToken) {
+        // Log as info (not error) since this is expected for users without devices or who haven't enabled notifications
+        console.log(`[NotificationValidation] User ${userId} has no push tokens (deviceType: ${user.deviceType || 'unknown'}) - skipping notification`);
         return {
           canReceive: false,
           reason: 'No push tokens found',
@@ -151,8 +153,13 @@ class NotificationHelper {
       console.log(`[AppointmentNotification] Star validation for user ${starId}:`, starValidation);
       
       if (!starValidation.canReceive) {
-        console.log(`[AppointmentNotification] Skipping notification to star ${starId}: ${starValidation.reason}`);
-        console.log(`[AppointmentNotification] Star validation details:`, starValidation.details);
+        // Only log as warning if it's not just missing tokens (which is expected)
+        if (starValidation.reason !== 'No push tokens found') {
+          console.warn(`[AppointmentNotification] ⚠ Skipping notification to star ${starId}: ${starValidation.reason}`);
+          console.warn(`[AppointmentNotification] Star validation details:`, starValidation.details);
+        } else {
+          console.log(`[AppointmentNotification] ℹ Skipping notification to star ${starId}: ${starValidation.reason} (expected if user has no device tokens)`);
+        }
       } else {
         const starNote = { ...starTemplate };
         if (type === 'APPOINTMENT_REMINDER') {
@@ -203,8 +210,13 @@ class NotificationHelper {
       console.log(`[AppointmentNotification] Fan validation for user ${fanId}:`, fanValidation);
       
       if (!fanValidation.canReceive) {
-        console.log(`[AppointmentNotification] Skipping notification to fan ${fanId}: ${fanValidation.reason}`);
-        console.log(`[AppointmentNotification] Fan validation details:`, fanValidation.details);
+        // Only log as warning if it's not just missing tokens (which is expected)
+        if (fanValidation.reason !== 'No push tokens found') {
+          console.warn(`[AppointmentNotification] ⚠ Skipping notification to fan ${fanId}: ${fanValidation.reason}`);
+          console.warn(`[AppointmentNotification] Fan validation details:`, fanValidation.details);
+        } else {
+          console.log(`[AppointmentNotification] ℹ Skipping notification to fan ${fanId}: ${fanValidation.reason} (expected if user has no device tokens)`);
+        }
         // Don't return - we still want to continue with other logic (e.g., star notification)
       } else {
         // Customize fan template based on action type

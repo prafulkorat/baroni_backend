@@ -604,12 +604,29 @@ export const rejectAppointment = async (req, res) => {
     
     appt.paymentStatus = 'refunded';
     
-    // Cancel and refund the pending transaction, if any
+    // Cancel or refund the transaction, if any - check status first
     if (appt.transactionId) {
       try {
-        await cancelTransaction(appt.transactionId);
+        const transaction = await Transaction.findById(appt.transactionId);
+        if (transaction) {
+          if (transaction.status === 'pending') {
+            // Cancel pending transaction
+            await cancelTransaction(appt.transactionId);
+            console.log(`[RejectAppointment] Successfully cancelled pending transaction ${appt.transactionId}`);
+          } else if (transaction.status === 'completed') {
+            // Refund completed transaction
+            const { refundTransaction } = await import('../services/transactionService.js');
+            await refundTransaction(appt.transactionId);
+            console.log(`[RejectAppointment] Successfully refunded completed transaction ${appt.transactionId}`);
+          } else if (transaction.status === 'cancelled' || transaction.status === 'refunded') {
+            // Already cancelled/refunded, nothing to do
+            console.log(`[RejectAppointment] Transaction ${appt.transactionId} is already ${transaction.status}, skipping`);
+          } else {
+            console.log(`[RejectAppointment] Transaction ${appt.transactionId} has status ${transaction.status}, cannot cancel/refund`);
+          }
+        }
       } catch (transactionError) {
-        console.error('Failed to cancel transaction for rejected appointment:', transactionError);
+        console.error('Failed to cancel/refund transaction for rejected appointment:', transactionError);
         // Proceed with rejection even if refund fails
       }
     }
