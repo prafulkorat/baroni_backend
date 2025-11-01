@@ -820,7 +820,7 @@ export const me = async (req, res) => {
       // Calculate proper rating from reviews
       const starRating = ratingAgg && ratingAgg.length > 0
         ? { 
-            average: Number((ratingAgg[0].avg || 0).toFixed(2)), 
+            average: Number((ratingAgg[0].avg || 0).toFixed(1)), // Round to 1 decimal place (e.g., 3.9 instead of 3.99)
             count: ratingAgg[0].count || 0 
           }
         : { average: 0, count: 0 };

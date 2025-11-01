@@ -336,19 +336,47 @@ export const getUserConversations = async (req, res) => {
                     .select('name pseudo profilePic baroniId role')
                     .lean();
 
-                // Get unread message count for this conversation
+                // Get unread message count for this conversation (messages where current user is receiver and isRead is false)
                 const unreadCount = await MessageModel.countDocuments({
                     conversationId: conv._id,
                     receiverId: userId,
                     isRead: false
                 });
 
+                // Get the last message in this conversation to check its read status
+                const lastMessage = await MessageModel.findOne({
+                    conversationId: conv._id
+                })
+                .sort({ createdAt: -1 })
+                .select('isRead receiverId senderId')
+                .lean();
+
+                // Determine if last message is read for current user
+                // Last message is considered "read" if:
+                // 1. Current user is the sender (they sent it, so it's "read" from their perspective)
+                // 2. OR current user is the receiver AND isRead is true
+                let lastMessageIsRead = true; // Default to true
+                if (lastMessage) {
+                    const lastMessageSenderId = String(lastMessage.senderId || '');
+                    const lastMessageReceiverId = String(lastMessage.receiverId || '');
+                    const currentUserIdStr = String(userId);
+
+                    if (lastMessageSenderId === currentUserIdStr) {
+                        // User sent this message - considered "read" (sender always sees their own messages as read)
+                        lastMessageIsRead = true;
+                    } else if (lastMessageReceiverId === currentUserIdStr) {
+                        // User received this message - check isRead status
+                        lastMessageIsRead = lastMessage.isRead === true;
+                    }
+                }
+
                 return {
                     _id: conv._id,
                     lastMessage: conv.lastMessage,
                     lastMessageAt: conv.lastMessageAt,
+                    lastMessageIsRead: lastMessageIsRead, // true if last message is read, false if unread
                     otherParticipant: otherUser ? sanitizeUserData(otherUser) : otherUser,
-                    unreadCount: unreadCount,
+                    unreadCount: unreadCount, // Count of unread messages where current user is receiver
                     createdAt: conv.createdAt,
                     updatedAt: conv.updatedAt
                 };

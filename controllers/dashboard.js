@@ -116,7 +116,7 @@ export const getDashboard = async (req, res) => {
       const ratingsMap = {};
       ratingsAgg.forEach(rating => {
         ratingsMap[rating._id.toString()] = {
-          average: Number((rating.avg || 0).toFixed(2)),
+          average: Number((rating.avg || 0).toFixed(1)), // Round to 1 decimal place (e.g., 3.9 instead of 3.99)
           count: rating.count || 0
         };
       });
@@ -234,7 +234,7 @@ export const getDashboard = async (req, res) => {
       const pendingEscrow = escrowCoins.length > 0 ? escrowCoins[0].escrow : 0;
 
       const starRating = ratingAgg && ratingAgg.length > 0
-        ? { average: Number((ratingAgg[0].avg || 0).toFixed(2)), count: ratingAgg[0].count || 0 }
+        ? { average: Number((ratingAgg[0].avg || 0).toFixed(1)), count: ratingAgg[0].count || 0 }
         : { average: 0, count: 0 };
 
       return res.json({
