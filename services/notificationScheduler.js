@@ -85,10 +85,13 @@ class NotificationScheduler {
   /**
    * Send appointment reminders for appointments starting in 10 minutes
    * Sends to both star and fan
+   * All times are in UTC to avoid timezone mismatches
    */
   async sendAppointmentReminders() {
+    // Get current UTC time
     const now = new Date();
-    console.log(`[AppointmentReminder] ===== Starting reminder check at ${now.toISOString()} =====`);
+    const nowUTC = new Date(now.toISOString());
+    console.log(`[AppointmentReminder] ===== Starting reminder check at ${nowUTC.toISOString()} (UTC) =====`);
     
     // Find all approved appointments (not completed, cancelled, or rejected)
     // We need to check both: appointments without reminder AND appointments at exact time
@@ -107,23 +110,35 @@ class NotificationScheduler {
 
     for (const appointment of appointments) {
       try {
-        // Parse appointment date and time to get scheduled start time
-        const scheduledStartTime = this.parseAppointmentStartTime(appointment.date, appointment.time);
+        // Use UTC start time if available (preferred for new appointments)
+        let scheduledStartTimeUTC;
+        if (appointment.utcStartTime) {
+          scheduledStartTimeUTC = new Date(appointment.utcStartTime);
+          console.log(`[AppointmentReminder] Using UTC start time for appointment ${appointment._id}: ${scheduledStartTimeUTC.toISOString()}`);
+        } else {
+          // Fallback: parse from date and time (for backward compatibility with old appointments)
+          // Note: This may not be accurate for cross-timezone scenarios
+          scheduledStartTimeUTC = this.parseAppointmentStartTime(appointment.date, appointment.time);
+          console.log(`[AppointmentReminder] Using parsed local time (fallback) for appointment ${appointment._id}: ${scheduledStartTimeUTC.toISOString()}`);
+        }
         
-        if (isNaN(scheduledStartTime.getTime())) {
-          console.error(`[AppointmentReminder] Invalid date/time for appointment ${appointment._id}: date=${appointment.date}, time=${appointment.time}`);
+        if (isNaN(scheduledStartTimeUTC.getTime())) {
+          console.error(`[AppointmentReminder] Invalid date/time for appointment ${appointment._id}: date=${appointment.date}, time=${appointment.time}, utcStartTime=${appointment.utcStartTime}`);
           continue;
         }
         
-        // Calculate time until appointment
-        const timeUntilAppointment = scheduledStartTime.getTime() - now.getTime();
-        const minutesUntilAppointment = Math.floor(timeUntilAppointment / (1000 * 60));
-        const secondsUntilAppointment = Math.floor(timeUntilAppointment / 1000);
+        // Calculate time until appointment (both in UTC)
+        // Positive value = future, Negative value = past
+        const timeUntilAppointmentMs = scheduledStartTimeUTC.getTime() - nowUTC.getTime();
+        const minutesUntilAppointment = Math.floor(timeUntilAppointmentMs / (1000 * 60));
+        const secondsUntilAppointment = Math.floor(timeUntilAppointmentMs / 1000);
         
         console.log(`[AppointmentReminder] Appointment ${appointment._id}:`, {
           date: appointment.date,
           time: appointment.time,
-          scheduledStartTime: scheduledStartTime.toISOString(),
+          utcStartTime: appointment.utcStartTime ? new Date(appointment.utcStartTime).toISOString() : 'N/A',
+          scheduledStartTimeUTC: scheduledStartTimeUTC.toISOString(),
+          currentUTC: nowUTC.toISOString(),
           minutesUntil: minutesUntilAppointment,
           secondsUntil: secondsUntilAppointment,
           starId: appointment.starId?._id,
@@ -132,13 +147,14 @@ class NotificationScheduler {
           reminderSent: appointment.reminderSent
         });
         
-        // Case 1: Send reminder 10 minutes before appointment (9-11 minutes away)
+        // Case 1: Send reminder 10 minutes before appointment (exactly 9-11 minutes window)
+        // This ensures we catch the appointment in the 10-minute window
         // Case 2: Send notification at exact appointment time (within ±1 minute window)
         const shouldSend10MinReminder = minutesUntilAppointment >= 9 && minutesUntilAppointment <= 11 && !appointment.reminderSent;
         const shouldSendStartNotification = minutesUntilAppointment >= -1 && minutesUntilAppointment <= 1; // Within ±1 minute of start time
         
         if (shouldSend10MinReminder) {
-          // 10-minute reminder before appointment
+          // 10-minute reminder before appointment (UTC-based)
           const freshAppointment = await Appointment.findById(appointment._id);
           if (freshAppointment?.reminderSent) {
             skippedAlreadySent++;
@@ -146,7 +162,10 @@ class NotificationScheduler {
             continue;
           }
           
-          console.log(`[AppointmentReminder] Sending 10-minute reminder for appointment ${appointment._id} (${minutesUntilAppointment} minutes until start)`);
+          console.log(`[AppointmentReminder] ✨ Sending 10-minute reminder (UTC-based) for appointment ${appointment._id}`);
+          console.log(`[AppointmentReminder]   - Appointment UTC time: ${scheduledStartTimeUTC.toISOString()}`);
+          console.log(`[AppointmentReminder]   - Current UTC time: ${nowUTC.toISOString()}`);
+          console.log(`[AppointmentReminder]   - Minutes until appointment: ${minutesUntilAppointment}`);
           
           try {
             // Send reminder to both star and fan
@@ -156,13 +175,14 @@ class NotificationScheduler {
             });
             
             // Mark reminder as sent to avoid duplicates (atomic update)
+            // Store UTC time for tracking
             await Appointment.findByIdAndUpdate(appointment._id, {
               reminderSent: true,
-              reminderSentAt: new Date()
+              reminderSentAt: nowUTC
             });
             
             remindersSent++;
-            console.log(`[AppointmentReminder] ✓ Successfully sent 10-min reminder for appointment ${appointment._id}`);
+            console.log(`[AppointmentReminder] ✓ Successfully sent 10-min reminder (UTC) for appointment ${appointment._id}`);
             console.log(`[AppointmentReminder]   - Star: ${appointment.starId?.name || 'N/A'} (${appointment.starId?._id})`);
             console.log(`[AppointmentReminder]   - Fan: ${appointment.fanId?.name || 'N/A'} (${appointment.fanId?._id})`);
           } catch (notifyError) {
@@ -170,13 +190,13 @@ class NotificationScheduler {
             console.error(`[AppointmentReminder] ✗ Failed to send 10-min reminder for appointment ${appointment._id}:`, notifyError);
           }
         } else if (shouldSendStartNotification) {
-          // Appointment is starting NOW (within ±1 minute window)
+          // Appointment is starting NOW (within ±1 minute window) - UTC-based
           // Check if we already sent a start notification (using a different field or check)
           const freshAppointment = await Appointment.findById(appointment._id);
           
           // Use startNotificationSent field if exists, otherwise check if reminderSentAt is very recent (last 2 minutes)
           const recentReminder = freshAppointment?.reminderSentAt && 
-            (now.getTime() - freshAppointment.reminderSentAt.getTime()) < (2 * 60 * 1000); // Within last 2 minutes
+            (nowUTC.getTime() - freshAppointment.reminderSentAt.getTime()) < (2 * 60 * 1000); // Within last 2 minutes
           
           if (recentReminder && minutesUntilAppointment <= 0) {
             skippedAlreadySent++;
@@ -184,7 +204,10 @@ class NotificationScheduler {
             continue;
           }
           
-          console.log(`[AppointmentReminder] Sending START notification for appointment ${appointment._id} (${minutesUntilAppointment} minutes from now - appointment ${minutesUntilAppointment >= 0 ? 'starting' : 'started'})`);
+          console.log(`[AppointmentReminder] ✨ Sending START notification (UTC-based) for appointment ${appointment._id}`);
+          console.log(`[AppointmentReminder]   - Appointment UTC time: ${scheduledStartTimeUTC.toISOString()}`);
+          console.log(`[AppointmentReminder]   - Current UTC time: ${nowUTC.toISOString()}`);
+          console.log(`[AppointmentReminder]   - Minutes from now: ${minutesUntilAppointment} (appointment ${minutesUntilAppointment >= 0 ? 'starting' : 'started'})`);
           
           try {
             // Send start notification to both star and fan
@@ -196,14 +219,14 @@ class NotificationScheduler {
               isStartingNow: true
             });
             
-            // Update reminder sent timestamp (reuse the same field)
+            // Update reminder sent timestamp (reuse the same field) - store UTC time
             await Appointment.findByIdAndUpdate(appointment._id, {
               reminderSent: true,
-              reminderSentAt: new Date()
+              reminderSentAt: nowUTC
             });
             
             remindersSent++;
-            console.log(`[AppointmentReminder] ✓ Successfully sent START notification for appointment ${appointment._id}`);
+            console.log(`[AppointmentReminder] ✓ Successfully sent START notification (UTC) for appointment ${appointment._id}`);
             console.log(`[AppointmentReminder]   - Star: ${appointment.starId?.name || 'N/A'} (${appointment.starId?._id})`);
             console.log(`[AppointmentReminder]   - Fan: ${appointment.fanId?.name || 'N/A'} (${appointment.fanId?._id})`);
           } catch (notifyError) {

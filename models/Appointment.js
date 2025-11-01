@@ -8,6 +8,7 @@ const appointmentSchema = new mongoose.Schema(
     timeSlotId: { type: mongoose.Schema.Types.ObjectId, required: true },
     date: { type: String, required: true, trim: true },
     time: { type: String, required: true, trim: true },
+    utcStartTime: { type: Date, index: true }, // UTC time for appointment start (calculated from local time based on country)
     price: { type: Number, required: true, min: 0 },
     status: { type: String, enum: ['pending', 'approved', 'in_progress', 'rejected', 'cancelled', 'completed', 'rescheduled'], default: 'pending', index: true },
     // Tracks the lifecycle of the payment linked to this appointment

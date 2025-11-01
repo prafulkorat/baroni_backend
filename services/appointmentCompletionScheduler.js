@@ -59,7 +59,14 @@ export const processCompletedAppointments = async () => {
 
     for (const appt of appointments) {
       try {
-        const scheduledStartTime = parseAppointmentStartTime(appt.date, appt.time);
+        // Use UTC start time if available, otherwise fall back to parsing local time
+        let scheduledStartTime;
+        if (appt.utcStartTime) {
+          scheduledStartTime = new Date(appt.utcStartTime);
+        } else {
+          // Fallback: parse from date and time (for backward compatibility with old appointments)
+          scheduledStartTime = parseAppointmentStartTime(appt.date, appt.time);
+        }
         const timeSinceScheduled = now.getTime() - scheduledStartTime.getTime();
         const minutesSinceScheduled = timeSinceScheduled / (60 * 1000);
         

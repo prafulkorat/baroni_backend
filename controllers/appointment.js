@@ -11,6 +11,7 @@ import { sanitizeUserData } from '../utils/userDataHelper.js';
 import { moveEscrowToJackpot, refundEscrow } from '../services/starWalletService.js';
 import mongoose from 'mongoose';
 import Conversation from '../models/Conversation.js';
+import { convertLocalToUTC } from '../utils/timezoneHelper.js';
 
 const toUser = (u) => u ? sanitizeUserData(u) : null;
 
@@ -252,6 +253,13 @@ export const createAppointment = async (req, res) => {
       });
     }
 
+    // Get fan's country for timezone conversion
+    const fan = await (await import('../models/User.js')).default.findById(req.user._id).select('country');
+    const fanCountry = fan?.country || null;
+
+    // Convert local time to UTC based on fan's country
+    const utcStartTime = convertLocalToUTC(availability.date, slot.slot, fanCountry);
+
     const created = await Appointment.create({
       starId,
       fanId: req.user._id,
@@ -259,6 +267,7 @@ export const createAppointment = async (req, res) => {
       timeSlotId,
       date: availability.date,
       time: slot.slot,
+      utcStartTime,
       price,
       status: 'pending',
       paymentStatus: transaction.status === 'initiated' ? 'initiated' : 'pending',
@@ -758,6 +767,13 @@ export const rescheduleAppointment = async (req, res) => {
       }
     }
 
+    // Get fan's country for timezone conversion
+    const fan = await (await import('../models/User.js')).default.findById(existingAppointment.fanId._id).select('country');
+    const fanCountry = fan?.country || null;
+
+    // Convert local time to UTC based on fan's country
+    const utcStartTime = convertLocalToUTC(newAvailability.date, newTimeSlot.slot, fanCountry);
+
     // Start transaction to ensure data consistency
     const session = await mongoose.startSession();
     session.startTransaction();
@@ -778,6 +794,7 @@ export const rescheduleAppointment = async (req, res) => {
         timeSlotId: timeSlotId,
         date: newAvailability.date,
         time: newTimeSlot.slot,
+        utcStartTime,
         price: existingAppointment.price, // Use same price as original
         status: 'pending',
         paymentStatus: 'completed', // No payment needed for reschedule
