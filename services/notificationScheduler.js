@@ -25,15 +25,19 @@ class NotificationScheduler {
    * Schedule appointment reminders
    */
   scheduleAppointmentReminders() {
+    console.log('[AppointmentReminder] Scheduling appointment reminder cron job - runs every 1 minute');
     const job = cron.schedule('*/1 * * * *', async () => {
       try {
+        console.log('[AppointmentReminder] Cron job triggered');
         await this.sendAppointmentReminders();
       } catch (error) {
-        console.error('Error in appointment reminder job:', error);
+        console.error('[AppointmentReminder] ✗ Error in appointment reminder cron job:', error);
+        console.error('[AppointmentReminder] Error stack:', error.stack);
       }
     });
 
     this.jobs.set('appointmentReminders', job);
+    console.log('[AppointmentReminder] ✓ Appointment reminder cron job scheduled successfully');
   }
 
   /**
@@ -84,55 +88,109 @@ class NotificationScheduler {
    */
   async sendAppointmentReminders() {
     const now = new Date();
+    console.log(`[AppointmentReminder] ===== Starting reminder check at ${now.toISOString()} =====`);
     
     // Find all approved appointments (not completed, cancelled, or rejected)
     const appointments = await Appointment.find({
       status: { $in: ['approved', 'in_progress'] },
-      paymentStatus: { $in: ['pending', 'completed'] } // Only if payment is not refunded
-    }).populate('starId', 'name pseudo')
-      .populate('fanId', 'name pseudo');
+      paymentStatus: { $in: ['pending', 'completed'] }, // Only if payment is not refunded
+      reminderSent: { $ne: true } // Only appointments that haven't received reminder yet
+    }).populate('starId', 'name pseudo fcmToken apnsToken appNotification')
+      .populate('fanId', 'name pseudo fcmToken apnsToken appNotification');
+
+    console.log(`[AppointmentReminder] Found ${appointments.length} appointments to check`);
 
     let remindersSent = 0;
+    let skippedAlreadySent = 0;
+    let skippedOutOfRange = 0;
+    let errors = 0;
 
     for (const appointment of appointments) {
       try {
         // Parse appointment date and time to get scheduled start time
         const scheduledStartTime = this.parseAppointmentStartTime(appointment.date, appointment.time);
         
+        if (isNaN(scheduledStartTime.getTime())) {
+          console.error(`[AppointmentReminder] Invalid date/time for appointment ${appointment._id}: date=${appointment.date}, time=${appointment.time}`);
+          continue;
+        }
+        
         // Calculate time until appointment
         const timeUntilAppointment = scheduledStartTime.getTime() - now.getTime();
         const minutesUntilAppointment = Math.floor(timeUntilAppointment / (1000 * 60));
+        const secondsUntilAppointment = Math.floor(timeUntilAppointment / 1000);
+        
+        console.log(`[AppointmentReminder] Appointment ${appointment._id}:`, {
+          date: appointment.date,
+          time: appointment.time,
+          scheduledStartTime: scheduledStartTime.toISOString(),
+          minutesUntil: minutesUntilAppointment,
+          secondsUntil: secondsUntilAppointment,
+          starId: appointment.starId?._id,
+          fanId: appointment.fanId?._id,
+          status: appointment.status,
+          reminderSent: appointment.reminderSent
+        });
         
         // Send reminder if appointment is between 9-11 minutes away (to avoid duplicates)
         // This ensures it's sent once when we're exactly 10 minutes away
         if (minutesUntilAppointment >= 9 && minutesUntilAppointment <= 11) {
-          // Check if reminder was already sent (using a flag in appointment)
-          if (appointment.reminderSent) {
-            console.log(`[AppointmentReminder] Reminder already sent for appointment ${appointment._id}`);
+          // Double-check reminder wasn't sent (race condition protection)
+          const freshAppointment = await Appointment.findById(appointment._id);
+          if (freshAppointment?.reminderSent) {
+            skippedAlreadySent++;
+            console.log(`[AppointmentReminder] Skipping appointment ${appointment._id} - reminder already sent`);
             continue;
           }
           
-          // Send reminder to both star and fan
-          await NotificationHelper.sendAppointmentNotification('APPOINTMENT_REMINDER', appointment, {
-            currentUserId: null, // Send to both users
-            minutesUntil: minutesUntilAppointment
-          });
+          console.log(`[AppointmentReminder] Sending reminder for appointment ${appointment._id} (${minutesUntilAppointment} minutes until start)`);
           
-          // Mark reminder as sent to avoid duplicates
-          appointment.reminderSent = true;
-          appointment.reminderSentAt = new Date();
-          await appointment.save();
-          
-          remindersSent++;
-          console.log(`[AppointmentReminder] Reminder sent for appointment ${appointment._id} - ${minutesUntilAppointment} minutes until start`);
+          try {
+            // Send reminder to both star and fan
+            await NotificationHelper.sendAppointmentNotification('APPOINTMENT_REMINDER', appointment, {
+              currentUserId: null, // Send to both users
+              minutesUntil: minutesUntilAppointment
+            });
+            
+            // Mark reminder as sent to avoid duplicates (atomic update)
+            await Appointment.findByIdAndUpdate(appointment._id, {
+              reminderSent: true,
+              reminderSentAt: new Date()
+            });
+            
+            remindersSent++;
+            console.log(`[AppointmentReminder] ✓ Successfully sent reminder for appointment ${appointment._id}`);
+            console.log(`[AppointmentReminder]   - Star: ${appointment.starId?.name || 'N/A'} (${appointment.starId?._id})`);
+            console.log(`[AppointmentReminder]   - Fan: ${appointment.fanId?.name || 'N/A'} (${appointment.fanId?._id})`);
+          } catch (notifyError) {
+            errors++;
+            console.error(`[AppointmentReminder] ✗ Failed to send reminder for appointment ${appointment._id}:`, notifyError);
+          }
+        } else {
+          skippedOutOfRange++;
+          if (minutesUntilAppointment > 0 && minutesUntilAppointment < 15) {
+            // Log appointments that are close but not in range (for debugging)
+            console.log(`[AppointmentReminder] Appointment ${appointment._id} is ${minutesUntilAppointment} minutes away (out of 9-11 range)`);
+          }
         }
       } catch (error) {
-        console.error(`[AppointmentReminder] Error processing appointment ${appointment._id}:`, error);
+        errors++;
+        console.error(`[AppointmentReminder] ✗ Error processing appointment ${appointment._id}:`, error);
+        console.error(`[AppointmentReminder] Error stack:`, error.stack);
       }
     }
     
+    console.log(`[AppointmentReminder] ===== Reminder check completed =====`);
+    console.log(`[AppointmentReminder] Summary:`, {
+      totalChecked: appointments.length,
+      remindersSent,
+      skippedAlreadySent,
+      skippedOutOfRange,
+      errors
+    });
+    
     if (remindersSent > 0) {
-      console.log(`[AppointmentReminder] Sent ${remindersSent} appointment reminders`);
+      console.log(`[AppointmentReminder] ✓ Successfully sent ${remindersSent} appointment reminders`);
     }
   }
 

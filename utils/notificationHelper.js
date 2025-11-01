@@ -130,6 +130,8 @@ class NotificationHelper {
                             (appointment.starId && String(appointment.starId) !== String(currentUserId));
     
     if (appointment.starId && shouldSendToStar) {
+      console.log(`[AppointmentNotification] Processing ${type} notification for star ${data.starId}`);
+      
       // Validate star's notification settings before sending
       const starValidation = await this.validateUserNotificationSettings(data.starId);
       console.log(`[AppointmentNotification] Star validation for user ${data.starId}:`, starValidation);
@@ -143,13 +145,25 @@ class NotificationHelper {
           const minutesUntil = additionalData.minutesUntil || 10;
           starNote.title = 'Appointment Reminder';
           starNote.body = `Your appointment with ${fanName} starts in ${minutesUntil} minutes.`;
+          console.log(`[AppointmentNotification] Sending reminder to star ${data.starId} (${fanName}): "${starNote.body}"`);
         } else if (type === 'APPOINTMENT_CANCELLED' && String(currentUserId) === String(appointment.fanId)) {
           starNote.title = 'Appointment Cancelled';
           starNote.body = `${fanName} has cancelled the appointment.`;
         }
-        await notificationService.sendToUser(data.starId, starNote, data, {
-          relatedEntity: { type: 'appointment', id: appointment._id }
-        });
+        
+        try {
+          const result = await notificationService.sendToUser(data.starId, starNote, data, {
+            relatedEntity: { type: 'appointment', id: appointment._id }
+          });
+          console.log(`[AppointmentNotification] ✓ Star notification sent successfully:`, {
+            userId: data.starId,
+            success: result?.success,
+            notificationId: result?.notificationId
+          });
+        } catch (sendError) {
+          console.error(`[AppointmentNotification] ✗ Failed to send notification to star ${data.starId}:`, sendError);
+          throw sendError;
+        }
       }
     }
 
@@ -161,39 +175,61 @@ class NotificationHelper {
                              type !== 'APPOINTMENT_CREATED');
     
     if (appointment.fanId && shouldSendToFan) {
+      console.log(`[AppointmentNotification] Processing ${type} notification for fan ${data.fanId}`);
       
-      // Customize fan template based on action type
-      if (type === 'APPOINTMENT_APPROVED' || type === 'APPOINTMENT_ACCEPTED') {
-        fanTemplate.title = 'Appointment Approved';
-        fanTemplate.body = `${starName} has approved your appointment request.`;
-        // Set isMessage to true when appointment is accepted
-        data.isMessage = true;
-      } else if (type === 'APPOINTMENT_REJECTED') {
-        fanTemplate.title = 'Appointment Rejected';
-        fanTemplate.body = `${starName} has rejected your appointment request.`;
-      } else if (type === 'APPOINTMENT_CANCELLED') {
-        fanTemplate.title = 'Appointment Cancelled';
-        // Notify fan only when cancelled by star
-        if (String(currentUserId) === String(appointment.starId)) {
-          fanTemplate.body = `${starName} has cancelled your appointment.`;
-        } else {
-          // If fan cancelled themselves, don't notify the fan
-          return;
+      // Validate fan's notification settings before sending
+      const fanValidation = await this.validateUserNotificationSettings(data.fanId);
+      console.log(`[AppointmentNotification] Fan validation for user ${data.fanId}:`, fanValidation);
+      
+      if (!fanValidation.canReceive) {
+        console.log(`[AppointmentNotification] Skipping notification to fan ${data.fanId}: ${fanValidation.reason}`);
+        console.log(`[AppointmentNotification] Fan validation details:`, fanValidation.details);
+        // Don't return - we still want to continue with other logic (e.g., star notification)
+      } else {
+        // Customize fan template based on action type
+        if (type === 'APPOINTMENT_APPROVED' || type === 'APPOINTMENT_ACCEPTED') {
+          fanTemplate.title = 'Appointment Approved';
+          fanTemplate.body = `${starName} has approved your appointment request.`;
+          // Set isMessage to true when appointment is accepted
+          data.isMessage = true;
+        } else if (type === 'APPOINTMENT_REJECTED') {
+          fanTemplate.title = 'Appointment Rejected';
+          fanTemplate.body = `${starName} has rejected your appointment request.`;
+        } else if (type === 'APPOINTMENT_CANCELLED') {
+          fanTemplate.title = 'Appointment Cancelled';
+          // Notify fan only when cancelled by star
+          if (String(currentUserId) === String(appointment.starId)) {
+            fanTemplate.body = `${starName} has cancelled your appointment.`;
+          } else {
+            // If fan cancelled themselves, don't notify the fan
+            return;
+          }
+        } else if (type === 'APPOINTMENT_COMPLETED') {
+          fanTemplate.title = 'Appointment Completed';
+          fanTemplate.body = `Your appointment with ${starName} has been completed.`;
+          // Set isMessage to false when appointment is completed
+          data.isMessage = false;
+        } else if (type === 'APPOINTMENT_REMINDER') {
+          const minutesUntil = additionalData.minutesUntil || 10;
+          fanTemplate.title = 'Appointment Reminder';
+          fanTemplate.body = `Your appointment with ${starName} starts in ${minutesUntil} minutes.`;
+          console.log(`[AppointmentNotification] Sending reminder to fan ${data.fanId} (${starName}): "${fanTemplate.body}"`);
         }
-      } else if (type === 'APPOINTMENT_COMPLETED') {
-        fanTemplate.title = 'Appointment Completed';
-        fanTemplate.body = `Your appointment with ${starName} has been completed.`;
-        // Set isMessage to false when appointment is completed
-        data.isMessage = false;
-      } else if (type === 'APPOINTMENT_REMINDER') {
-        const minutesUntil = additionalData.minutesUntil || 10;
-        fanTemplate.title = 'Appointment Reminder';
-        fanTemplate.body = `Your appointment with ${starName} starts in ${minutesUntil} minutes.`;
+        
+        try {
+          const result = await notificationService.sendToUser(data.fanId, fanTemplate, data, {
+            relatedEntity: { type: 'appointment', id: appointment._id }
+          });
+          console.log(`[AppointmentNotification] ✓ Fan notification sent successfully:`, {
+            userId: data.fanId,
+            success: result?.success,
+            notificationId: result?.notificationId
+          });
+        } catch (sendError) {
+          console.error(`[AppointmentNotification] ✗ Failed to send notification to fan ${data.fanId}:`, sendError);
+          throw sendError;
+        }
       }
-      
-      await notificationService.sendToUser(data.fanId, fanTemplate, data, {
-        relatedEntity: { type: 'appointment', id: appointment._id }
-      });
     } else if (type === 'APPOINTMENT_CREATED') {
       // For APPOINTMENT_CREATED, notification to star is handled in the main logic above
       // This section is only for fan notifications or special cases
