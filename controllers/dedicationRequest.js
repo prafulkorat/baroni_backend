@@ -170,6 +170,32 @@ export const listDedicationRequests = async (req, res) => {
       filter.status = status;
     }
 
+    // Date filtering: exact date or range via startDate/endDate (for eventDate field)
+    const { date, startDate, endDate } = req.query || {};
+    
+    if (date && typeof date === 'string' && date.trim()) {
+      // Exact date match - convert to Date object for eventDate field
+      const dateStr = date.trim();
+      const [year, month, day] = dateStr.split('-').map(v => parseInt(v, 10));
+      const startOfDay = new Date(year, month - 1, day, 0, 0, 0, 0);
+      const endOfDay = new Date(year, month - 1, day, 23, 59, 59, 999);
+      filter.eventDate = { $gte: startOfDay, $lte: endOfDay };
+    } else if (startDate || endDate) {
+      // Date range filtering
+      const range = {};
+      if (startDate && typeof startDate === 'string' && startDate.trim()) {
+        const [year, month, day] = startDate.trim().split('-').map(v => parseInt(v, 10));
+        range.$gte = new Date(year, month - 1, day, 0, 0, 0, 0);
+      }
+      if (endDate && typeof endDate === 'string' && endDate.trim()) {
+        const [year, month, day] = endDate.trim().split('-').map(v => parseInt(v, 10));
+        range.$lte = new Date(year, month - 1, day, 23, 59, 59, 999);
+      }
+      if (Object.keys(range).length > 0) {
+        filter.eventDate = range;
+      }
+    }
+
     const items = await DedicationRequest.find(filter)
       .populate('fanId', 'name pseudo profilePic agoraKey')
       .populate({ path: 'starId', select: '-password -passwordResetToken -passwordResetExpires' })

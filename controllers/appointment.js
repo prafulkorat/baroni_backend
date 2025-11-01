@@ -323,12 +323,26 @@ export const listAppointments = async (req, res) => {
     const { date, startDate, endDate, status, page = 1, limit = 10 } = req.query || {};
     
     if (date && typeof date === 'string' && date.trim()) {
+      // Exact date match
       filter.date = date.trim();
-    } else if ((startDate && typeof startDate === 'string') || (endDate && typeof endDate === 'string')) {
-      const range = {};
-      if (startDate && startDate.trim()) range.$gte = startDate.trim();
-      if (endDate && endDate.trim()) range.$lte = endDate.trim();
-      if (Object.keys(range).length > 0) filter.date = range;
+    } else if (startDate || endDate) {
+      // Date range filtering - if both are same, it's an exact match
+      if (startDate && endDate && startDate.trim() === endDate.trim()) {
+        // Exact date match when both are same
+        filter.date = startDate.trim();
+      } else {
+        // Range filtering
+        const range = {};
+        if (startDate && typeof startDate === 'string' && startDate.trim()) {
+          range.$gte = startDate.trim();
+        }
+        if (endDate && typeof endDate === 'string' && endDate.trim()) {
+          range.$lte = endDate.trim();
+        }
+        if (Object.keys(range).length > 0) {
+          filter.date = range;
+        }
+      }
     }
     
     // Status filtering
