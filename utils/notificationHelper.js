@@ -124,9 +124,12 @@ class NotificationHelper {
       ...(type === 'APPOINTMENT_CREATED' ? { title: 'New Appointment Request', body: `You have a new appointment request from ${fanName}.` } : {})
     };
 
-    // Send to star if star is not the current user.
-    // Also notify star on cancellation when cancelled by fan.
-    if (appointment.starId && String(appointment.starId) !== String(currentUserId)) {
+    // For APPOINTMENT_REMINDER, send to both star and fan regardless of currentUserId
+    // For other types, send to star if star is not the current user
+    const shouldSendToStar = type === 'APPOINTMENT_REMINDER' || 
+                            (appointment.starId && String(appointment.starId) !== String(currentUserId));
+    
+    if (appointment.starId && shouldSendToStar) {
       // Validate star's notification settings before sending
       const starValidation = await this.validateUserNotificationSettings(data.starId);
       console.log(`[AppointmentNotification] Star validation for user ${data.starId}:`, starValidation);
@@ -136,7 +139,11 @@ class NotificationHelper {
         console.log(`[AppointmentNotification] Star validation details:`, starValidation.details);
       } else {
         const starNote = { ...starTemplate };
-        if (type === 'APPOINTMENT_CANCELLED' && String(currentUserId) === String(appointment.fanId)) {
+        if (type === 'APPOINTMENT_REMINDER') {
+          const minutesUntil = additionalData.minutesUntil || 10;
+          starNote.title = 'Appointment Reminder';
+          starNote.body = `Your appointment with ${fanName} starts in ${minutesUntil} minutes.`;
+        } else if (type === 'APPOINTMENT_CANCELLED' && String(currentUserId) === String(appointment.fanId)) {
           starNote.title = 'Appointment Cancelled';
           starNote.body = `${fanName} has cancelled the appointment.`;
         }
@@ -146,11 +153,14 @@ class NotificationHelper {
       }
     }
 
-    // Send to fan if fan is not the current user and it's not an appointment creation
-    // Fan should not receive notifications when they are booking an appointment (APPOINTMENT_CREATED)
-    if (appointment.fanId && 
-        String(appointment.fanId) !== String(currentUserId) && 
-        type !== 'APPOINTMENT_CREATED') {
+    // For APPOINTMENT_REMINDER, send to both star and fan regardless of currentUserId
+    // For other types, send to fan if fan is not the current user and it's not an appointment creation
+    const shouldSendToFan = type === 'APPOINTMENT_REMINDER' ||
+                            (appointment.fanId && 
+                             String(appointment.fanId) !== String(currentUserId) && 
+                             type !== 'APPOINTMENT_CREATED');
+    
+    if (appointment.fanId && shouldSendToFan) {
       
       // Customize fan template based on action type
       if (type === 'APPOINTMENT_APPROVED' || type === 'APPOINTMENT_ACCEPTED') {
@@ -175,6 +185,10 @@ class NotificationHelper {
         fanTemplate.body = `Your appointment with ${starName} has been completed.`;
         // Set isMessage to false when appointment is completed
         data.isMessage = false;
+      } else if (type === 'APPOINTMENT_REMINDER') {
+        const minutesUntil = additionalData.minutesUntil || 10;
+        fanTemplate.title = 'Appointment Reminder';
+        fanTemplate.body = `Your appointment with ${starName} starts in ${minutesUntil} minutes.`;
       }
       
       await notificationService.sendToUser(data.fanId, fanTemplate, data, {

@@ -21,6 +21,9 @@ const appointmentSchema = new mongoose.Schema(
     coinAmountReserved: { type: Number, min: 0, default: 0 },
     completedAt: { type: Date },
     callDuration: { type: Number, min: 0 }, // Duration in seconds
+    // Reminder tracking
+    reminderSent: { type: Boolean, default: false, index: true },
+    reminderSentAt: { type: Date },
     // Reschedule fields
     isRescheduled: { type: Boolean, default: false, index: true },
     parentAppointment: { type: mongoose.Schema.Types.ObjectId, ref: 'Appointment', default: null, index: true },
