@@ -112,6 +112,19 @@ class NotificationHelper {
     // Get current user ID from additionalData
     const currentUserId = additionalData.currentUserId || '';
 
+    // Extract starId and fanId properly (handle both populated objects and IDs)
+    const starId = appointment.starId?._id 
+      ? String(appointment.starId._id) 
+      : (appointment.starId?.toString?.() || String(appointment.starId || ''));
+    
+    const fanId = appointment.fanId?._id 
+      ? String(appointment.fanId._id) 
+      : (appointment.fanId?.toString?.() || String(appointment.fanId || ''));
+
+    // Update data with proper string IDs
+    data.starId = starId;
+    data.fanId = fanId;
+
     // Fan message
     const fanTemplate = {
       ...baseTemplate,
@@ -127,17 +140,18 @@ class NotificationHelper {
     // For APPOINTMENT_REMINDER, send to both star and fan regardless of currentUserId
     // For other types, send to star if star is not the current user
     const shouldSendToStar = type === 'APPOINTMENT_REMINDER' || 
-                            (appointment.starId && String(appointment.starId) !== String(currentUserId));
+                            (starId && String(starId) !== String(currentUserId));
     
-    if (appointment.starId && shouldSendToStar) {
-      console.log(`[AppointmentNotification] Processing ${type} notification for star ${data.starId}`);
+    if (starId && shouldSendToStar) {
+      console.log(`[AppointmentNotification] Processing ${type} notification for star`, appointment.starId);
+      console.log(`[AppointmentNotification] Using starId: ${starId}`);
       
-      // Validate star's notification settings before sending
-      const starValidation = await this.validateUserNotificationSettings(data.starId);
-      console.log(`[AppointmentNotification] Star validation for user ${data.starId}:`, starValidation);
+      // Validate star's notification settings before sending (pass string ID, not object)
+      const starValidation = await this.validateUserNotificationSettings(starId);
+      console.log(`[AppointmentNotification] Star validation for user ${starId}:`, starValidation);
       
       if (!starValidation.canReceive) {
-        console.log(`[AppointmentNotification] Skipping notification to star ${data.starId}: ${starValidation.reason}`);
+        console.log(`[AppointmentNotification] Skipping notification to star ${starId}: ${starValidation.reason}`);
         console.log(`[AppointmentNotification] Star validation details:`, starValidation.details);
       } else {
         const starNote = { ...starTemplate };
@@ -146,28 +160,28 @@ class NotificationHelper {
           if (additionalData.isStartTime || additionalData.isStartingNow) {
             starNote.title = 'Appointment Starting Now';
             starNote.body = `Your appointment with ${fanName} is starting now! Please join.`;
-            console.log(`[AppointmentNotification] Sending START notification to star ${data.starId} (${fanName}): "${starNote.body}"`);
+            console.log(`[AppointmentNotification] Sending START notification to star ${starId} (${fanName}): "${starNote.body}"`);
           } else {
             starNote.title = 'Appointment Reminder';
             starNote.body = `Your appointment with ${fanName} starts in ${minutesUntil} minutes.`;
-            console.log(`[AppointmentNotification] Sending reminder to star ${data.starId} (${fanName}): "${starNote.body}"`);
+            console.log(`[AppointmentNotification] Sending reminder to star ${starId} (${fanName}): "${starNote.body}"`);
           }
-        } else if (type === 'APPOINTMENT_CANCELLED' && String(currentUserId) === String(appointment.fanId)) {
+        } else if (type === 'APPOINTMENT_CANCELLED' && String(currentUserId) === String(fanId)) {
           starNote.title = 'Appointment Cancelled';
           starNote.body = `${fanName} has cancelled the appointment.`;
         }
         
         try {
-          const result = await notificationService.sendToUser(data.starId, starNote, data, {
+          const result = await notificationService.sendToUser(starId, starNote, data, {
             relatedEntity: { type: 'appointment', id: appointment._id }
           });
           console.log(`[AppointmentNotification] ✓ Star notification sent successfully:`, {
-            userId: data.starId,
+            userId: starId,
             success: result?.success,
             notificationId: result?.notificationId
           });
         } catch (sendError) {
-          console.error(`[AppointmentNotification] ✗ Failed to send notification to star ${data.starId}:`, sendError);
+          console.error(`[AppointmentNotification] ✗ Failed to send notification to star ${starId}:`, sendError);
           throw sendError;
         }
       }
@@ -176,19 +190,20 @@ class NotificationHelper {
     // For APPOINTMENT_REMINDER, send to both star and fan regardless of currentUserId
     // For other types, send to fan if fan is not the current user and it's not an appointment creation
     const shouldSendToFan = type === 'APPOINTMENT_REMINDER' ||
-                            (appointment.fanId && 
-                             String(appointment.fanId) !== String(currentUserId) && 
+                            (fanId && 
+                             String(fanId) !== String(currentUserId) && 
                              type !== 'APPOINTMENT_CREATED');
     
-    if (appointment.fanId && shouldSendToFan) {
-      console.log(`[AppointmentNotification] Processing ${type} notification for fan ${data.fanId}`);
+    if (fanId && shouldSendToFan) {
+      console.log(`[AppointmentNotification] Processing ${type} notification for fan`, appointment.fanId);
+      console.log(`[AppointmentNotification] Using fanId: ${fanId}`);
       
-      // Validate fan's notification settings before sending
-      const fanValidation = await this.validateUserNotificationSettings(data.fanId);
-      console.log(`[AppointmentNotification] Fan validation for user ${data.fanId}:`, fanValidation);
+      // Validate fan's notification settings before sending (pass string ID, not object)
+      const fanValidation = await this.validateUserNotificationSettings(fanId);
+      console.log(`[AppointmentNotification] Fan validation for user ${fanId}:`, fanValidation);
       
       if (!fanValidation.canReceive) {
-        console.log(`[AppointmentNotification] Skipping notification to fan ${data.fanId}: ${fanValidation.reason}`);
+        console.log(`[AppointmentNotification] Skipping notification to fan ${fanId}: ${fanValidation.reason}`);
         console.log(`[AppointmentNotification] Fan validation details:`, fanValidation.details);
         // Don't return - we still want to continue with other logic (e.g., star notification)
       } else {
@@ -204,7 +219,7 @@ class NotificationHelper {
         } else if (type === 'APPOINTMENT_CANCELLED') {
           fanTemplate.title = 'Appointment Cancelled';
           // Notify fan only when cancelled by star
-          if (String(currentUserId) === String(appointment.starId)) {
+          if (String(currentUserId) === String(starId)) {
             fanTemplate.body = `${starName} has cancelled your appointment.`;
           } else {
             // If fan cancelled themselves, don't notify the fan
@@ -220,25 +235,25 @@ class NotificationHelper {
           if (additionalData.isStartTime || additionalData.isStartingNow) {
             fanTemplate.title = 'Appointment Starting Now';
             fanTemplate.body = `Your appointment with ${starName} is starting now! Please join.`;
-            console.log(`[AppointmentNotification] Sending START notification to fan ${data.fanId} (${starName}): "${fanTemplate.body}"`);
+            console.log(`[AppointmentNotification] Sending START notification to fan ${fanId} (${starName}): "${fanTemplate.body}"`);
           } else {
             fanTemplate.title = 'Appointment Reminder';
             fanTemplate.body = `Your appointment with ${starName} starts in ${minutesUntil} minutes.`;
-            console.log(`[AppointmentNotification] Sending reminder to fan ${data.fanId} (${starName}): "${fanTemplate.body}"`);
+            console.log(`[AppointmentNotification] Sending reminder to fan ${fanId} (${starName}): "${fanTemplate.body}"`);
           }
         }
         
         try {
-          const result = await notificationService.sendToUser(data.fanId, fanTemplate, data, {
+          const result = await notificationService.sendToUser(fanId, fanTemplate, data, {
             relatedEntity: { type: 'appointment', id: appointment._id }
           });
           console.log(`[AppointmentNotification] ✓ Fan notification sent successfully:`, {
-            userId: data.fanId,
+            userId: fanId,
             success: result?.success,
             notificationId: result?.notificationId
           });
         } catch (sendError) {
-          console.error(`[AppointmentNotification] ✗ Failed to send notification to fan ${data.fanId}:`, sendError);
+          console.error(`[AppointmentNotification] ✗ Failed to send notification to fan ${fanId}:`, sendError);
           throw sendError;
         }
       }
