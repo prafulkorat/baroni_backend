@@ -510,7 +510,7 @@ export async function registerUserForMessagingInternal(userId) {
 export const markMessagesAsRead = async (req, res) => {
     try {
         const { conversationId } = req.params;
-        const userId = String(req.user._id);
+        const userId = req.user._id; // Keep as ObjectId for proper MongoDB comparison
 
         // Validate conversation exists and user is a participant
         const conversation = await ConversationModel.findById(conversationId).lean();
@@ -522,33 +522,39 @@ export const markMessagesAsRead = async (req, res) => {
         }
 
         const participants = (conversation.participants || []).map(String);
-        if (!participants.includes(userId)) {
+        if (!participants.includes(String(userId))) {
             return res.status(403).json({
                 success: false,
                 message: 'Not allowed in this conversation'
             });
         }
 
-        // Mark all unread messages in this conversation as read for the current user
+        // Mark ALL messages in this conversation as read for the current user
+        // Mark all messages where current user is the receiver (set isRead to true)
+        // This ensures all messages in the conversation are marked as read for this user
         const result = await MessageModel.updateMany(
             {
                 conversationId: conversationId,
-                receiverId: userId,
-                isRead: false
+                receiverId: userId // All messages where current user is the receiver
             },
             {
-                isRead: true
+                $set: { isRead: true }
             }
         );
 
+        console.log(`[MarkMessagesAsRead] Marked ${result.modifiedCount} messages as read for conversation ${conversationId} by user ${userId}`);
+
         res.json({
             success: true,
-            message: 'Messages marked as read',
+            message: 'Messages marked as read successfully',
             data: {
-                modifiedCount: result.modifiedCount
+                conversationId,
+                modifiedCount: result.modifiedCount,
+                matchedCount: result.matchedCount
             }
         });
     } catch (error) {
+        console.error('[MarkMessagesAsRead] Error:', error);
         res.status(500).json({
             success: false,
             message: 'Error marking messages as read',
