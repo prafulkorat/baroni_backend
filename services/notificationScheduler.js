@@ -191,16 +191,33 @@ class NotificationScheduler {
           }
         } else if (shouldSendStartNotification) {
           // Appointment is starting NOW (within ±1 minute window) - UTC-based
-          // Check if we already sent a start notification (using a different field or check)
+          // Check if we already sent a reminder notification (10 min before)
           const freshAppointment = await Appointment.findById(appointment._id);
           
-          // Use startNotificationSent field if exists, otherwise check if reminderSentAt is very recent (last 2 minutes)
+          // Skip start notification if we already sent a 10-minute reminder recently (within last 15 minutes)
+          // This prevents duplicate notifications to fan - they already got notified 10 minutes ago
           const recentReminder = freshAppointment?.reminderSentAt && 
-            (nowUTC.getTime() - freshAppointment.reminderSentAt.getTime()) < (2 * 60 * 1000); // Within last 2 minutes
+            (nowUTC.getTime() - freshAppointment.reminderSentAt.getTime()) < (15 * 60 * 1000); // Within last 15 minutes
           
-          if (recentReminder && minutesUntilAppointment <= 0) {
+          if (recentReminder) {
             skippedAlreadySent++;
-            console.log(`[AppointmentReminder] Skipping start notification for appointment ${appointment._id} - already sent recently`);
+            console.log(`[AppointmentReminder] Skipping start notification for appointment ${appointment._id} - fan already received 10-min reminder`);
+            console.log(`[AppointmentReminder]   - Reminder was sent at: ${freshAppointment.reminderSentAt?.toISOString()}`);
+            console.log(`[AppointmentReminder]   - Time since reminder: ${Math.floor((nowUTC.getTime() - freshAppointment.reminderSentAt.getTime()) / (60 * 1000))} minutes`);
+            // Still send to star only (if needed)
+            try {
+              // Send start notification only to star (not fan) since fan already got reminder
+              await NotificationHelper.sendAppointmentNotification('APPOINTMENT_REMINDER', appointment, {
+                currentUserId: appointment.fanId?._id || appointment.fanId, // Skip fan, only send to star
+                minutesUntil: 0, // At start time
+                isStartTime: true,
+                isStartingNow: true,
+                skipFan: true // Flag to skip fan notification
+              });
+              console.log(`[AppointmentReminder] ✓ Sent START notification only to star (fan skipped - already notified)`);
+            } catch (notifyError) {
+              console.error(`[AppointmentReminder] ✗ Failed to send start notification to star:`, notifyError);
+            }
             continue;
           }
           
@@ -208,10 +225,10 @@ class NotificationScheduler {
           console.log(`[AppointmentReminder]   - Appointment UTC time: ${scheduledStartTimeUTC.toISOString()}`);
           console.log(`[AppointmentReminder]   - Current UTC time: ${nowUTC.toISOString()}`);
           console.log(`[AppointmentReminder]   - Minutes from now: ${minutesUntilAppointment} (appointment ${minutesUntilAppointment >= 0 ? 'starting' : 'started'})`);
+          console.log(`[AppointmentReminder]   - No recent reminder found, sending to both users`);
           
           try {
-            // Send start notification to both star and fan
-            // Use APPOINTMENT_REMINDER type but with custom message for start time
+            // Send start notification to both star and fan (only if no recent reminder was sent)
             await NotificationHelper.sendAppointmentNotification('APPOINTMENT_REMINDER', appointment, {
               currentUserId: null, // Send to both users
               minutesUntil: 0, // At start time

@@ -195,11 +195,15 @@ class NotificationHelper {
     }
 
     // For APPOINTMENT_REMINDER, send to both star and fan regardless of currentUserId
+    // BUT skip fan if skipFan flag is set (to prevent duplicate notifications)
     // For other types, send to fan if fan is not the current user and it's not an appointment creation
-    const shouldSendToFan = type === 'APPOINTMENT_REMINDER' ||
-                            (fanId && 
-                             String(fanId) !== String(currentUserId) && 
-                             type !== 'APPOINTMENT_CREATED');
+    const skipFan = additionalData.skipFan === true; // Flag to skip fan notification (prevents duplicate)
+    const shouldSendToFan = !skipFan && (
+      type === 'APPOINTMENT_REMINDER' ||
+      (fanId && 
+       String(fanId) !== String(currentUserId) && 
+       type !== 'APPOINTMENT_CREATED')
+    );
     
     if (fanId && shouldSendToFan) {
       console.log(`[AppointmentNotification] Processing ${type} notification for fan`, appointment.fanId);

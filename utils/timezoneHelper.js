@@ -4,14 +4,21 @@
  */
 
 // Country to timezone offset mapping (in hours)
+// Supports multiple variations/languages for country names
 const COUNTRY_TIMEZONES = {
-  'India': 5.5,  // IST (UTC+5:30)
-  'Mali': 0,     // GMT (UTC+0)
+  // India variations
+  'India': 5.5,      // IST (UTC+5:30)
+  'भारत': 5.5,      // Hindi
+  'Bharat': 5.5,    // Alternative
+  'IN': 5.5,        // ISO code
+  // Mali variations
+  'Mali': 0,        // GMT (UTC+0)
+  'ML': 0,          // ISO code
 };
 
 /**
  * Get timezone offset for a country
- * @param {string} country - Country name
+ * @param {string} country - Country name (supports multiple languages/variations)
  * @returns {number} Timezone offset in hours (e.g., 5.5 for IST)
  */
 export const getCountryTimezoneOffset = (country) => {
@@ -19,7 +26,25 @@ export const getCountryTimezoneOffset = (country) => {
     // Default to UTC if no country specified
     return 0;
   }
-  return COUNTRY_TIMEZONES[country] ?? 0;
+  
+  // Normalize country name - trim and check case-insensitive
+  const normalizedCountry = typeof country === 'string' ? country.trim() : '';
+  
+  // Direct lookup
+  if (COUNTRY_TIMEZONES.hasOwnProperty(normalizedCountry)) {
+    return COUNTRY_TIMEZONES[normalizedCountry];
+  }
+  
+  // Case-insensitive lookup
+  const lowerCountry = normalizedCountry.toLowerCase();
+  for (const [key, offset] of Object.entries(COUNTRY_TIMEZONES)) {
+    if (key.toLowerCase() === lowerCountry) {
+      return offset;
+    }
+  }
+  
+  // Default to UTC if country not found
+  return 0;
 };
 
 /**
@@ -51,6 +76,9 @@ export const convertLocalToUTC = (dateStr, timeStr, country) => {
   // India = UTC+5:30 (offset is +5.5), Mali = UTC+0 (offset is 0)
   const offsetHours = getCountryTimezoneOffset(country);
   
+  // Log country recognition for debugging
+  console.log(`[TimezoneConversion] Country lookup: "${country}" -> offset: ${offsetHours}h`);
+  
   // Convert local time to UTC
   // Example: If appointment is 09:30 AM IST (UTC+5:30), we need 04:00 UTC
   // Formula: UTC = Local - Offset
@@ -72,16 +100,25 @@ export const convertLocalToUTC = (dateStr, timeStr, country) => {
   // Subtract the timezone offset to get actual UTC time
   // offsetHours is positive for timezones ahead of UTC (like IST +5:30)
   // So we subtract it: UTC = LocalInUTC - Offset
-  const utcTimestamp = localTimeInUTC - (offsetHours * 60 * 60 * 1000);
+  const offsetMs = offsetHours * 60 * 60 * 1000;
+  const utcTimestamp = localTimeInUTC - offsetMs;
   
   // Create Date object from UTC timestamp
   // This Date object represents the exact UTC time and will be stored correctly in MongoDB
   const utcDate = new Date(utcTimestamp);
   
-  // Log for debugging (can be removed in production)
-  console.log(`[TimezoneConversion] Local time: ${dateStr} ${timeStr} (${country || 'unknown'}, offset: ${offsetHours}h)`);
-  console.log(`[TimezoneConversion] UTC time: ${utcDate.toISOString()}`);
-  console.log(`[TimezoneConversion] UTC timestamp: ${utcTimestamp}`);
+  // Log for debugging (shows the conversion calculation)
+  console.log(`[TimezoneConversion] Conversion details:`, {
+    local: `${dateStr} ${timeStr}`,
+    country: country || 'unknown',
+    offsetHours,
+    localTimeComponents: `${hours}:${minutes}`,
+    localTimeInUTCTimestamp: localTimeInUTC,
+    offsetMs,
+    utcTimestamp,
+    utcTimeISO: utcDate.toISOString(),
+    verification: offsetHours > 0 ? `Local time ${hours}:${minutes} - ${offsetHours}h = UTC ${utcDate.getUTCHours()}:${utcDate.getUTCMinutes()}` : 'No offset applied'
+  });
   
   return utcDate;
 };
