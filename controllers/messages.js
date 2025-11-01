@@ -343,6 +343,16 @@ export const getUserConversations = async (req, res) => {
                     isRead: false
                 });
 
+                // Get unread message count for the other participant (receiver_unread_count)
+                // Count messages where the other participant is receiver and isRead is false
+                const receiverUnreadCount = otherParticipantId
+                    ? await MessageModel.countDocuments({
+                          conversationId: conv._id,
+                          receiverId: otherParticipantId,
+                          isRead: false
+                      })
+                    : 0;
+
                 // Get the last message in this conversation to check its read status
                 const lastMessage = await MessageModel.findOne({
                     conversationId: conv._id
@@ -377,6 +387,7 @@ export const getUserConversations = async (req, res) => {
                     lastMessageIsRead: lastMessageIsRead, // true if last message is read, false if unread
                     otherParticipant: otherUser ? sanitizeUserData(otherUser) : otherUser,
                     unreadCount: unreadCount, // Count of unread messages where current user is receiver
+                    receiver_unread_count: receiverUnreadCount, // Count of unread messages for the other participant
                     createdAt: conv.createdAt,
                     updatedAt: conv.updatedAt
                 };
