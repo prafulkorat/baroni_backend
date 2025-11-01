@@ -339,22 +339,20 @@ export const listAppointments = async (req, res) => {
       }
     }
     
-    // Pagination
+    // Pagination - fetch all first for proper global sorting, then paginate
     const pageNum = parseInt(page, 10) || 1;
     const limitNum = parseInt(limit, 10) || 10;
-    const skip = (pageNum - 1) * limitNum;
     
     // Get total count for pagination info
     const totalCount = await Appointment.countDocuments(filter);
     const totalPages = Math.ceil(totalCount / limitNum);
     
-    const items = await Appointment.find(filter)
+    // Fetch all appointments (without pagination) to ensure proper global sorting
+    // Then we'll sort and paginate in memory
+    const allItems = await Appointment.find(filter)
       .populate({ path: 'starId', select: '-password -passwordResetToken -passwordResetExpires' })
       .populate('fanId', 'name pseudo profilePic baroniId email contact role agoraKey')
-      .populate('availabilityId')
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limitNum);
+      .populate('availabilityId');
 
     const parseStartDate = (dateStr, timeStr) => {
       const [year, month, day] = (dateStr || '').split('-').map((v) => parseInt(v, 10));
@@ -377,7 +375,7 @@ export const listAppointments = async (req, res) => {
     // Pre-fetch all conversations between fan-star pairs for better performance
     // Get unique fan-star pairs from appointments
     const userPairs = new Set();
-    items.forEach(doc => {
+    allItems.forEach(doc => {
       if (doc.fanId?._id && doc.starId?._id) {
         const fanId = String(doc.fanId._id);
         const starId = String(doc.starId._id);
@@ -405,7 +403,7 @@ export const listAppointments = async (req, res) => {
       }
     });
 
-    const withComputed = items.map((doc) => {
+    const withComputed = allItems.map((doc) => {
       const base = sanitize(doc);
       let timeSlotObj = undefined;
       if (doc.availabilityId && doc.availabilityId.timeSlots) {
@@ -426,102 +424,72 @@ export const listAppointments = async (req, res) => {
       return { ...base, timeSlot: timeSlotObj, startAt: isNaN(startAt.getTime()) ? undefined : startAt.toISOString(), timeToNowMs, conversationId };
     });
 
-    // Apply proper sorting logic based on appointment status and time
-    let data = withComputed;
+    // Apply proper sorting logic: by status priority, then by date ascending
+    // Status priority: (1) pending, (2) approved, (3) completed, (4) cancelled/rejected
+    // Within each status group, sort by date ascending (nearest to furthest)
     
-    if (!status || !status.trim()) {
-      // No status filter - apply proper sorting logic
-      const ongoing = [];
-      const upcoming = [];
-      const pending = [];
-      const completed = [];
-      const canceled = [];
+    const getStatusPriority = (status) => {
+      switch (status) {
+        case 'pending': return 1;
+        case 'approved': 
+        case 'in_progress': return 2;
+        case 'completed': return 3;
+        case 'cancelled':
+        case 'rejected': return 4;
+        default: return 5;
+      }
+    };
+    
+    // Sort by status priority first, then by date ascending
+    const data = withComputed.sort((a, b) => {
+      // First, compare by status priority
+      const statusPriorityA = getStatusPriority(a.status);
+      const statusPriorityB = getStatusPriority(b.status);
       
-      const now = Date.now();
-      const appointmentDuration = 5 * 60 * 1000; // 5 minutes in milliseconds
+      if (statusPriorityA !== statusPriorityB) {
+        return statusPriorityA - statusPriorityB;
+      }
       
-      for (const it of withComputed) {
-        const startTime = it.startAt ? new Date(it.startAt).getTime() : 0;
-        const endTime = startTime + appointmentDuration;
-        
-        // Determine if appointment is ongoing (currently in progress)
-        const isOngoing = it.status === 'approved' && 
-                         startTime <= now && 
-                         now <= endTime;
-        
-        if (isOngoing) {
-          ongoing.push(it);
-        } else if (it.status === 'approved' && startTime > now) {
-          // Upcoming approved appointments
-          upcoming.push(it);
-        } else if (it.status === 'pending') {
-          pending.push(it);
-        } else if (it.status === 'completed') {
-          completed.push(it);
-        } else {
-          // canceled, rejected, etc.
-          canceled.push(it);
+      // If same status, sort by date ascending (nearest to furthest)
+      const dateA = a.date || '';
+      const dateB = b.date || '';
+      
+      // Compare dates (YYYY-MM-DD format strings compare correctly)
+      if (dateA !== dateB) {
+        return dateA.localeCompare(dateB);
+      }
+      
+      // If same date, compare by time (nearest first)
+      const timeA = a.time || '';
+      const timeB = b.time || '';
+      
+      // Extract time from format like "09:30 - 09:50" or "09:30 AM"
+      const extractTime = (timeStr) => {
+        if (!timeStr) return '';
+        const timePart = timeStr.split('-')[0].trim();
+        const match = timePart.match(/^(\d{1,2}):(\d{2})/);
+        if (match) {
+          const hours = parseInt(match[1], 10);
+          const minutes = parseInt(match[2], 10);
+          return hours * 60 + minutes; // Convert to minutes for comparison
         }
-      }
+        return 0;
+      };
       
-      // Sort ongoing appointments by start time (earliest first)
-      ongoing.sort((a, b) => {
-        const aStart = a.startAt ? new Date(a.startAt).getTime() : 0;
-        const bStart = b.startAt ? new Date(b.startAt).getTime() : 0;
-        return aStart - bStart;
-      });
+      const timeMinutesA = extractTime(timeA);
+      const timeMinutesB = extractTime(timeB);
       
-      // Sort upcoming appointments by start time (earliest first)
-      upcoming.sort((a, b) => {
-        const aStart = a.startAt ? new Date(a.startAt).getTime() : 0;
-        const bStart = b.startAt ? new Date(b.startAt).getTime() : 0;
-        return aStart - bStart;
-      });
-      
-      // Sort pending appointments by creation time (most recent first)
-      pending.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-      
-      // Sort completed appointments by actual appointment time (most recent first)
-      completed.sort((a, b) => {
-        const aStart = a.startAt ? new Date(a.startAt).getTime() : 0;
-        const bStart = b.startAt ? new Date(b.startAt).getTime() : 0;
-        return bStart - aStart; // Most recent first
-      });
-      
-      // Sort canceled appointments by actual appointment time (most recent first)
-      canceled.sort((a, b) => {
-        const aStart = a.startAt ? new Date(a.startAt).getTime() : 0;
-        const bStart = b.startAt ? new Date(b.startAt).getTime() : 0;
-        return bStart - aStart; // Most recent first
-      });
-      
-      data = [...ongoing, ...upcoming, ...pending, ...completed, ...canceled];
-    } else {
-      // Status filter applied - sort by appropriate criteria based on status
-      if (status === 'approved') {
-        // For approved appointments, sort by start time (earliest first)
-        data = withComputed.sort((a, b) => {
-          const aStart = a.startAt ? new Date(a.startAt).getTime() : 0;
-          const bStart = b.startAt ? new Date(b.startAt).getTime() : 0;
-          return aStart - bStart;
-        });
-      } else if (status === 'completed' || status === 'cancelled' || status === 'rejected') {
-        // For completed/canceled appointments, sort by actual appointment time (most recent first)
-        data = withComputed.sort((a, b) => {
-          const aStart = a.startAt ? new Date(a.startAt).getTime() : 0;
-          const bStart = b.startAt ? new Date(b.startAt).getTime() : 0;
-          return bStart - aStart;
-        });
-      } else {
-        // For pending appointments, sort by creation time (most recent first)
-        data = withComputed.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-      }
-    }
+      return timeMinutesA - timeMinutesB;
+    });
+    
+    // Apply pagination after sorting
+    const skip = (pageNum - 1) * limitNum;
+    const paginatedData = data.slice(skip, skip + limitNum);
 
     return res.json({ 
       success: true, 
       message: 'Appointments retrieved successfully',
-      data: data,
+      data: paginatedData,
       pagination: {
         currentPage: pageNum,
         totalPages,
@@ -889,17 +857,25 @@ export const completeAppointment = async (req, res) => {
       transactionId: appt.transactionId
     });
     
-    if (appt.status !== 'approved') {
-      console.log(`[CompleteAppointment] Appointment ${id} status is ${appt.status}, cannot complete`);
-      return res.status(400).json({ success: false, message: 'Only approved appointments can be completed' });
+    if (appt.status !== 'approved' && appt.status !== 'in_progress') {
+      console.log(`[CompleteAppointment] Appointment ${id} status is ${appt.status}, cannot add duration`);
+      return res.status(400).json({ success: false, message: 'Only approved or in-progress appointments can have duration added' });
     }
 
-    // Complete the transaction and transfer coins to star
-    if (appt.transactionId) {
+    // Convert minutes to seconds
+    const durationInSeconds = callDuration * 60;
+    
+    // Accumulate duration instead of replacing
+    const currentDuration = appt.callDuration || 0;
+    const newTotalDuration = currentDuration + durationInSeconds;
+    
+    console.log(`[CompleteAppointment] Adding ${durationInSeconds} seconds. Current: ${currentDuration}s, New Total: ${newTotalDuration}s`);
+    
+    // Complete the transaction if it's still pending (only once)
+    if (appt.transactionId && appt.paymentStatus !== 'completed') {
       try {
-        console.log(`[CompleteAppointment] Checking transaction ${appt.transactionId} status before completion`);
+        console.log(`[CompleteAppointment] Checking transaction ${appt.transactionId} status`);
         
-        // First check the transaction status
         const transaction = await Transaction.findById(appt.transactionId);
         if (!transaction) {
           console.log(`[CompleteAppointment] Transaction ${appt.transactionId} not found`);
@@ -909,15 +885,6 @@ export const completeAppointment = async (req, res) => {
           });
         }
         
-        console.log(`[CompleteAppointment] Transaction ${appt.transactionId} current status:`, {
-          id: transaction._id,
-          status: transaction.status,
-          amount: transaction.amount,
-          payerId: transaction.payerId,
-          receiverId: transaction.receiverId,
-          type: transaction.type
-        });
-        
         // Only complete if transaction is pending
         if (transaction.status === TRANSACTION_STATUSES.PENDING) {
           console.log(`[CompleteAppointment] Completing transaction ${appt.transactionId}`);
@@ -925,65 +892,42 @@ export const completeAppointment = async (req, res) => {
           console.log(`[CompleteAppointment] Transaction ${appt.transactionId} completed successfully`);
         } else if (transaction.status === TRANSACTION_STATUSES.COMPLETED) {
           console.log(`[CompleteAppointment] Transaction ${appt.transactionId} is already completed`);
-        } else {
-          console.log(`[CompleteAppointment] Transaction ${appt.transactionId} status is ${transaction.status}, cannot complete`);
-          return res.status(400).json({
-            success: false,
-            message: `Transaction status is ${transaction.status}, cannot complete appointment`
-          });
         }
       } catch (transactionError) {
         console.error(`[CompleteAppointment] Failed to complete transaction ${appt.transactionId}:`, transactionError);
-        return res.status(500).json({
-          success: false,
-          message: 'Failed to complete transaction: ' + transactionError.message
-        });
+        // Continue with duration update even if transaction completion fails
       }
     }
-
-    console.log(`[CompleteAppointment] Updating appointment ${id} to completed status with call duration ${callDuration}`);
     
-    // Move escrow to jackpot for the star
-    try {
-      await moveEscrowToJackpot(appt.starId, appt._id, null);
-      console.log(`[CompleteAppointment] Moved escrow to jackpot for star ${appt.starId}`);
-    } catch (walletError) {
-      console.error(`[CompleteAppointment] Failed to move escrow to jackpot:`, walletError);
-      // Continue with appointment completion even if wallet update fails
+    // Update appointment with accumulated duration
+    appt.callDuration = newTotalDuration;
+    
+    // Mark as in_progress if not already completed (cron will mark as completed when >= 300s)
+    if (appt.status === 'approved') {
+      appt.status = 'in_progress';
     }
     
-    appt.status = 'completed';
-    appt.paymentStatus = 'completed';
-    appt.completedAt = new Date();
-    // Convert minutes to seconds for storage
-    appt.callDuration = callDuration * 60;
     const updated = await appt.save();
     
-    console.log(`[CompleteAppointment] Appointment ${id} updated successfully:`, {
+    console.log(`[CompleteAppointment] Appointment ${id} updated:`, {
       id: updated._id,
       status: updated.status,
-      paymentStatus: updated.paymentStatus,
-      completedAt: updated.completedAt,
-      callDuration: updated.callDuration
+      callDuration: updated.callDuration,
+      totalDurationSeconds: updated.callDuration,
+      totalDurationMinutes: updated.callDuration / 60
     });
-
-    // Send completion notification
-    try {
-      await NotificationHelper.sendAppointmentNotification('APPOINTMENT_COMPLETED', updated, { currentUserId: req.user._id });
-    } catch (notificationError) {
-      console.error('Error sending appointment completion notification:', notificationError);
-    }
-
-    // Cleanup messages between fan and star after completion
-    try {
-      await deleteConversationBetweenUsers(appt.fanId, appt.starId);
-    } catch (_e) {}
-
+    
+    // Note: Completion status will be set by cron job when duration >= 300 seconds
+    // Do not send completion notification here - cron will handle it
+    
     return res.json({ 
       success: true, 
-      message: 'Appointment completed successfully',
+      message: 'Call duration added successfully',
       data: {
-        appointment: sanitize(updated)
+        appointment: sanitize(updated),
+        totalDurationSeconds: updated.callDuration,
+        totalDurationMinutes: updated.callDuration / 60,
+        isFullyCompleted: updated.callDuration >= 300
       }
     });
   } catch (err) {

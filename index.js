@@ -10,6 +10,7 @@ import { notFoundHandler, globalErrorHandler } from './middlewares/errorHandler.
 import notificationScheduler from './services/notificationScheduler.js';
 import { startRefundScheduler } from './services/refundScheduler.js';
 import { startWeeklyAvailabilityScheduler } from './services/weeklyAvailabilityScheduler.js';
+import { startAppointmentCompletionScheduler } from './services/appointmentCompletionScheduler.js';
 import { ensureAllUsersHaveAgoraKeys } from './scripts/ensureAllUsersHaveAgoraKeys.js';
 
 dotenv.config();
@@ -57,6 +58,9 @@ app.listen(PORT, async () => {
   
   // Start weekly availability scheduler
   startWeeklyAvailabilityScheduler();
+  
+  // Start appointment completion scheduler
+  startAppointmentCompletionScheduler();
 });
 
 
