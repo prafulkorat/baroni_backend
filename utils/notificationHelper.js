@@ -143,9 +143,15 @@ class NotificationHelper {
         const starNote = { ...starTemplate };
         if (type === 'APPOINTMENT_REMINDER') {
           const minutesUntil = additionalData.minutesUntil || 10;
-          starNote.title = 'Appointment Reminder';
-          starNote.body = `Your appointment with ${fanName} starts in ${minutesUntil} minutes.`;
-          console.log(`[AppointmentNotification] Sending reminder to star ${data.starId} (${fanName}): "${starNote.body}"`);
+          if (additionalData.isStartTime || additionalData.isStartingNow) {
+            starNote.title = 'Appointment Starting Now';
+            starNote.body = `Your appointment with ${fanName} is starting now! Please join.`;
+            console.log(`[AppointmentNotification] Sending START notification to star ${data.starId} (${fanName}): "${starNote.body}"`);
+          } else {
+            starNote.title = 'Appointment Reminder';
+            starNote.body = `Your appointment with ${fanName} starts in ${minutesUntil} minutes.`;
+            console.log(`[AppointmentNotification] Sending reminder to star ${data.starId} (${fanName}): "${starNote.body}"`);
+          }
         } else if (type === 'APPOINTMENT_CANCELLED' && String(currentUserId) === String(appointment.fanId)) {
           starNote.title = 'Appointment Cancelled';
           starNote.body = `${fanName} has cancelled the appointment.`;
@@ -211,9 +217,15 @@ class NotificationHelper {
           data.isMessage = false;
         } else if (type === 'APPOINTMENT_REMINDER') {
           const minutesUntil = additionalData.minutesUntil || 10;
-          fanTemplate.title = 'Appointment Reminder';
-          fanTemplate.body = `Your appointment with ${starName} starts in ${minutesUntil} minutes.`;
-          console.log(`[AppointmentNotification] Sending reminder to fan ${data.fanId} (${starName}): "${fanTemplate.body}"`);
+          if (additionalData.isStartTime || additionalData.isStartingNow) {
+            fanTemplate.title = 'Appointment Starting Now';
+            fanTemplate.body = `Your appointment with ${starName} is starting now! Please join.`;
+            console.log(`[AppointmentNotification] Sending START notification to fan ${data.fanId} (${starName}): "${fanTemplate.body}"`);
+          } else {
+            fanTemplate.title = 'Appointment Reminder';
+            fanTemplate.body = `Your appointment with ${starName} starts in ${minutesUntil} minutes.`;
+            console.log(`[AppointmentNotification] Sending reminder to fan ${data.fanId} (${starName}): "${fanTemplate.body}"`);
+          }
         }
         
         try {

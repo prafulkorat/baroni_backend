@@ -91,10 +91,10 @@ class NotificationScheduler {
     console.log(`[AppointmentReminder] ===== Starting reminder check at ${now.toISOString()} =====`);
     
     // Find all approved appointments (not completed, cancelled, or rejected)
+    // We need to check both: appointments without reminder AND appointments at exact time
     const appointments = await Appointment.find({
       status: { $in: ['approved', 'in_progress'] },
-      paymentStatus: { $in: ['pending', 'completed'] }, // Only if payment is not refunded
-      reminderSent: { $ne: true } // Only appointments that haven't received reminder yet
+      paymentStatus: { $in: ['pending', 'completed'] } // Only if payment is not refunded
     }).populate('starId', 'name pseudo fcmToken apnsToken appNotification')
       .populate('fanId', 'name pseudo fcmToken apnsToken appNotification');
 
@@ -132,18 +132,21 @@ class NotificationScheduler {
           reminderSent: appointment.reminderSent
         });
         
-        // Send reminder if appointment is between 9-11 minutes away (to avoid duplicates)
-        // This ensures it's sent once when we're exactly 10 minutes away
-        if (minutesUntilAppointment >= 9 && minutesUntilAppointment <= 11) {
-          // Double-check reminder wasn't sent (race condition protection)
+        // Case 1: Send reminder 10 minutes before appointment (9-11 minutes away)
+        // Case 2: Send notification at exact appointment time (within ±1 minute window)
+        const shouldSend10MinReminder = minutesUntilAppointment >= 9 && minutesUntilAppointment <= 11 && !appointment.reminderSent;
+        const shouldSendStartNotification = minutesUntilAppointment >= -1 && minutesUntilAppointment <= 1; // Within ±1 minute of start time
+        
+        if (shouldSend10MinReminder) {
+          // 10-minute reminder before appointment
           const freshAppointment = await Appointment.findById(appointment._id);
           if (freshAppointment?.reminderSent) {
             skippedAlreadySent++;
-            console.log(`[AppointmentReminder] Skipping appointment ${appointment._id} - reminder already sent`);
+            console.log(`[AppointmentReminder] Skipping 10-min reminder for appointment ${appointment._id} - already sent`);
             continue;
           }
           
-          console.log(`[AppointmentReminder] Sending reminder for appointment ${appointment._id} (${minutesUntilAppointment} minutes until start)`);
+          console.log(`[AppointmentReminder] Sending 10-minute reminder for appointment ${appointment._id} (${minutesUntilAppointment} minutes until start)`);
           
           try {
             // Send reminder to both star and fan
@@ -159,18 +162,62 @@ class NotificationScheduler {
             });
             
             remindersSent++;
-            console.log(`[AppointmentReminder] ✓ Successfully sent reminder for appointment ${appointment._id}`);
+            console.log(`[AppointmentReminder] ✓ Successfully sent 10-min reminder for appointment ${appointment._id}`);
             console.log(`[AppointmentReminder]   - Star: ${appointment.starId?.name || 'N/A'} (${appointment.starId?._id})`);
             console.log(`[AppointmentReminder]   - Fan: ${appointment.fanId?.name || 'N/A'} (${appointment.fanId?._id})`);
           } catch (notifyError) {
             errors++;
-            console.error(`[AppointmentReminder] ✗ Failed to send reminder for appointment ${appointment._id}:`, notifyError);
+            console.error(`[AppointmentReminder] ✗ Failed to send 10-min reminder for appointment ${appointment._id}:`, notifyError);
+          }
+        } else if (shouldSendStartNotification) {
+          // Appointment is starting NOW (within ±1 minute window)
+          // Check if we already sent a start notification (using a different field or check)
+          const freshAppointment = await Appointment.findById(appointment._id);
+          
+          // Use startNotificationSent field if exists, otherwise check if reminderSentAt is very recent (last 2 minutes)
+          const recentReminder = freshAppointment?.reminderSentAt && 
+            (now.getTime() - freshAppointment.reminderSentAt.getTime()) < (2 * 60 * 1000); // Within last 2 minutes
+          
+          if (recentReminder && minutesUntilAppointment <= 0) {
+            skippedAlreadySent++;
+            console.log(`[AppointmentReminder] Skipping start notification for appointment ${appointment._id} - already sent recently`);
+            continue;
+          }
+          
+          console.log(`[AppointmentReminder] Sending START notification for appointment ${appointment._id} (${minutesUntilAppointment} minutes from now - appointment ${minutesUntilAppointment >= 0 ? 'starting' : 'started'})`);
+          
+          try {
+            // Send start notification to both star and fan
+            // Use APPOINTMENT_REMINDER type but with custom message for start time
+            await NotificationHelper.sendAppointmentNotification('APPOINTMENT_REMINDER', appointment, {
+              currentUserId: null, // Send to both users
+              minutesUntil: 0, // At start time
+              isStartTime: true,
+              isStartingNow: true
+            });
+            
+            // Update reminder sent timestamp (reuse the same field)
+            await Appointment.findByIdAndUpdate(appointment._id, {
+              reminderSent: true,
+              reminderSentAt: new Date()
+            });
+            
+            remindersSent++;
+            console.log(`[AppointmentReminder] ✓ Successfully sent START notification for appointment ${appointment._id}`);
+            console.log(`[AppointmentReminder]   - Star: ${appointment.starId?.name || 'N/A'} (${appointment.starId?._id})`);
+            console.log(`[AppointmentReminder]   - Fan: ${appointment.fanId?.name || 'N/A'} (${appointment.fanId?._id})`);
+          } catch (notifyError) {
+            errors++;
+            console.error(`[AppointmentReminder] ✗ Failed to send start notification for appointment ${appointment._id}:`, notifyError);
           }
         } else {
           skippedOutOfRange++;
           if (minutesUntilAppointment > 0 && minutesUntilAppointment < 15) {
             // Log appointments that are close but not in range (for debugging)
-            console.log(`[AppointmentReminder] Appointment ${appointment._id} is ${minutesUntilAppointment} minutes away (out of 9-11 range)`);
+            console.log(`[AppointmentReminder] Appointment ${appointment._id} is ${minutesUntilAppointment} minutes away (not in 9-11 or ±1 minute range)`);
+          } else if (minutesUntilAppointment >= -5 && minutesUntilAppointment <= 5) {
+            // Log appointments that just passed or are about to start (for debugging)
+            console.log(`[AppointmentReminder] Appointment ${appointment._id} is ${minutesUntilAppointment} minutes from now (recently started or starting soon)`);
           }
         }
       } catch (error) {
