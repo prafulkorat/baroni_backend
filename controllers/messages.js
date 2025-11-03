@@ -1,6 +1,8 @@
 import MessageModel from '../models/Message.js';
 import ConversationModel from '../models/Conversation.js';
 import User from '../models/User.js';
+import Appointment from '../models/Appointment.js';
+import DedicationRequest from '../models/DedicationRequest.js';
 import NotificationHelper from '../utils/notificationHelper.js';
 import { uploadFile } from '../utils/uploadFile.js';
 import { sanitizeUserData } from '../utils/userDataHelper.js';
@@ -380,6 +382,29 @@ export const getUserConversations = async (req, res) => {
                     }
                 }
 
+                // Determine if there is any upcoming appointment or dedication between the two users
+                const now = new Date();
+                const [hasFutureAppointment, hasFutureDedication] = await Promise.all([
+                    Appointment.findOne({
+                        $or: [
+                            { fanId: userId, starId: otherParticipantId },
+                            { fanId: otherParticipantId, starId: userId }
+                        ],
+                        utcStartTime: { $gt: now },
+                        status: { $in: ['pending', 'approved', 'in_progress', 'rescheduled'] }
+                    }).lean(),
+                    DedicationRequest.findOne({
+                        $or: [
+                            { fanId: userId, starId: otherParticipantId },
+                            { fanId: otherParticipantId, starId: userId }
+                        ],
+                        eventDate: { $gt: now },
+                        status: { $in: ['pending', 'approved'] }
+                    }).lean()
+                ]);
+
+                const isMessage = Boolean(hasFutureAppointment || hasFutureDedication);
+
                 return {
                     _id: conv._id,
                     lastMessage: conv.lastMessage,
@@ -388,6 +413,7 @@ export const getUserConversations = async (req, res) => {
                     otherParticipant: otherUser ? sanitizeUserData(otherUser) : otherUser,
                     unreadCount: unreadCount, // Count of unread messages where current user is receiver
                     receiver_unread_count: receiverUnreadCount, // Count of unread messages for the other participant
+                    is_message: isMessage,
                     createdAt: conv.createdAt,
                     updatedAt: conv.updatedAt
                 };
