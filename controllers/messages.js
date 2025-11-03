@@ -14,6 +14,31 @@ const { ChatTokenBuilder } = agoraToken;
 // Constants
 const AGORA_TOKEN_EXPIRATION = 31536000; // 1 year (365 * 24 * 60 * 60)
 
+// Helper: best-effort parse for legacy appointments without utcStartTime
+function parseLocalDateTime(dateStr, timeStr) {
+    try {
+        if (!dateStr || !timeStr || typeof dateStr !== 'string' || typeof timeStr !== 'string') {
+            return null;
+        }
+        const [year, month, day] = dateStr.split('-').map(v => parseInt(v, 10));
+        let hours = 0;
+        let minutes = 0;
+        const match = timeStr.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+        if (match) {
+            hours = parseInt(match[1], 10);
+            minutes = parseInt(match[2], 10);
+            const ampm = match[3].toUpperCase();
+            if (ampm === 'PM' && hours !== 12) hours += 12;
+            if (ampm === 'AM' && hours === 12) hours = 0;
+        }
+        const local = new Date(year || 0, (month || 1) - 1, day || 1, hours, minutes, 0, 0);
+        if (isNaN(local.getTime())) return null;
+        return local;
+    } catch (_) {
+        return null;
+    }
+}
+
 // Utility functions
 function sanitizeAgoraUsername(username) {
     // Remove or replace invalid characters for Agora Chat
@@ -384,26 +409,41 @@ export const getUserConversations = async (req, res) => {
 
                 // Determine if there is any upcoming appointment or dedication between the two users
                 const now = new Date();
-                const [hasFutureAppointment, hasFutureDedication] = await Promise.all([
-                    Appointment.findOne({
-                        $or: [
-                            { fanId: userId, starId: otherParticipantId },
-                            { fanId: otherParticipantId, starId: userId }
-                        ],
-                        utcStartTime: { $gt: now },
-                        status: { $in: ['pending', 'approved', 'in_progress', 'rescheduled'] }
-                    }).lean(),
-                    DedicationRequest.findOne({
-                        $or: [
-                            { fanId: userId, starId: otherParticipantId },
-                            { fanId: otherParticipantId, starId: userId }
-                        ],
-                        eventDate: { $gt: now },
-                        status: { $in: ['pending', 'approved'] }
-                    }).lean()
-                ]);
 
-                const isMessage = Boolean(hasFutureAppointment || hasFutureDedication);
+                let isMessage = false;
+
+                if (otherParticipantId) {
+                    // Fetch relevant appointments and dedications between the two users
+                    const [appointments, dedication] = await Promise.all([
+                        Appointment.find({
+                            $or: [
+                                { fanId: userId, starId: otherParticipantId },
+                                { fanId: otherParticipantId, starId: userId }
+                            ],
+                            status: { $in: ['pending', 'approved', 'in_progress', 'rescheduled'] }
+                        }).select('utcStartTime date time').lean(),
+                        DedicationRequest.findOne({
+                            $or: [
+                                { fanId: userId, starId: otherParticipantId },
+                                { fanId: otherParticipantId, starId: userId }
+                            ],
+                            eventDate: { $gt: now },
+                            status: { $in: ['pending', 'approved'] }
+                        }).lean()
+                    ]);
+
+                    // Check any appointment in future using utcStartTime, fallback to parsed local date/time
+                    const hasUpcomingAppointment = (appointments || []).some(appt => {
+                        if (appt.utcStartTime) {
+                            const t = new Date(appt.utcStartTime);
+                            return !isNaN(t.getTime()) && t > now;
+                        }
+                        const parsed = parseLocalDateTime(appt.date, appt.time);
+                        return parsed && parsed > now;
+                    });
+
+                    isMessage = Boolean(hasUpcomingAppointment || dedication);
+                }
 
                 return {
                     _id: conv._id,
