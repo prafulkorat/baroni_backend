@@ -39,6 +39,8 @@ const sanitize = (doc) => ({
   // Keep transaction status light; paymentStatus covers domain payment lifecycle
   completedAt: doc.completedAt,
   callDuration: typeof doc.callDuration === 'number' ? doc.callDuration / 60 : undefined, // Convert seconds to minutes for display
+  // Duration in seconds: 0 if pending/not completed, actual duration if completed
+  duration: doc.status === 'completed' && typeof doc.callDuration === 'number' ? doc.callDuration : 0,
   ...(doc.isRescheduled !== undefined ? { isRescheduled: doc.isRescheduled } : {}),
   ...(doc.parentAppointment ? { parentAppointment: doc.parentAppointment } : {}),
   createdAt: doc.createdAt,

@@ -136,6 +136,8 @@ export const getAppointmentsWithFilters = async (req, res) => {
         createdAt: appointment.createdAt,
         updatedAt: appointment.updatedAt,
         callDuration: appointment.callDuration,
+        // Duration in seconds: 0 if pending/not completed, actual duration if completed
+        duration: appointment.status === 'completed' && typeof appointment.callDuration === 'number' ? appointment.callDuration : 0,
         paymentStatus: appointment.paymentStatus,
         actions: getAvailableActions(appointment.status),
         earnings: calculateEarnings(appointment)
@@ -521,6 +523,8 @@ export const getAppointmentDetails = async (req, res) => {
           createdAt: appointment.createdAt,
           updatedAt: appointment.updatedAt,
           callDuration: appointment.callDuration,
+          // Duration in seconds: 0 if pending/not completed, actual duration if completed
+          duration: appointment.status === 'completed' && typeof appointment.callDuration === 'number' ? appointment.callDuration : 0,
           paymentStatus: appointment.paymentStatus,
           transaction: appointment.transactionId,
           adminNotes: appointment.adminNotes,
