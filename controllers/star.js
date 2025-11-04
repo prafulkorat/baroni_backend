@@ -17,6 +17,7 @@ import Review from "../models/Review.js";
 import { sanitizeUserData, sanitizeUserDataArray } from "../utils/userDataHelper.js";
 import NotificationHelper from "../utils/notificationHelper.js";
 import { createDefaultRating } from "../utils/defaultRatingHelper.js";
+import { createDefaultDailySlots } from "../utils/defaultAvailabilityHelper.js";
 
 /**
  * Get available baroni ID patterns for becoming a star
@@ -224,19 +225,27 @@ export const becomeStar = async (req, res) => {
         if (transactionResult.paymentMode === 'coin') {
             await completeTransaction(transaction._id);
             // Update user role to star for coin-only payments and set default about text
-            await User.findByIdAndUpdate(req.user._id, { 
+            const starUpdateResult = await User.findByIdAndUpdate(req.user._id, { 
                 $set: { 
                     role: 'star', 
                     paymentStatus: 'completed',
                     about: "Coucou, c'est ta star 🌟 ! Je suis là pour te partager de la bonne humeur, de l'énergie et des dédicaces pleines d'amour."
                 } 
-            });
+            }, { new: true });
 
-            // Create default 5 rating for the new star
-            await createDefaultRating(req.user._id);
+            // Verify user was successfully updated to star before creating default resources
+            if (!starUpdateResult || starUpdateResult.role !== 'star') {
+                console.error(`[BecomeStar] Failed to update user ${req.user._id} to star role. Skipping default resources creation.`);
+            } else {
+                // Create default 5 rating for the new star
+                await createDefaultRating(req.user._id);
 
-            // Send star promotion notification for coin-only payments
-            await sendStarPromotionNotification(req.user._id);
+                // Create default daily slots for the new star (5 slots from 21:00-23:00, 20 min each)
+                await createDefaultDailySlots(req.user._id);
+
+                // Send star promotion notification for coin-only payments
+                await sendStarPromotionNotification(req.user._id);
+            }
         }
 
         const responseBody = {

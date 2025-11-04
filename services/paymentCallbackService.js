@@ -9,6 +9,7 @@ import orangeMoneyService from './orangeMoneyService.js';
 import { TRANSACTION_STATUSES, TRANSACTION_TYPES } from '../utils/transactionConstants.js';
 import NotificationHelper from '../utils/notificationHelper.js';
 import { createDefaultRating } from '../utils/defaultRatingHelper.js';
+import { createDefaultDailySlots } from '../utils/defaultAvailabilityHelper.js';
 import { addToEscrow, getOrCreateStarWallet } from './starWalletService.js';
 import StarTransaction from '../models/StarTransaction.js';
 
@@ -207,8 +208,17 @@ export const processPaymentCallback = async (callbackData) => {
             } : null
           });
 
-          // Create default 5 rating for the new star
-          await createDefaultRating(transaction.payerId);
+          // Verify user was successfully updated to star before creating default resources
+          if (!updateResult || updateResult.role !== 'star') {
+            console.error(`[PaymentCallback] Failed to update user ${transaction.payerId} to star role. Skipping default resources creation.`);
+            // Continue with transaction completion even if role update failed
+          } else {
+            // Create default 5 rating for the new star
+            await createDefaultRating(transaction.payerId);
+            
+            // Create default daily slots for the new star (5 slots from 21:00-23:00, 20 min each)
+            await createDefaultDailySlots(transaction.payerId);
+          }
           
           // Ensure star wallet exists
           try {
