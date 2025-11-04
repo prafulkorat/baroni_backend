@@ -8,6 +8,7 @@ import Appointment from '../models/Appointment.js';
 import Availability from '../models/Availability.js';
 import LiveShow from '../models/LiveShow.js';
 import Transaction from "../models/Transaction.js";
+import { getOrCreateStarWallet } from '../services/starWalletService.js';
 import Review from '../models/Review.js';
 import { createSanitizedUserResponse, sanitizeUserData } from '../utils/userDataHelper.js';
 
@@ -171,7 +172,7 @@ export const getDashboard = async (req, res) => {
 
     if (role === 'star') {
       // Star dashboard: upcoming bookings, earnings, engaged fans, and live shows
-      const [upcomingBookings, earnings, engagedFans, upcomingLiveShows, liveShowEarnings, escrowCoins, ratingAgg] = await Promise.all([
+      const [upcomingBookings, earnings, engagedFans, upcomingLiveShows, liveShowEarnings, ratingAgg] = await Promise.all([
         // Upcoming approved appointments
         Appointment.find({
           starId: user._id,
@@ -208,18 +209,15 @@ export const getDashboard = async (req, res) => {
           { $match: { starId: user._id, status: 'pending' } },
           { $group: { _id: null, totalEarnings: { $sum: '$hostingPrice' } } }
         ]),
-        // Escrow coins: pending transactions where receiver is the star
-        Transaction.aggregate([
-          { $match: { receiverId: user._id, status: 'pending' } },
-          { $group: { _id: null, escrow: { $sum: '$amount' } } }
-        ]),
-
         // Star rating: average rating across all reviews for this star
         Review.aggregate([
           { $match: { starId: user._id } },
           { $group: { _id: '$starId', avg: { $avg: '$rating' }, count: { $sum: 1 } } }
         ])
       ]);
+
+      // Fetch star wallet for accurate escrow and jackpot balances
+      const starWallet = await getOrCreateStarWallet(user._id);
 
       // Get fan details for engaged fans
       const fanDetails = await User.find({
@@ -231,7 +229,8 @@ export const getDashboard = async (req, res) => {
       const appointmentEarnings = earnings.length > 0 ? earnings[0].totalEarnings : 0;
       const liveShowEarningsTotal = liveShowEarnings.length > 0 ? liveShowEarnings[0].totalEarnings : 0;
       const totalEarnings = appointmentEarnings + liveShowEarningsTotal;
-      const pendingEscrow = escrowCoins.length > 0 ? escrowCoins[0].escrow : 0;
+      const pendingEscrow = Number(starWallet?.escrow || 0);
+      const jackpotFunds = Number(starWallet?.jackpot || 0);
 
       const starRating = ratingAgg && ratingAgg.length > 0
         ? { average: Number((ratingAgg[0].avg || 0).toFixed(1)), count: ratingAgg[0].count || 0 }
@@ -270,7 +269,8 @@ export const getDashboard = async (req, res) => {
             appointmentEarnings,
             liveShowEarnings: liveShowEarningsTotal,
             currency: 'USD',
-            escrowFunds: pendingEscrow
+            escrowFunds: pendingEscrow,
+            jackpotFunds
           },
           engagedFans: fanDetails.map(fan => sanitizeUserData(fan)),
           rating: starRating,
