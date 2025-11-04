@@ -39,7 +39,7 @@ export const costEvaluationValidator = [
 
 // Service Insights Validator
 export const serviceInsightsValidator = [
-  query('serviceType')
+  param('serviceType')
     .isIn(['video-call', 'live-show', 'dedication'])
     .withMessage('Service type must be one of: video-call, live-show, dedication'),
   

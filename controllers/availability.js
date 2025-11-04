@@ -2,6 +2,8 @@ import { validationResult } from 'express-validator';
 import { getFirstValidationError } from '../utils/validationHelper.js';
 import Availability from '../models/Availability.js';
 import Appointment from '../models/Appointment.js'; // Added import for Appointment
+import User from '../models/User.js';
+import { convertLocalToUTC } from '../utils/timezoneHelper.js';
 import { cleanupWeeklyAvailabilities, deleteTimeSlotFromWeeklyAvailabilities, deleteTimeSlotByIdFromWeeklyAvailabilities } from '../services/weeklyAvailabilityService.js';
 import { deleteTimeSlotFromDailyAvailabilities, deleteTimeSlotByIdFromDailyAvailabilities } from '../services/dailyAvailabilityService.js';
 
@@ -253,17 +255,67 @@ export const createAvailability = async (req, res) => {
         // Enhanced availability mode switching logic
         await handleAvailabilityModeSwitching(req.user._id, isWeekly, isDaily);
 
-        // Helper function to normalize time slots
-        const normalizeTimeSlots = (timeSlots) => {
+        // Get user's country for timezone conversion
+        const user = await User.findById(req.user._id).select('country').lean();
+        const userCountry = user?.country || null;
+
+        // Helper function to calculate UTC times for a slot
+        const calculateUTCTimes = (slotString, dateStr, country) => {
+            try {
+                const parts = slotString.split(' - ');
+                if (parts.length !== 2) {
+                    return { utcStartTime: null, utcEndTime: null };
+                }
+
+                const startTimeStr = parts[0].trim();
+                const endTimeStr = parts[1].trim();
+
+                // Convert start time to UTC
+                const utcStartTime = convertLocalToUTC(dateStr, startTimeStr, country);
+                
+                // Convert end time to UTC
+                const utcEndTime = convertLocalToUTC(dateStr, endTimeStr, country);
+
+                return { utcStartTime, utcEndTime };
+            } catch (error) {
+                console.error(`[Availability] Error calculating UTC times for slot ${slotString}:`, error);
+                return { utcStartTime: null, utcEndTime: null };
+            }
+        };
+
+        // Helper function to normalize time slots with UTC times
+        const normalizeTimeSlots = (timeSlots, dateStr) => {
             return Array.isArray(timeSlots)
                 ? timeSlots.map((t) => {
                     if (typeof t === 'string') {
-                        return { slot: normalizeTimeSlotString(String(t)), status: 'available' };
+                        const slot = normalizeTimeSlotString(String(t));
+                        const { utcStartTime, utcEndTime } = calculateUTCTimes(slot, dateStr, userCountry);
+                        return { 
+                            slot, 
+                            status: 'available',
+                            utcStartTime,
+                            utcEndTime
+                        };
                     }
                     if (t && typeof t === 'object') {
                         const slot = normalizeTimeSlotString(String(t.slot || ''));
                         const status = t.status === 'unavailable' ? 'unavailable' : 'available';
-                        return { slot, status };
+                        // Calculate UTC times if not already present
+                        let utcStartTime = t.utcStartTime;
+                        let utcEndTime = t.utcEndTime;
+                        
+                        if (!utcStartTime || !utcEndTime) {
+                            const calculated = calculateUTCTimes(slot, dateStr, userCountry);
+                            utcStartTime = calculated.utcStartTime || utcStartTime;
+                            utcEndTime = calculated.utcEndTime || utcEndTime;
+                        }
+                        
+                        return { 
+                            slot, 
+                            status,
+                            utcStartTime,
+                            utcEndTime
+                        };
                     }
                     throw new Error('Invalid time slot entry');
                 })
@@ -411,7 +463,7 @@ export const createAvailability = async (req, res) => {
             // Normalize time slots
             let normalized;
             try {
-                normalized = normalizeTimeSlots(timeSlots);
+                normalized = normalizeTimeSlots(timeSlots, date);
             } catch (e) {
                 throw new Error('Invalid timeSlots: provide strings or { slot, status } with valid formats');
             }
@@ -620,6 +672,34 @@ export const updateAvailability = async (req, res) => {
         const item = await Availability.findOne({ _id: req.params.id, userId: req.user._id });
         if (!item) return res.status(404).json({ success: false, message: 'Not found' });
 
+        // Get user's country for timezone conversion
+        const user = await User.findById(req.user._id).select('country').lean();
+        const userCountry = user?.country || null;
+
+        // Helper function to calculate UTC times for a slot
+        const calculateUTCTimes = (slotString, dateStr, country) => {
+            try {
+                const parts = slotString.split(' - ');
+                if (parts.length !== 2) {
+                    return { utcStartTime: null, utcEndTime: null };
+                }
+
+                const startTimeStr = parts[0].trim();
+                const endTimeStr = parts[1].trim();
+
+                // Convert start time to UTC
+                const utcStartTime = convertLocalToUTC(dateStr, startTimeStr, country);
+                
+                // Convert end time to UTC
+                const utcEndTime = convertLocalToUTC(dateStr, endTimeStr, country);
+
+                return { utcStartTime, utcEndTime };
+            } catch (error) {
+                console.error(`[Availability] Error calculating UTC times for slot ${slotString}:`, error);
+                return { utcStartTime: null, utcEndTime: null };
+            }
+        };
+
         // Handle mode switching in update
         if (req.body.hasOwnProperty('isWeekly') || req.body.hasOwnProperty('isDaily')) {
             const newIsWeekly = Boolean(isWeekly);
@@ -756,12 +836,36 @@ export const updateAvailability = async (req, res) => {
 
                 item.timeSlots = timeSlots.map((t) => {
                     if (typeof t === 'string') {
-                        return { slot: normalizeTimeSlotString(String(t)), status: 'available' };
+                        const slot = normalizeTimeSlotString(String(t));
+                        const dateStr = item.date || date;
+                        const { utcStartTime, utcEndTime } = calculateUTCTimes(slot, dateStr, userCountry);
+                        return { 
+                            slot, 
+                            status: 'available',
+                            utcStartTime,
+                            utcEndTime
+                        };
                     }
                     if (t && typeof t === 'object') {
                         const slot = normalizeTimeSlotString(String(t.slot || ''));
                         const s = t.status === 'unavailable' ? 'unavailable' : 'available';
-                        return { slot, status: s };
+                        // Calculate UTC times if not already present
+                        let utcStartTime = t.utcStartTime;
+                        let utcEndTime = t.utcEndTime;
+                        
+                        if (!utcStartTime || !utcEndTime) {
+                            const dateStr = item.date || date;
+                            const calculated = calculateUTCTimes(slot, dateStr, userCountry);
+                            utcStartTime = calculated.utcStartTime || utcStartTime;
+                            utcEndTime = calculated.utcEndTime || utcEndTime;
+                        }
+                        
+                        return { 
+                            slot, 
+                            status: s,
+                            utcStartTime,
+                            utcEndTime
+                        };
                     }
                     throw new Error('Invalid time slot entry');
                 });

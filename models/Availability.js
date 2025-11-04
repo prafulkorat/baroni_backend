@@ -12,6 +12,8 @@ const availabilitySchema = new mongoose.Schema(
           {
             slot: { type: String, required: true, trim: true }, // "HH:MM - HH:MM" (24-hour format)
             status: { type: String, enum: ['available', 'unavailable'], default: 'available' },
+            utcStartTime: { type: Date, index: true }, // UTC start time for the slot
+            utcEndTime: { type: Date, index: true }, // UTC end time for the slot
           }
         ),
       ],

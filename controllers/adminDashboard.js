@@ -386,7 +386,8 @@ export const getServiceInsights = async (req, res) => {
       });
     }
 
-    const { serviceType, period = 'current_month' } = req.query;
+    const { serviceType } = req.params;
+    const { period = 'current_month' } = req.query;
     const { startDate, endDate } = getDateRange(period);
 
     let insights = {};

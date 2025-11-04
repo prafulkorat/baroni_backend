@@ -994,21 +994,36 @@ export const getStarById = async (req, res) => {
                             .filter((s) => {
                                 if (!s || s.status !== 'available') return false;
 
-                                const currentISTTime = getCurrentISTTime();
+                                // Use UTC time for comparison to work correctly across all timezones
+                                const currentUTCTime = new Date();
                                 const today = getCurrentDateString();
 
-                                console.log(`Checking time slot: ${s.slot} on ${item.date}, today: ${today}, current IST: ${currentISTTime.toISOString()}`);
+                                console.log(`Checking time slot: ${s.slot} on ${item.date}, today: ${today}, current UTC: ${currentUTCTime.toISOString()}`);
 
                                 if (item.date === today) {
-                                    const slotStartTime = parseTimeSlotToISTDate(item.date, s.slot);
-                                    if (slotStartTime && slotStartTime <= currentISTTime) {
-                                        console.log(`Filtering out passed time slot: ${s.slot} on ${item.date}`);
+                                    // Use utcStartTime if available (preferred), otherwise fallback to parsing
+                                    let slotStartTime = null;
+                                    
+                                    if (s.utcStartTime) {
+                                        // Use stored UTC time
+                                        slotStartTime = new Date(s.utcStartTime);
+                                    } else {
+                                        // Fallback: parse and convert (for backward compatibility with old slots)
+                                        slotStartTime = parseTimeSlotToISTDate(item.date, s.slot);
+                                    }
+                                    
+                                    if (slotStartTime && slotStartTime <= currentUTCTime) {
+                                        console.log(`Filtering out passed time slot: ${s.slot} on ${item.date} (UTC: ${slotStartTime.toISOString()})`);
                                         return false;
                                     }
                                 }
                                 return true;
                             })
                             .sort((a, b) => {
+                                // Sort by UTC start time if available, otherwise by slot string
+                                if (a.utcStartTime && b.utcStartTime) {
+                                    return new Date(a.utcStartTime) - new Date(b.utcStartTime);
+                                }
                                 const timeA = parseTimeSlot(a.slot);
                                 const timeB = parseTimeSlot(b.slot);
                                 return timeA - timeB;
