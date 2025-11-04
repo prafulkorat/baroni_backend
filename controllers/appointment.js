@@ -32,7 +32,8 @@ const sanitize = (doc) => ({
   date: doc.date,
   time: doc.time,
   price: doc.price,
-  status: doc.status,
+  // Map in_progress to approved for outward responses as requested
+  status: doc.status === 'in_progress' ? 'approved' : doc.status,
   ...(doc.paymentStatus ? { paymentStatus: doc.paymentStatus } : {}),
   transactionId: doc.transactionId,
   // Keep transaction status light; paymentStatus covers domain payment lifecycle
