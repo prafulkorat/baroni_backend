@@ -71,14 +71,20 @@ export const getAllReviews = async (req, res) => {
       filter.rating = parseInt(rating);
     }
 
-    // Add review type filter
-    if (reviewType && reviewType !== 'all') {
+    // Add review type filter - only filter if reviewType is explicitly provided and not 'all' or empty
+    // This ensures dedication reviews are included when reviewType is not specified
+    if (reviewType && reviewType !== 'all' && reviewType.trim() !== '') {
       filter.reviewType = reviewType;
     }
+    // If reviewType is empty string, null, undefined, or 'all', include all review types (appointment, dedication, live_show, system)
 
     // Get reviews with pagination
     const reviews = await Review.find(filter)
-      .populate('reviewerId', 'name pseudo profilePic')
+      .populate({
+        path: 'reviewerId',
+        select: 'name pseudo profilePic',
+        options: { strictPopulate: false } // Allow null reviewerId for system reviews
+      })
       .populate('starId', 'name pseudo profilePic role')
       .sort(sort)
       .skip(skip)
@@ -134,12 +140,12 @@ export const getAllReviews = async (req, res) => {
           rating: review.rating,
           comment: review.comment,
           reviewType: review.reviewType,
-          reviewer: {
+          reviewer: review.reviewerId ? {
             id: review.reviewerId._id,
             name: review.reviewerId.name,
             pseudo: review.reviewerId.pseudo,
             profilePic: review.reviewerId.profilePic
-          },
+          } : null, // Handle system reviews with null reviewerId
           star: {
             id: review.starId._id,
             name: review.starId.name,
@@ -424,14 +430,20 @@ export const getStarReviews = async (req, res) => {
       filter.rating = parseInt(rating);
     }
 
-    // Add review type filter
-    if (reviewType && reviewType !== 'all') {
+    // Add review type filter - only filter if reviewType is explicitly provided and not 'all' or empty
+    // This ensures dedication reviews are included when reviewType is not specified
+    if (reviewType && reviewType !== 'all' && reviewType.trim() !== '') {
       filter.reviewType = reviewType;
     }
+    // If reviewType is empty string, null, undefined, or 'all', include all review types (appointment, dedication, live_show, system)
 
     // Get reviews with pagination
     const reviews = await Review.find(filter)
-      .populate('reviewerId', 'name pseudo profilePic')
+      .populate({
+        path: 'reviewerId',
+        select: 'name pseudo profilePic',
+        options: { strictPopulate: false } // Allow null reviewerId for system reviews
+      })
       .sort(sort)
       .skip(skip)
       .limit(parseInt(limit))
@@ -482,12 +494,12 @@ export const getStarReviews = async (req, res) => {
           rating: review.rating,
           comment: review.comment,
           reviewType: review.reviewType,
-          reviewer: {
+          reviewer: review.reviewerId ? {
             id: review.reviewerId._id,
             name: review.reviewerId.name,
             pseudo: review.reviewerId.pseudo,
             profilePic: review.reviewerId.profilePic
-          },
+          } : null, // Handle system reviews with null reviewerId
           appointmentId: review.appointmentId,
           dedicationRequestId: review.dedicationRequestId,
           liveShowId: review.liveShowId,

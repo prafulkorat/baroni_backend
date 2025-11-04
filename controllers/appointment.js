@@ -354,19 +354,24 @@ export const listAppointments = async (req, res) => {
       // Exact date match
       filter.date = date.trim();
     } else if (startDate || endDate) {
+      // Normalize date strings (remove whitespace)
+      const normalizedStartDate = startDate && typeof startDate === 'string' ? startDate.trim() : '';
+      const normalizedEndDate = endDate && typeof endDate === 'string' ? endDate.trim() : '';
+      
       // Date range filtering - if both are same, it's an exact match
-      if (startDate && endDate && startDate.trim() === endDate.trim()) {
+      if (normalizedStartDate && normalizedEndDate && normalizedStartDate === normalizedEndDate) {
         // Exact date match when both are same
-        filter.date = startDate.trim();
+        filter.date = normalizedStartDate;
       } else {
-        // Range filtering
+        // Range filtering - ensure both dates are valid strings
         const range = {};
-        if (startDate && typeof startDate === 'string' && startDate.trim()) {
-          range.$gte = startDate.trim();
+        if (normalizedStartDate) {
+          range.$gte = normalizedStartDate;
         }
-        if (endDate && typeof endDate === 'string' && endDate.trim()) {
-          range.$lte = endDate.trim();
+        if (normalizedEndDate) {
+          range.$lte = normalizedEndDate;
         }
+        // Only apply range filter if at least one date is provided
         if (Object.keys(range).length > 0) {
           filter.date = range;
         }
