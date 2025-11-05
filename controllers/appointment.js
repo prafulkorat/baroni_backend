@@ -339,12 +339,21 @@ export const createAppointment = async (req, res) => {
 
 export const listAppointments = async (req, res) => {
   try {
-    const isStar = req.user.role === 'star' || req.user.role === 'admin';
-    const filter = isStar ? { starId: req.user._id } : { fanId: req.user._id };
+    // Admin can see all appointments - no filter by user ID
+    // Stars see only their own appointments, Fans see only their own appointments
+    let filter = {};
     
-    // Stars should only see appointments where payment is complete (not 'initiated')
-    if (req.user.role === 'star') {
+    if (req.user.role === 'admin') {
+      // Admin sees all appointments - no filter needed
+      filter = {};
+    } else if (req.user.role === 'star') {
+      // Stars see only their own appointments
+      filter = { starId: req.user._id };
+      // Stars should only see appointments where payment is complete (not 'initiated')
       filter.paymentStatus = { $ne: 'initiated' };
+    } else {
+      // Fans see only their own appointments
+      filter = { fanId: req.user._id };
     }
     
     // Optional date filtering: exact date or range via startDate/endDate (expects YYYY-MM-DD strings)

@@ -26,13 +26,15 @@ export const getAppointmentsWithFilters = async (req, res) => {
     
     // Category filtering
     if (category === 'video_calls') {
-      filter = { status: { $exists: true } }; // All appointments are video calls
+      // All appointments are video calls - no additional filter needed
+      // Keep filter as {} to get all appointments
     } else if (category === 'dedications') {
       // This would need to be handled differently if you have a separate dedication model
       filter = { type: 'dedication' };
     } else if (category === 'live_shows') {
       filter = { type: 'live_show' };
     }
+    // If category is 'all', filter stays as {} which is correct
 
     // Status filtering
     if (status !== 'all') {
