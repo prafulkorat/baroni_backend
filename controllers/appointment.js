@@ -771,7 +771,7 @@ export const rescheduleAppointment = async (req, res) => {
     
     console.log(`[RescheduleAppointment] Found appointment ${id} with status: ${existingAppointment.status}`);
     
-    // Allow rescheduling regardless of current status
+    // Allow rescheduling regardless of current status - no conditions checked
 
     // Verify new availability belongs to the same star and slot is available
     const newAvailability = await Availability.findOne({ _id: availabilityId, userId: existingAppointment.starId._id });
@@ -782,31 +782,7 @@ export const rescheduleAppointment = async (req, res) => {
     if (!newTimeSlot) return res.status(404).json({ success: false, message: 'Time slot not found' });
     if (newTimeSlot.status !== 'available') return res.status(409).json({ success: false, message: 'Time slot unavailable' });
 
-    // Validate that the rescheduled date is not in the past
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const rescheduleDate = new Date(newAvailability.date);
-
-    if (rescheduleDate < today) {
-      return res.status(400).json({
-        success: false,
-        message: 'Cannot reschedule appointments to past dates'
-      });
-    }
-
-    // If rescheduling to today, validate that the time slot is not in the past
-    const isToday = rescheduleDate.getTime() === today.getTime();
-    if (isToday) {
-      const now = new Date();
-      const slotTime = new Date(`${newAvailability.date} ${newTimeSlot.slot.split(' - ')[0]}`);
-      
-      if (slotTime <= now) {
-        return res.status(400).json({
-          success: false,
-          message: 'Cannot reschedule to past time slots'
-        });
-      }
-    }
+    // All appointments can be rescheduled - no date/time validation
 
     // Get fan's country for timezone conversion
     const fan = await (await import('../models/User.js')).default.findById(existingAppointment.fanId._id).select('country');

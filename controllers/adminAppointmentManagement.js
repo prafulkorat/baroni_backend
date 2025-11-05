@@ -359,12 +359,7 @@ export const rescheduleAppointment = async (req, res) => {
       });
     }
 
-    if (!['pending', 'approved'].includes(appointment.status)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Only pending or approved appointments can be rescheduled'
-      });
-    }
+    // Allow rescheduling regardless of current status - no conditions checked
 
     // Update appointment with new date/time
     const newDate = new Date(newDateTime);

@@ -1,6 +1,6 @@
 import express from 'express';
 import { requireAuth, requireRole } from '../../middlewares/auth.js';
-import { getJackpotMetrics, listStars, createWithdrawal, listWithdrawals, retryWithdrawal } from '../../controllers/adminJackpot.js';
+import { getJackpotMetrics, listStars, createWithdrawal, listWithdrawals, retryWithdrawal, approveWithdrawal, rejectWithdrawal } from '../../controllers/adminJackpot.js';
 
 const router = express.Router();
 
@@ -12,6 +12,8 @@ router.get('/stars', listStars);
 router.post('/withdrawals', createWithdrawal);
 router.get('/withdrawals', listWithdrawals);
 router.patch('/withdrawals/:id/retry', retryWithdrawal);
+router.patch('/withdrawals/:id/approve', approveWithdrawal);
+router.patch('/withdrawals/:id/reject', rejectWithdrawal);
 
 export default router;
 
