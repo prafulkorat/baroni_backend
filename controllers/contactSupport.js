@@ -15,12 +15,6 @@ export const createSupportTicket = async (req, res) => {
     const { issueType, description, title } = req.body;
     const userId = req.user.id;
 
-    // Map 'Autre' to 'other' for consistency
-    let mappedIssueType = issueType;
-    if (issueType === 'Autre') {
-      mappedIssueType = 'other';
-    }
-
     let imageUrl = null;
 
     if (req.files && req.files.length > 0) {
@@ -47,7 +41,7 @@ export const createSupportTicket = async (req, res) => {
     }
 
     const supportTicket = await ContactSupport.create({
-      issueType: mappedIssueType,
+      issueType,
       description,
       title: finalTitle,
       image: imageUrl,

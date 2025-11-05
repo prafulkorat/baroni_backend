@@ -12,8 +12,8 @@ const contactSupportSchema = new mongoose.Schema(
     issueType: {
       type: String,
       required: true,
-      trim: true,
-      enum: ['payment', 'technical', 'account', 'general', 'refund', 'booking', 'live_show', 'dedication', 'other', 'Autre']
+      trim: true
+      // No enum restriction - any value is allowed
     },
     title: {
       type: String,
@@ -143,11 +143,6 @@ contactSupportSchema.pre('save', async function(next) {
     if (this.description.length > 50) {
       this.title += '...';
     }
-  }
-  
-  // Map 'Autre' to 'other' for consistency
-  if (this.issueType === 'Autre') {
-    this.issueType = 'other';
   }
   
   next();

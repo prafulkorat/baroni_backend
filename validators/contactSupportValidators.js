@@ -4,8 +4,8 @@ import { body, param, query } from 'express-validator';
 export const createSupportTicketValidator = [
   body('issueType')
     .trim()
-    .isIn(['payment', 'technical', 'account', 'general', 'refund', 'booking', 'live_show', 'dedication', 'other', 'Autre'])
-    .withMessage('Issue type must be one of: payment, technical, account, general, refund, booking, live_show, dedication, other, Autre'),
+    .notEmpty()
+    .withMessage('Issue type is required'),
   body('description')
     .trim()
     .isLength({ min: 1, max: 2000 })

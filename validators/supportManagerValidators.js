@@ -3,8 +3,8 @@ import { body, param, query } from 'express-validator';
 // Common validation rules
 const issueTypeValidation = body('issueType')
   .trim()
-  .isIn(['payment', 'technical', 'account', 'general', 'refund', 'booking', 'live_show', 'dedication', 'other', 'Autre'])
-  .withMessage('Issue type must be one of: payment, technical, account, general, refund, booking, live_show, dedication, other, Autre');
+  .notEmpty()
+  .withMessage('Issue type is required');
 
 const titleValidation = body('title')
   .optional()
@@ -95,8 +95,9 @@ export const adminGetAllTicketsValidation = [
     .withMessage('Priority must be one of: low, medium, high, urgent'),
   query('issueType')
     .optional()
-    .isIn(['payment', 'technical', 'account', 'general', 'refund', 'booking', 'live_show', 'dedication', 'other', 'Autre'])
-    .withMessage('Issue type must be one of: payment, technical, account, general, refund, booking, live_show, dedication, other, Autre'),
+    .trim()
+    .notEmpty()
+    .withMessage('Issue type cannot be empty'),
   query('search')
     .optional()
     .trim()
