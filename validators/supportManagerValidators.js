@@ -3,10 +3,11 @@ import { body, param, query } from 'express-validator';
 // Common validation rules
 const issueTypeValidation = body('issueType')
   .trim()
-  .isIn(['payment', 'technical', 'account', 'general', 'refund', 'booking', 'live_show', 'dedication', 'other'])
-  .withMessage('Issue type must be one of: payment, technical, account, general, refund, booking, live_show, dedication, other');
+  .isIn(['payment', 'technical', 'account', 'general', 'refund', 'booking', 'live_show', 'dedication', 'other', 'Autre'])
+  .withMessage('Issue type must be one of: payment, technical, account, general, refund, booking, live_show, dedication, other, Autre');
 
 const titleValidation = body('title')
+  .optional()
   .trim()
   .isLength({ min: 1, max: 200 })
   .withMessage('Title must be between 1 and 200 characters');
@@ -94,8 +95,8 @@ export const adminGetAllTicketsValidation = [
     .withMessage('Priority must be one of: low, medium, high, urgent'),
   query('issueType')
     .optional()
-    .isIn(['payment', 'technical', 'account', 'general', 'refund', 'booking', 'live_show', 'dedication', 'other'])
-    .withMessage('Issue type must be one of: payment, technical, account, general, refund, booking, live_show, dedication, other'),
+    .isIn(['payment', 'technical', 'account', 'general', 'refund', 'booking', 'live_show', 'dedication', 'other', 'Autre'])
+    .withMessage('Issue type must be one of: payment, technical, account, general, refund, booking, live_show, dedication, other, Autre'),
   query('search')
     .optional()
     .trim()

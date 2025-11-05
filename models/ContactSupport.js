@@ -6,18 +6,18 @@ const contactSupportSchema = new mongoose.Schema(
     ticketId: {
       type: String,
       unique: true,
-      required: true,
+      required: false,
       index: true
     },
     issueType: {
       type: String,
       required: true,
       trim: true,
-      enum: ['payment', 'technical', 'account', 'general', 'refund', 'booking', 'live_show', 'dedication', 'other']
+      enum: ['payment', 'technical', 'account', 'general', 'refund', 'booking', 'live_show', 'dedication', 'other', 'Autre']
     },
     title: {
       type: String,
-      required: true,
+      required: false,
       trim: true,
       maxlength: 200
     },
@@ -135,6 +135,21 @@ contactSupportSchema.pre('save', async function(next) {
     const count = await this.constructor.countDocuments();
     this.ticketId = `#AT${String(count + 1).padStart(7, '0')}`;
   }
+  
+  // Auto-generate title from description if not provided
+  if (!this.title && this.description) {
+    // Take first 50 characters of description as title
+    this.title = this.description.substring(0, 50).trim();
+    if (this.description.length > 50) {
+      this.title += '...';
+    }
+  }
+  
+  // Map 'Autre' to 'other' for consistency
+  if (this.issueType === 'Autre') {
+    this.issueType = 'other';
+  }
+  
   next();
 });
 

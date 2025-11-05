@@ -12,8 +12,14 @@ export const createSupportTicket = async (req, res) => {
       return res.status(400).json({ success: false, message: errorMessage || 'Validation failed' });
     }
 
-    const { issueType, description } = req.body;
+    const { issueType, description, title } = req.body;
     const userId = req.user.id;
+
+    // Map 'Autre' to 'other' for consistency
+    let mappedIssueType = issueType;
+    if (issueType === 'Autre') {
+      mappedIssueType = 'other';
+    }
 
     let imageUrl = null;
 
@@ -31,9 +37,19 @@ export const createSupportTicket = async (req, res) => {
       }
     }
 
+    // Auto-generate title from description if not provided
+    let finalTitle = title;
+    if (!finalTitle && description) {
+      finalTitle = description.substring(0, 50).trim();
+      if (description.length > 50) {
+        finalTitle += '...';
+      }
+    }
+
     const supportTicket = await ContactSupport.create({
-      issueType,
+      issueType: mappedIssueType,
       description,
+      title: finalTitle,
       image: imageUrl,
       userId
     });
