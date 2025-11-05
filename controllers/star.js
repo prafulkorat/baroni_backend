@@ -1,6 +1,6 @@
 import User from "../models/User.js";
 import mongoose from "mongoose";
-import Dedication from "../models/Dedicaxtion.js";
+import Dedication from "../models/Dedication.js";
 import DedicationSample from "../models/DedicationSample.js";
 import Service from "../models/Service.js";
 import Availability from "../models/Availability.js";
