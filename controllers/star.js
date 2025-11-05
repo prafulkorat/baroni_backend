@@ -863,28 +863,41 @@ export const getStarById = async (req, res) => {
             }).populate("participants", "name profilePic role");
         }
 
-        // Helper function to get current date in IST timezone (YYYY-MM-DD format)
-        function getCurrentDateString() {
-            // Get current time in IST (UTC + 5:30)
-            const now = new Date();
-            const istOffset = 5.5 * 60 * 60 * 1000; // 5.5 hours in milliseconds
-            const istTime = new Date(now.getTime() + istOffset);
+        // Get star's country for timezone-aware date calculation
+        const starCountry = star.country || null;
+        
+        // Import timezone helper dynamically
+        const { getCountryTimezoneOffset } = await import('../utils/timezoneHelper.js');
 
-            const year = istTime.getUTCFullYear();
-            const month = String(istTime.getUTCMonth() + 1).padStart(2, '0');
-            const day = String(istTime.getUTCDate()).padStart(2, '0');
+        // Helper function to get current date in star's country timezone (YYYY-MM-DD format)
+        function getCurrentDateString() {
+            // Get timezone offset for star's country (defaults to UTC if no country)
+            const offsetHours = getCountryTimezoneOffset(starCountry);
+            const offsetMs = offsetHours * 60 * 60 * 1000;
+            
+            // Get current UTC time
+            const now = new Date();
+            
+            // Convert to star's local time
+            const localTime = new Date(now.getTime() + offsetMs);
+            
+            // Format as YYYY-MM-DD
+            const year = localTime.getUTCFullYear();
+            const month = String(localTime.getUTCMonth() + 1).padStart(2, '0');
+            const day = String(localTime.getUTCDate()).padStart(2, '0');
 
             return `${year}-${month}-${day}`;
         }
 
-        // Helper function to get current IST time as Date object
-        function getCurrentISTTime() {
+        // Helper function to get current time in star's country timezone as Date object
+        function getCurrentLocalTime() {
+            const offsetHours = getCountryTimezoneOffset(starCountry);
+            const offsetMs = offsetHours * 60 * 60 * 1000;
             const now = new Date();
-            const istOffset = 5.5 * 60 * 60 * 1000; // 5.5 hours in milliseconds
-            const istTime = new Date(now.getTime() + istOffset);
-
-            console.log(`Current IST time: ${istTime.toISOString()} (equivalent IST)`);
-            return istTime;
+            const localTime = new Date(now.getTime() + offsetMs);
+            
+            console.log(`Current local time for star country "${starCountry}" (offset: ${offsetHours}h): ${localTime.toISOString()}`);
+            return localTime;
         }
 
         // fetch related data including upcoming live shows

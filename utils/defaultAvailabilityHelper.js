@@ -63,15 +63,23 @@ export const createDefaultDailySlots = async (userId) => {
             '22:20 - 22:40'
         ];
 
-        // Get today's date in YYYY-MM-DD format
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
+        // Get today's date in YYYY-MM-DD format based on star's country timezone
+        const { getCountryTimezoneOffset } = await import('./timezoneHelper.js');
+        const offsetHours = getCountryTimezoneOffset(user.country || null);
+        const offsetMs = offsetHours * 60 * 60 * 1000;
+        
+        const now = new Date();
+        const localTime = new Date(now.getTime() + offsetMs);
+        
+        // Format today's date in YYYY-MM-DD format
+        const todayStr = formatLocalYMD(new Date(localTime.getUTCFullYear(), localTime.getUTCMonth(), localTime.getUTCDate()));
         
         // Create slots for next 7 days (today + 6 more days = 1 week)
         const datesToCreate = [];
+        const todayDate = new Date(localTime.getUTCFullYear(), localTime.getUTCMonth(), localTime.getUTCDate());
         for (let i = 0; i < 7; i++) {
-            const date = new Date(today);
-            date.setDate(today.getDate() + i);
+            const date = new Date(todayDate);
+            date.setDate(todayDate.getDate() + i);
             datesToCreate.push(formatLocalYMD(date));
         }
 
