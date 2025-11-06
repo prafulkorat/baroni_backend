@@ -31,6 +31,7 @@ const sanitize = (doc) => ({
   timeSlotId: doc.timeSlotId,
   date: doc.date,
   time: doc.time,
+  utcStartTime: doc.utcStartTime,
   price: doc.price,
   // Map in_progress to approved for outward responses as requested
   status: doc.status === 'in_progress' ? 'approved' : doc.status,
@@ -466,8 +467,17 @@ export const listAppointments = async (req, res) => {
         const found = doc.availabilityId.timeSlots.find((s) => String(s._id) === String(doc.timeSlotId));
         if (found) timeSlotObj = { id: found._id, slot: found.slot, status: found.status };
       }
-      const startAt = parseStartDate(base.date, base.time);
-      const timeToNowMs = startAt.getTime() - Date.now();
+      
+      // Use UTC start time if available (preferred), otherwise fallback to parsing date/time
+      let startAt;
+      if (doc.utcStartTime) {
+        startAt = new Date(doc.utcStartTime);
+      } else {
+        // Fallback: parse from date and time (for backward compatibility)
+        startAt = parseStartDate(base.date, base.time);
+      }
+      
+      const timeToNowMs = isNaN(startAt.getTime()) ? 0 : startAt.getTime() - Date.now();
       
       // Find conversation between fan and star
       let conversationId = null;
@@ -496,7 +506,7 @@ export const listAppointments = async (req, res) => {
       }
     };
     
-    // Sort by status priority first, then by date ascending
+    // Sort by status priority first, then by UTC time ascending
     const data = withComputed.sort((a, b) => {
       // First, compare by status priority
       const statusPriorityA = getStatusPriority(a.status);
@@ -506,36 +516,29 @@ export const listAppointments = async (req, res) => {
         return statusPriorityA - statusPriorityB;
       }
       
-      // If same status, sort by date ascending (nearest to furthest)
-      const dateA = a.date || '';
-      const dateB = b.date || '';
+      // If same status, sort by UTC time ascending (nearest to furthest)
+      // Use utcStartTime if available (preferred), otherwise fallback to parsing date/time
+      let timeA, timeB;
       
-      // Compare dates (YYYY-MM-DD format strings compare correctly)
-      if (dateA !== dateB) {
-        return dateA.localeCompare(dateB);
+      // Get UTC time for appointment A
+      if (a.utcStartTime) {
+        timeA = new Date(a.utcStartTime).getTime();
+      } else {
+        // Fallback: parse from date and time (for backward compatibility)
+        const parsedA = parseStartDate(a.date, a.time);
+        timeA = isNaN(parsedA.getTime()) ? 0 : parsedA.getTime();
       }
       
-      // If same date, compare by time (nearest first)
-      const timeA = a.time || '';
-      const timeB = b.time || '';
+      // Get UTC time for appointment B
+      if (b.utcStartTime) {
+        timeB = new Date(b.utcStartTime).getTime();
+      } else {
+        // Fallback: parse from date and time (for backward compatibility)
+        const parsedB = parseStartDate(b.date, b.time);
+        timeB = isNaN(parsedB.getTime()) ? 0 : parsedB.getTime();
+      }
       
-      // Extract time from format like "09:30 - 09:50" or "09:30 AM"
-      const extractTime = (timeStr) => {
-        if (!timeStr) return '';
-        const timePart = timeStr.split('-')[0].trim();
-        const match = timePart.match(/^(\d{1,2}):(\d{2})/);
-        if (match) {
-          const hours = parseInt(match[1], 10);
-          const minutes = parseInt(match[2], 10);
-          return hours * 60 + minutes; // Convert to minutes for comparison
-        }
-        return 0;
-      };
-      
-      const timeMinutesA = extractTime(timeA);
-      const timeMinutesB = extractTime(timeB);
-      
-      return timeMinutesA - timeMinutesB;
+      return timeA - timeB;
     });
     
     // Apply pagination after sorting
@@ -596,11 +599,17 @@ export const approveAppointment = async (req, res) => {
       console.error('Error sending appointment approval notification:', notificationError);
     }
 
+    // Populate the appointment with related data before returning
+    const populatedAppointment = await Appointment.findById(updated._id)
+      .populate({ path: 'starId', select: '-password -passwordResetToken -passwordResetExpires' })
+      .populate('fanId', 'name pseudo profilePic baroniId email contact role agoraKey')
+      .populate('availabilityId', 'date timeSlots');
+
     return res.json({ 
       success: true, 
       message: 'Appointment approved successfully',
       data: {
-        appointment: sanitize(updated)
+        appointment: sanitize(populatedAppointment)
       }
     });
   } catch (err) {
@@ -680,11 +689,17 @@ export const rejectAppointment = async (req, res) => {
       console.error('Error sending appointment rejection notification:', notificationError);
     }
 
+    // Populate the appointment with related data before returning
+    const populatedAppointment = await Appointment.findById(updated._id)
+      .populate({ path: 'starId', select: '-password -passwordResetToken -passwordResetExpires' })
+      .populate('fanId', 'name pseudo profilePic baroniId email contact role agoraKey')
+      .populate('availabilityId', 'date timeSlots');
+
     return res.json({ 
       success: true, 
       message: 'Appointment rejected successfully',
       data: {
-        appointment: sanitize(updated)
+        appointment: sanitize(populatedAppointment)
       }
     });
   } catch (err) {
