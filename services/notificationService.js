@@ -579,52 +579,64 @@ class NotificationService {
       });
 
       if (!deliverySucceeded && (isAndroid || !isIOS) && user.fcmToken && this.messaging) {
+        // For Android VoIP calls, send only data payload (no notification parameter)
+        // This allows the app to handle the call silently without showing a notification banner
+        const isVoipForAndroid = isVoipExplicit && isAndroid;
+        
+        // Build data payload
+        const dataPayload = {
+          // Convert all data values to strings for Firebase FCM compatibility
+          ...Object.fromEntries(
+            Object.entries(data).map(([key, value]) => [
+              key, 
+              typeof value === 'string' ? value : JSON.stringify(value)
+            ])
+          ),
+          ...(options.customPayload ? { customPayload: JSON.stringify(options.customPayload) } : {}),
+          clickAction: 'FLUTTER_NOTIFICATION_CLICK',
+          sound: 'default',
+          // Add notification type for Android handling
+          notificationType: notificationData.type || 'general',
+          // Add timestamp for Android
+          timestamp: Date.now().toString(),
+        };
+        
+        // Build message - for VoIP on Android, exclude notification parameter
         const message = {
           token: user.fcmToken,
-          notification: {
-            title: notificationData.title,
-            body: notificationData.body,
-          },
-          data: {
-            // Convert all data values to strings for Firebase FCM compatibility
-            ...Object.fromEntries(
-              Object.entries(data).map(([key, value]) => [
-                key, 
-                typeof value === 'string' ? value : JSON.stringify(value)
-              ])
-            ),
-            ...(options.customPayload ? { customPayload: JSON.stringify(options.customPayload) } : {}),
-            clickAction: 'FLUTTER_NOTIFICATION_CLICK',
-            sound: 'default',
-            // Add notification type for Android handling
-            notificationType: notificationData.type || 'general',
-            // Add timestamp for Android
-            timestamp: Date.now().toString(),
-          },
-          android: {
+          ...(isVoipForAndroid ? {} : {
             notification: {
-              sound: 'default',
-              channelId: 'baroni_notifications', // Use a specific channel instead of 'default'
-              priority: 'high',
-              visibility: 'public',
-              // Add icon and color for better Android display
-              icon: 'ic_notification',
-              color: '#FF6B6B', // Baroni brand color
-              // Add click action
-              clickAction: 'FLUTTER_NOTIFICATION_CLICK',
-              // Add tag for notification grouping
-              tag: notificationData.type || 'general',
-              // Add local notification for better reliability
-              localOnly: false,
-              // Add default vibration pattern
-              defaultVibrateTimings: true,
-              // Add light settings
-              lightSettings: {
-                color: '#FF6B6B', // Baroni brand color in hex format
-                lightOnDurationMillis: 100, // 0.1 seconds in milliseconds
-                lightOffDurationMillis: 100 // 0.1 seconds in milliseconds
+              title: notificationData.title,
+              body: notificationData.body,
+            }
+          }),
+          data: dataPayload,
+          android: {
+            ...(isVoipForAndroid ? {} : {
+              notification: {
+                sound: 'default',
+                channelId: 'baroni_notifications', // Use a specific channel instead of 'default'
+                priority: 'high',
+                visibility: 'public',
+                // Add icon and color for better Android display
+                icon: 'ic_notification',
+                color: '#FF6B6B', // Baroni brand color
+                // Add click action
+                clickAction: 'FLUTTER_NOTIFICATION_CLICK',
+                // Add tag for notification grouping
+                tag: notificationData.type || 'general',
+                // Add local notification for better reliability
+                localOnly: false,
+                // Add default vibration pattern
+                defaultVibrateTimings: true,
+                // Add light settings
+                lightSettings: {
+                  color: '#FF6B6B', // Baroni brand color in hex format
+                  lightOnDurationMillis: 100, // 0.1 seconds in milliseconds
+                  lightOffDurationMillis: 100 // 0.1 seconds in milliseconds
+                }
               }
-            },
+            }),
             // Add Android-specific data
             data: {
               // Convert all data values to strings for Firebase FCM compatibility
@@ -656,10 +668,11 @@ class NotificationService {
         
         console.log(`[FCM DEBUG] Complete message structure for user ${userId}:`, JSON.stringify(message, null, 2));
         
-        console.log(`[FCM] Sending notification to Android user ${userId}`, {
-          title: notificationData.title,
-          body: notificationData.body,
-          channelId: 'baroni_notifications',
+        console.log(`[FCM] Sending ${isVoipForAndroid ? 'VoIP (data-only)' : 'notification'} to Android user ${userId}`, {
+          isVoip: isVoipForAndroid,
+          title: isVoipForAndroid ? 'N/A (data-only)' : notificationData.title,
+          body: isVoipForAndroid ? 'N/A (data-only)' : notificationData.body,
+          channelId: isVoipForAndroid ? 'N/A (data-only)' : 'baroni_notifications',
           priority: 'high',
           fcmTokenPreview: user.fcmToken ? user.fcmToken.substring(0, 20) + '...' : 'null',
           userDetails: {
@@ -786,10 +799,19 @@ class NotificationService {
    * @param {Object} options - Additional options for notification storage
    */
   async sendToMultipleUsers(userIds, notificationData, data = {}, options = {}) {
+    // Check if this is a VoIP notification
+    const isVoipExplicit = (
+      options.apnsVoip === true ||
+      (typeof data.pushType === 'string' && data.pushType.toLowerCase() === 'voip') ||
+      (typeof notificationData.pushType === 'string' && notificationData.pushType.toLowerCase() === 'voip') ||
+      (typeof notificationData.type === 'string' && notificationData.type.toLowerCase() === 'voip')
+    );
+    
     console.log(`[MULTICAST START] Starting multicast notification for ${userIds.length} users:`, {
       title: notificationData.title,
       body: notificationData.body,
       type: notificationData.type,
+      isVoip: isVoipExplicit,
       userIds: userIds.map(id => id.toString()),
       dataKeys: Object.keys(data),
       optionsKeys: Object.keys(options)
@@ -914,51 +936,63 @@ class NotificationService {
 
       let fcmResponse = { successCount: 0, failureCount: 0, responses: [] };
       if (isFirebaseInitialized && this.messaging && fcmTokens.length > 0) {
+        // For Android VoIP calls, send only data payload (no notification parameter)
+        // This allows the app to handle the call silently without showing a notification banner
+        const isVoipForAndroid = isVoipExplicit && androidUsers.length > 0;
+        
+        // Build data payload
+        const dataPayload = {
+          // Convert all data values to strings for Firebase FCM compatibility
+          ...Object.fromEntries(
+            Object.entries(data).map(([key, value]) => [
+              key, 
+              typeof value === 'string' ? value : JSON.stringify(value)
+            ])
+          ),
+          ...(options.customPayload ? { customPayload: JSON.stringify(options.customPayload) } : {}),
+          clickAction: 'FLUTTER_NOTIFICATION_CLICK',
+          sound: 'default',
+          // Add notification type for Android handling
+          notificationType: notificationData.type || 'general',
+          // Add timestamp for Android
+          timestamp: Date.now().toString(),
+        };
+        
+        // Build message - for VoIP on Android, exclude notification parameter
         const fcmMessage = {
-          notification: {
-            title: notificationData.title,
-            body: notificationData.body,
-          },
-          data: {
-            // Convert all data values to strings for Firebase FCM compatibility
-            ...Object.fromEntries(
-              Object.entries(data).map(([key, value]) => [
-                key, 
-                typeof value === 'string' ? value : JSON.stringify(value)
-              ])
-            ),
-            ...(options.customPayload ? { customPayload: JSON.stringify(options.customPayload) } : {}),
-            clickAction: 'FLUTTER_NOTIFICATION_CLICK',
-            sound: 'default',
-            // Add notification type for Android handling
-            notificationType: notificationData.type || 'general',
-            // Add timestamp for Android
-            timestamp: Date.now().toString(),
-          },
-          android: {
+          ...(isVoipForAndroid ? {} : {
             notification: {
-              sound: 'default',
-              channelId: 'baroni_notifications', // Use a specific channel instead of 'default'
-              priority: 'high',
-              visibility: 'public',
-              // Add icon and color for better Android display
-              icon: 'ic_notification',
-              color: '#FF6B6B', // Baroni brand color
-              // Add click action
-              clickAction: 'FLUTTER_NOTIFICATION_CLICK',
-              // Add tag for notification grouping
-              tag: notificationData.type || 'general',
-              // Add local notification for better reliability
-              localOnly: false,
-              // Add default vibration pattern
-              defaultVibrateTimings: true,
-              // Add light settings
-              lightSettings: {
-                color: '#FF6B6B', // Baroni brand color in hex format
-                lightOnDurationMillis: 100, // 0.1 seconds in milliseconds
-                lightOffDurationMillis: 100 // 0.1 seconds in milliseconds
+              title: notificationData.title,
+              body: notificationData.body,
+            }
+          }),
+          data: dataPayload,
+          android: {
+            ...(isVoipForAndroid ? {} : {
+              notification: {
+                sound: 'default',
+                channelId: 'baroni_notifications', // Use a specific channel instead of 'default'
+                priority: 'high',
+                visibility: 'public',
+                // Add icon and color for better Android display
+                icon: 'ic_notification',
+                color: '#FF6B6B', // Baroni brand color
+                // Add click action
+                clickAction: 'FLUTTER_NOTIFICATION_CLICK',
+                // Add tag for notification grouping
+                tag: notificationData.type || 'general',
+                // Add local notification for better reliability
+                localOnly: false,
+                // Add default vibration pattern
+                defaultVibrateTimings: true,
+                // Add light settings
+                lightSettings: {
+                  color: '#FF6B6B', // Baroni brand color in hex format
+                  lightOnDurationMillis: 100, // 0.1 seconds in milliseconds
+                  lightOffDurationMillis: 100 // 0.1 seconds in milliseconds
+                }
               }
-            },
+            }),
             // Add Android-specific data
             data: {
               // Convert all data values to strings for Firebase FCM compatibility
@@ -989,10 +1023,11 @@ class NotificationService {
           tokens: fcmTokens,
         };
         
-        console.log(`[FCM MULTICAST] Sending multicast notification to ${fcmTokens.length} Android users`, {
-          title: notificationData.title,
-          body: notificationData.body,
-          channelId: 'baroni_notifications',
+        console.log(`[FCM MULTICAST] Sending ${isVoipForAndroid ? 'VoIP (data-only)' : 'notification'} to ${fcmTokens.length} Android users`, {
+          isVoip: isVoipForAndroid,
+          title: isVoipForAndroid ? 'N/A (data-only)' : notificationData.title,
+          body: isVoipForAndroid ? 'N/A (data-only)' : notificationData.body,
+          channelId: isVoipForAndroid ? 'N/A (data-only)' : 'baroni_notifications',
           priority: 'high',
           tokenCount: fcmTokens.length,
           fcmTokensPreview: fcmTokens.slice(0, 3).map(token => token.substring(0, 20) + '...')
