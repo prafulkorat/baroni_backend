@@ -907,9 +907,9 @@ export const completeAppointment = async (req, res) => {
       return res.status(400).json({ success: false, message: errorMessage || 'Validation failed' });
     }
     const { id } = req.params;
-    const { callDuration } = req.body; // callDuration is in minutes from request
+    const { callDuration } = req.body; // callDuration is already in seconds
     
-    console.log(`[CompleteAppointment] Completing appointment ${id} with call duration ${callDuration} minutes by user ${req.user._id}`);
+    console.log(`[CompleteAppointment] Completing appointment ${id} with call duration ${callDuration} seconds by user ${req.user._id}`);
     
     const appt = await Appointment.findById(id);
     if (!appt) {
@@ -936,8 +936,8 @@ export const completeAppointment = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Only approved, in-progress, or completed appointments can have duration added' });
     }
 
-    // Convert minutes to seconds
-    const durationInSeconds = Math.round(callDuration * 60);
+    // callDuration is already in seconds, use it directly
+    const durationInSeconds = Math.round(callDuration);
     
     // Get current duration (ensure it's a number)
     const currentDuration = typeof appt.callDuration === 'number' ? appt.callDuration : 0;
