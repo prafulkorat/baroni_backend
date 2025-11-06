@@ -911,7 +911,7 @@ export const completeAppointment = async (req, res) => {
     
     console.log(`[CompleteAppointment] Completing appointment ${id} with call duration ${callDuration} minutes by user ${req.user._id}`);
     
-    const appt = await Appointment.findOne({ _id: id });
+    const appt = await Appointment.findById(id);
     if (!appt) {
       console.log(`[CompleteAppointment] Appointment ${id} not found`);
       return res.status(404).json({ success: false, message: 'Appointment not found' });
@@ -920,6 +920,7 @@ export const completeAppointment = async (req, res) => {
     console.log(`[CompleteAppointment] Found appointment:`, {
       id: appt._id,
       status: appt.status,
+      currentCallDuration: appt.callDuration || 0,
       starId: appt.starId,
       fanId: appt.fanId,
       date: appt.date,
@@ -929,19 +930,25 @@ export const completeAppointment = async (req, res) => {
       transactionId: appt.transactionId
     });
     
-    if (appt.status !== 'approved' && appt.status !== 'in_progress') {
+    // Allow duration updates for approved, in_progress, and completed appointments
+    if (appt.status !== 'approved' && appt.status !== 'in_progress' && appt.status !== 'completed') {
       console.log(`[CompleteAppointment] Appointment ${id} status is ${appt.status}, cannot add duration`);
-      return res.status(400).json({ success: false, message: 'Only approved or in-progress appointments can have duration added' });
+      return res.status(400).json({ success: false, message: 'Only approved, in-progress, or completed appointments can have duration added' });
     }
 
     // Convert minutes to seconds
-    const durationInSeconds = callDuration * 60;
+    const durationInSeconds = Math.round(callDuration * 60);
     
-    // Accumulate duration instead of replacing
-    const currentDuration = appt.callDuration || 0;
+    // Get current duration (ensure it's a number)
+    const currentDuration = typeof appt.callDuration === 'number' ? appt.callDuration : 0;
     const newTotalDuration = currentDuration + durationInSeconds;
     
-    console.log(`[CompleteAppointment] Adding ${durationInSeconds} seconds. Current: ${currentDuration}s, New Total: ${newTotalDuration}s`);
+    console.log(`[CompleteAppointment] Duration accumulation:`, {
+      currentDurationSeconds: currentDuration,
+      addingSeconds: durationInSeconds,
+      newTotalDurationSeconds: newTotalDuration,
+      newTotalDurationMinutes: (newTotalDuration / 60).toFixed(2)
+    });
     
     // Complete the transaction if it's still pending (only once)
     if (appt.transactionId && appt.paymentStatus !== 'completed') {
@@ -971,15 +978,37 @@ export const completeAppointment = async (req, res) => {
       }
     }
     
-    // Update appointment with accumulated duration
-    appt.callDuration = newTotalDuration;
+    // Use MongoDB's atomic $inc operator to increment duration atomically
+    // This prevents race conditions when multiple requests come in simultaneously
+    // MongoDB's $inc treats null/undefined as 0, so it's safe to always use $inc
+    const updateQuery = {
+      $inc: { callDuration: durationInSeconds }
+    };
     
-    // Mark as in_progress if not already completed (cron will mark as completed when >= 300s)
+    // Also update status if needed (only if currently approved)
     if (appt.status === 'approved') {
-      appt.status = 'in_progress';
+      updateQuery.$set = { status: 'in_progress' };
     }
     
-    const updated = await appt.save();
+    // Perform atomic update and return the updated document
+    const updated = await Appointment.findByIdAndUpdate(
+      id,
+      updateQuery,
+      { new: true, runValidators: true }
+    );
+    
+    if (!updated) {
+      return res.status(404).json({ success: false, message: 'Appointment not found' });
+    }
+    
+    // Get the final duration after atomic update
+    const finalDuration = typeof updated.callDuration === 'number' ? updated.callDuration : 0;
+    
+    console.log(`[CompleteAppointment] Atomic update completed:`, {
+      durationAdded: durationInSeconds,
+      finalDurationSeconds: finalDuration,
+      finalDurationMinutes: (finalDuration / 60).toFixed(2)
+    });
     
     console.log(`[CompleteAppointment] Appointment ${id} updated:`, {
       id: updated._id,
