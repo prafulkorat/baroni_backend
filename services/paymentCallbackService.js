@@ -117,10 +117,37 @@ export const processPaymentCallback = async (callbackData) => {
         console.log(`[PaymentCallback] Verification - Transaction status: ${verifyTransaction.status}, updatedAt: ${verifyTransaction.updatedAt}`);
 
         // Reflect domain paymentStatus transitions to 'pending' once external payment succeeds
+        const appointments = await Appointment.find({ transactionId: transaction._id });
         await Appointment.updateMany(
           { transactionId: transaction._id },
           { $set: { paymentStatus: 'pending' } }
         );
+        
+        // Unlock and book slots for appointments (mark as unavailable)
+        if (appointments.length > 0) {
+          const Availability = (await import('../models/Availability.js')).default;
+          for (const appointment of appointments) {
+            try {
+              await Availability.updateOne(
+                { 
+                  _id: appointment.availabilityId, 
+                  'timeSlots._id': appointment.timeSlotId,
+                  'timeSlots.paymentReferenceId': transaction.externalPaymentId
+                },
+                { 
+                  $set: { 
+                    'timeSlots.$.status': 'unavailable',
+                    'timeSlots.$.paymentReferenceId': null,
+                    'timeSlots.$.lockedAt': null
+                  } 
+                }
+              );
+              console.log(`[PaymentCallback] Slot booked for appointment ${appointment._id}, payment ${transaction.externalPaymentId}`);
+            } catch (slotError) {
+              console.error(`[PaymentCallback] Error updating slot for appointment ${appointment._id}:`, slotError);
+            }
+          }
+        }
         await DedicationRequest.updateMany(
           { transactionId: transaction._id },
           { $set: { paymentStatus: 'pending' } }

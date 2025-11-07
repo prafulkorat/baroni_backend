@@ -207,7 +207,9 @@ export const createAppointment = async (req, res) => {
 
     const slot = availability.timeSlots.find((s) => String(s._id) === String(timeSlotId));
     if (!slot) return res.status(404).json({ success: false, message: 'Time slot unavailable' });
-    if (slot.status === 'unavailable') return res.status(409).json({ success: false, message: 'Time slot unavailable' });
+    if (slot.status === 'unavailable' || slot.status === 'locked') {
+      return res.status(409).json({ success: false, message: 'Time slot unavailable' });
+    }
 
     // Create hybrid transaction before creating appointment
     let transactionResult;
@@ -294,14 +296,32 @@ export const createAppointment = async (req, res) => {
       storedUtcTimestamp: created.utcStartTime?.getTime()
     });
 
-    // Reserve the slot immediately for all bookings (hybrid or coin-only)
+    // Handle slot reservation based on payment mode
     try {
-      // Atomic update to avoid race conditions
-      await Availability.updateOne(
-        { _id: availabilityId, userId: starId, 'timeSlots._id': timeSlotId, 'timeSlots.status': 'available' },
-        { $set: { 'timeSlots.$.status': 'unavailable' } }
-      );
-    } catch (_e) {}
+      if (transactionResult.paymentMode === 'coin') {
+        // For coin-only payments, mark slot as unavailable (booked) immediately
+        await Availability.updateOne(
+          { _id: availabilityId, userId: starId, 'timeSlots._id': timeSlotId, 'timeSlots.status': 'available' },
+          { $set: { 'timeSlots.$.status': 'unavailable' } }
+        );
+        console.log(`[CreateAppointment] Slot marked as unavailable for coin-only payment`);
+      } else if (transactionResult.paymentMode === 'hybrid' && transaction.externalPaymentId) {
+        // For hybrid payments with external payment link, lock the slot
+        await Availability.updateOne(
+          { _id: availabilityId, userId: starId, 'timeSlots._id': timeSlotId, 'timeSlots.status': 'available' },
+          { 
+            $set: { 
+              'timeSlots.$.status': 'locked',
+              'timeSlots.$.paymentReferenceId': transaction.externalPaymentId,
+              'timeSlots.$.lockedAt': new Date()
+            } 
+          }
+        );
+        console.log(`[CreateAppointment] Slot locked for external payment: ${transaction.externalPaymentId}`);
+      }
+    } catch (slotError) {
+      console.error('[CreateAppointment] Error updating slot status:', slotError);
+    }
 
     // Handle coin-only payments immediately
     if (transactionResult.paymentMode === 'coin') {

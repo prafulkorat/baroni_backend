@@ -11,6 +11,7 @@ import notificationScheduler from './services/notificationScheduler.js';
 import { startRefundScheduler } from './services/refundScheduler.js';
 import { startWeeklyAvailabilityScheduler } from './services/weeklyAvailabilityScheduler.js';
 import { startAppointmentCompletionScheduler } from './services/appointmentCompletionScheduler.js';
+import { startSlotLockScheduler } from './services/slotLockScheduler.js';
 import { ensureAllUsersHaveAgoraKeys } from './scripts/ensureAllUsersHaveAgoraKeys.js';
 
 dotenv.config();
@@ -61,6 +62,9 @@ app.listen(PORT, async () => {
   
   // Start appointment completion scheduler
   startAppointmentCompletionScheduler();
+  
+  // Start slot lock scheduler
+  startSlotLockScheduler();
 });
 
 

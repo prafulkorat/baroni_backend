@@ -11,9 +11,11 @@ const availabilitySchema = new mongoose.Schema(
         new mongoose.Schema(
           {
             slot: { type: String, required: true, trim: true }, // "HH:MM - HH:MM" (24-hour format)
-            status: { type: String, enum: ['available', 'unavailable'], default: 'available' },
+            status: { type: String, enum: ['available', 'unavailable', 'locked'], default: 'available' },
             utcStartTime: { type: Date, index: true }, // UTC start time for the slot
             utcEndTime: { type: Date, index: true }, // UTC end time for the slot
+            paymentReferenceId: { type: String, index: true }, // External payment ID when slot is locked
+            lockedAt: { type: Date }, // Timestamp when slot was locked for payment
           }
         ),
       ],
