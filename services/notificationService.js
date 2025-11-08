@@ -445,25 +445,47 @@ class NotificationService {
         if (userApnsProvider) {
         const note = new apn.Notification();
         const isVoip = isVoipExplicit;
+        
+        // Check if this is a reject call notification (for cutting/rejecting calls on iOS)
+        const isRejectCall = data.isRejectCall === true || data.isRejectCall === 'true';
 
         const voipBundle = process.env.APNS_VOIP_BUNDLE_ID || (process.env.APNS_BUNDLE_ID ? `${process.env.APNS_BUNDLE_ID}.voip` : undefined);
-        note.topic = isVoip && voipBundle ? voipBundle : process.env.APNS_BUNDLE_ID;
-        if (isVoip) {
-          note.pushType = 'voip';
+        
+        if (isRejectCall) {
+          // Special payload for rejecting/cutting calls on iOS
+          // Send silent notification with content-available and status: decline
+          // Use VoIP bundle for call rejection notifications
+          note.topic = voipBundle || process.env.APNS_BUNDLE_ID;
           note.contentAvailable = 1;
+          note.pushType = 'voip'; // Use VoIP push type for call rejection
           note.expiry = Math.floor(Date.now() / 1000) + 3600;
-          // VoIP notifications don't support alert, sound, or badge
-        } else {
-          // Regular push notifications
-          note.alert = {
-            title: notificationData.title,
-            body: notificationData.body
+          // No alert, sound, or badge for call rejection
+          note.payload = {
+            aps: {
+              "content-available": 1
+            },
+            status: "decline"
           };
-          note.sound = 'default';
-          note.badge = 1;
+          console.log(`[APNs] Sending call rejection notification to iOS user ${userId} with payload:`, note.payload);
+        } else {
+          note.topic = isVoip && voipBundle ? voipBundle : process.env.APNS_BUNDLE_ID;
+          if (isVoip) {
+            note.pushType = 'voip';
+            note.contentAvailable = 1;
+            note.expiry = Math.floor(Date.now() / 1000) + 3600;
+            // VoIP notifications don't support alert, sound, or badge
+          } else {
+            // Regular push notifications
+            note.alert = {
+              title: notificationData.title,
+              body: notificationData.body
+            };
+            note.sound = 'default';
+            note.badge = 1;
+          }
         }
         // Match Flutter's expected payload shape for VoIP pushes
-        if (isVoip) {
+        if (isVoip && !isRejectCall) {
           note.payload = {
             extra: {
               ...data,
@@ -471,7 +493,7 @@ class NotificationService {
               clickAction: 'FLUTTER_NOTIFICATION_CLICK'
             }
           };
-        } else {
+        } else if (!isRejectCall) {
           note.payload = { ...data, ...(options.customPayload ? { customPayload: options.customPayload } : {}) };
         }
 
@@ -1524,6 +1546,11 @@ class NotificationService {
       APPOINTMENT_CANCELLED: {
         title: 'Appointment Cancelled',
         body: 'An appointment has been cancelled.',
+        type: 'appointment'
+      },
+      APPOINTMENT_RESCHEDULED: {
+        title: 'Appointment Rescheduled',
+        body: 'An appointment has been rescheduled.',
         type: 'appointment'
       },
       APPOINTMENT_REMINDER: {

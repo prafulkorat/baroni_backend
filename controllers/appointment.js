@@ -360,6 +360,15 @@ export const createAppointment = async (req, res) => {
 
 export const listAppointments = async (req, res) => {
   try {
+    // Log raw request details for debugging
+    console.log(`[ListAppointments] ===== REQUEST RECEIVED =====`);
+    console.log(`[ListAppointments] Raw req.query:`, JSON.stringify(req.query, null, 2));
+    console.log(`[ListAppointments] req.query type:`, typeof req.query);
+    console.log(`[ListAppointments] req.query.limit:`, req.query?.limit, `(type: ${typeof req.query?.limit})`);
+    console.log(`[ListAppointments] req.query.page:`, req.query?.page, `(type: ${typeof req.query?.page})`);
+    console.log(`[ListAppointments] Full req.url:`, req.url);
+    console.log(`[ListAppointments] Full req.originalUrl:`, req.originalUrl);
+    
     // Admin can see all appointments - no filter by user ID
     // Stars see only their own appointments, Fans see only their own appointments
     let filter = {};
@@ -378,7 +387,9 @@ export const listAppointments = async (req, res) => {
     }
     
     // Optional date filtering: exact date or range via startDate/endDate (expects YYYY-MM-DD strings)
-    const { date, startDate, endDate, status, page = 1, limit = 10 } = req.query || {};
+    const { date, startDate, endDate, status, page, limit } = req.query || {};
+    
+    console.log(`[ListAppointments] After destructuring - page:`, page, `limit:`, limit);
     
     if (date && typeof date === 'string' && date.trim()) {
       // Exact date match
@@ -417,12 +428,28 @@ export const listAppointments = async (req, res) => {
     }
     
     // Pagination - fetch all first for proper global sorting, then paginate
-    const pageNum = parseInt(page, 10) || 1;
-    const limitNum = parseInt(limit, 10) || 10;
+    // Parse page and limit from query parameters
+    console.log(`[ListAppointments] Before parsing - page:`, page, `(type: ${typeof page}), limit:`, limit, `(type: ${typeof limit})`);
+    
+    const pageNum = page ? parseInt(String(page), 10) : 1;
+    const limitNum = limit ? parseInt(String(limit), 10) : 10;
+    
+    console.log(`[ListAppointments] After parseInt - pageNum:`, pageNum, `limitNum:`, limitNum);
+    console.log(`[ListAppointments] isNaN checks - pageNum isNaN:`, isNaN(pageNum), `limitNum isNaN:`, isNaN(limitNum));
+    
+    // Ensure valid values
+    const finalPageNum = isNaN(pageNum) || pageNum < 1 ? 1 : pageNum;
+    const finalLimitNum = isNaN(limitNum) || limitNum < 1 ? 10 : limitNum;
+    
+    console.log(`[ListAppointments] ===== PAGINATION PARAMS =====`);
+    console.log(`[ListAppointments] Raw from query - page:`, page, `limit:`, limit);
+    console.log(`[ListAppointments] Parsed values - pageNum:`, pageNum, `limitNum:`, limitNum);
+    console.log(`[ListAppointments] Final values - finalPageNum:`, finalPageNum, `finalLimitNum:`, finalLimitNum);
+    console.log(`[ListAppointments] ============================`);
     
     // Get total count for pagination info
     const totalCount = await Appointment.countDocuments(filter);
-    const totalPages = Math.ceil(totalCount / limitNum);
+    const totalPages = Math.ceil(totalCount / finalLimitNum);
     
     // Fetch all appointments (without pagination) to ensure proper global sorting
     // Then we'll sort and paginate in memory
@@ -562,22 +589,37 @@ export const listAppointments = async (req, res) => {
     });
     
     // Apply pagination after sorting
-    const skip = (pageNum - 1) * limitNum;
-    const paginatedData = data.slice(skip, skip + limitNum);
+    const skip = (finalPageNum - 1) * finalLimitNum;
+    const paginatedData = data.slice(skip, skip + finalLimitNum);
 
-    return res.json({ 
+    console.log(`[ListAppointments] Pagination result:`, {
+      totalCount,
+      totalPages,
+      skip,
+      requestedLimit: finalLimitNum,
+      returnedItems: paginatedData.length
+    });
+
+    const responsePayload = { 
       success: true, 
       message: 'Appointments retrieved successfully',
       data: paginatedData,
       pagination: {
-        currentPage: pageNum,
+        currentPage: finalPageNum,
         totalPages,
         totalCount,
-        limit: limitNum,
-        hasNextPage: pageNum < totalPages,
-        hasPrevPage: pageNum > 1
+        limit: finalLimitNum,
+        hasNextPage: finalPageNum < totalPages,
+        hasPrevPage: finalPageNum > 1
       }
-    });
+    };
+    
+    console.log(`[ListAppointments] ===== RESPONSE PAYLOAD =====`);
+    console.log(`[ListAppointments] Response pagination.limit:`, responsePayload.pagination.limit);
+    console.log(`[ListAppointments] Response pagination:`, JSON.stringify(responsePayload.pagination, null, 2));
+    console.log(`[ListAppointments] ============================`);
+
+    return res.json(responsePayload);
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }

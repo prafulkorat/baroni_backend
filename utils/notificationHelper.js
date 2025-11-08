@@ -176,6 +176,13 @@ class NotificationHelper {
         } else if (type === 'APPOINTMENT_CANCELLED' && String(currentUserId) === String(fanId)) {
           starNote.title = 'Appointment Cancelled';
           starNote.body = `${fanName} has cancelled the appointment.`;
+        } else if (type === 'APPOINTMENT_RESCHEDULED') {
+          // Get new appointment details for reschedule notification
+          const newDate = appointment.date || '';
+          const newTime = appointment.time || '';
+          starNote.title = 'Appointment Rescheduled';
+          starNote.body = `${fanName} has rescheduled the appointment${newDate || newTime ? ` to ${newDate} ${newTime}` : ''}.`;
+          console.log(`[AppointmentNotification] Sending reschedule notification to star ${starId} (${fanName}): "${starNote.body}"`);
         }
         
         try {
@@ -232,6 +239,9 @@ class NotificationHelper {
         } else if (type === 'APPOINTMENT_REJECTED') {
           fanTemplate.title = 'Appointment Rejected';
           fanTemplate.body = `${starName} has rejected your appointment request.`;
+          // For iOS devices, we need to send special payload to cut/reject the call
+          // This will be handled in notificationService based on deviceType
+          data.isRejectCall = true; // Flag to indicate this is a call rejection
         } else if (type === 'APPOINTMENT_CANCELLED') {
           fanTemplate.title = 'Appointment Cancelled';
           // Notify fan only when cancelled by star
@@ -427,22 +437,44 @@ class NotificationHelper {
       return;
     }
 
+    // Extract reviewerId and starId (Review model uses reviewerId, not fanId)
+    const reviewerId = rating.reviewerId?._id ? String(rating.reviewerId._id) : (rating.reviewerId?.toString?.() || String(rating.reviewerId || ''));
+    const starId = rating.starId?._id ? String(rating.starId._id) : (rating.starId?.toString?.() || String(rating.starId || ''));
+
     // Fetch names
     let fanName = 'Fan';
     let starName = 'Star';
     try {
-      const users = await User.find({ _id: { $in: [rating.fanId, rating.starId] } }).select('name');
-      for (const u of users) {
-        if (String(u._id) === String(rating.fanId)) fanName = u.name || fanName;
-        if (String(u._id) === String(rating.starId)) starName = u.name || starName;
+      const userIds = [reviewerId, starId].filter(id => id);
+      if (userIds.length > 0) {
+        const users = await User.find({ _id: { $in: userIds } }).select('name pseudo');
+        for (const u of users) {
+          const userId = String(u._id);
+          if (userId === reviewerId) fanName = u.name || u.pseudo || fanName;
+          if (userId === starId) starName = u.name || u.pseudo || starName;
+        }
       }
-    } catch (_e) {}
+    } catch (_e) {
+      console.error('Error fetching user names for rating notification:', _e);
+    }
+
+    // Determine review type for personalized message
+    const reviewType = rating.reviewType || '';
+    const reviewTypeText = reviewType === 'appointment' ? 'appointment' : 
+                          reviewType === 'dedication' ? 'dedication' : 
+                          reviewType === 'live_show' ? 'live show' : 'service';
+
+    // Build personalized notification message
+    const notificationTitle = 'New Review Received';
+    const notificationBody = `${fanName} has left you a ${rating.rating}-star review for your ${reviewTypeText}${rating.comment ? ' with a comment' : ''}.`;
 
     const data = {
       type: template.type,
       ratingId: rating._id.toString(),
       fanName,
       starName,
+      rating: rating.rating,
+      reviewType: reviewType,
       ...additionalData
     };
 
@@ -450,15 +482,35 @@ class NotificationHelper {
     const currentUserId = additionalData.currentUserId || '';
 
     // Send to the star who received the rating if star is not the current user
-    if (rating.starId && String(rating.starId) !== String(currentUserId)) {
-      await notificationService.sendToUser(rating.starId, template, data, {
-        relatedEntity: { type: 'rating', id: rating._id }
-      });
+    if (starId && String(starId) !== String(currentUserId)) {
+      const starNotification = {
+        title: notificationTitle,
+        body: notificationBody,
+        type: template.type
+      };
+      
+      try {
+        const result = await notificationService.sendToUser(starId, starNotification, data, {
+          relatedEntity: { type: 'rating', id: rating._id }
+        });
+        console.log(`[RatingNotification] ✓ Star notification sent successfully:`, {
+          userId: starId,
+          starName,
+          fanName,
+          rating: rating.rating,
+          reviewType,
+          success: result?.success,
+          notificationId: result?.notificationId
+        });
+      } catch (sendError) {
+        console.error(`[RatingNotification] ✗ Failed to send notification to star ${starId}:`, sendError);
+        throw sendError;
+      }
     }
 
     // Send to the fan who gave the rating (for thanks message) if fan is not the current user
-    if (type === 'RATING_THANKS' && rating.fanId && String(rating.fanId) !== String(currentUserId)) {
-      await notificationService.sendToUser(rating.fanId, template, data, {
+    if (type === 'RATING_THANKS' && reviewerId && String(reviewerId) !== String(currentUserId)) {
+      await notificationService.sendToUser(reviewerId, template, data, {
         relatedEntity: { type: 'rating', id: rating._id }
       });
     }
