@@ -401,23 +401,34 @@ export const createAvailability = async (req, res) => {
                     }
                 }
 
+                // Merge existing slots with new slots - preserve all existing slots
                 const existingSlots = existingAvailability.timeSlots || [];
                 const newSlots = normalizedTimeSlots;
                 const existingSlotsMap = new Map();
+                
+                // Create a map of existing slots by slot string for quick lookup
                 existingSlots.forEach((slot) => {
                     existingSlotsMap.set(slot.slot, slot);
                 });
+                
+                // Merge new slots with existing slots - don't delete existing slots
                 newSlots.forEach((newSlot) => {
                     if (existingSlotsMap.has(newSlot.slot)) {
+                        // Slot already exists - only update status if different
                         const existingSlot = existingSlotsMap.get(newSlot.slot);
                         if (existingSlot.status !== newSlot.status) {
                             existingSlot.status = newSlot.status;
                         }
                     } else {
+                        // New slot - add it to existing slots
                         existingSlots.push(newSlot);
                     }
                 });
+                
+                // Preserve all existing slots - don't replace, just merge
                 existingAvailability.timeSlots = existingSlots;
+                
+                // Update mode flags without affecting existing slots
                 if (isWeekly) {
                     existingAvailability.isWeekly = true;
                     existingAvailability.isDaily = false;
@@ -426,7 +437,9 @@ export const createAvailability = async (req, res) => {
                     existingAvailability.isDaily = true;
                     existingAvailability.isWeekly = false;
                 }
+                
                 const saved = await existingAvailability.save();
+                console.log(`[Availability] Merged slots for date ${isoDateStr}: ${existingSlots.length} total slots (${newSlots.length} new slots added)`);
                 return { action: 'updated', doc: saved };
             }
 

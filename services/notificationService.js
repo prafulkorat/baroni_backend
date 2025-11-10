@@ -347,11 +347,16 @@ class NotificationService {
     };
 
     // Create notification record in database first
+    // For reject type, use 'general' type in database (since 'reject' is not in enum)
+    const dbNotificationType = (notificationData.type && notificationData.type.toLowerCase() === 'reject') 
+      ? 'general' 
+      : (notificationData.type || 'general');
+    
     const notificationRecord = new Notification({
       user: userId,
       title: notificationData.title,
       body: notificationData.body,
-      type: notificationData.type || 'general',
+      type: dbNotificationType,
       data: enrichedData,
       customPayload: options.customPayload ? JSON.stringify(options.customPayload) : undefined,
       expiresAt: options.expiresAt,
@@ -428,26 +433,45 @@ class NotificationService {
       // Determine which token to use based on deviceType
       const isIOS = user.deviceType === 'ios';
       const isAndroid = user.deviceType === 'android';
+      
+      console.log(`[NOTIFICATION] Device type check for user ${userId}:`, {
+        deviceType: user.deviceType,
+        isIOS,
+        isAndroid,
+        hasApnsToken: !!user.apnsToken,
+        hasFcmToken: !!user.fcmToken,
+        hasVoipToken: !!user.voipToken
+      });
+      
       // Use device-specific token based on deviceType
       let deliverySucceeded = false;
       let fcmResponse = null;
       let apnsResponse = null;
 
       // For iOS devices, prioritize APNs tokens
-      const isVoipExplicit = (
+      // Check if this is a reject notification - reject should NOT be treated as VoIP call
+      const isRejectType = (
+        (typeof notificationData.type === 'string' && notificationData.type.toLowerCase() === 'reject') ||
+        (typeof data.type === 'string' && data.type.toLowerCase() === 'reject')
+      );
+      
+      const isVoipExplicit = !isRejectType && (
         options.apnsVoip === true ||
         (typeof data.pushType === 'string' && data.pushType.toLowerCase() === 'voip') ||
         (typeof notificationData.pushType === 'string' && notificationData.pushType.toLowerCase() === 'voip') ||
         (typeof notificationData.type === 'string' && notificationData.type.toLowerCase() === 'voip')
       );
       if (isIOS && user.apnsToken) {
+        console.log(`[APNs] Starting iOS notification for user ${userId}`);
         const userApnsProvider = this.getApnsProvider(user.isDev);
         if (userApnsProvider) {
-        const note = new apn.Notification();
-        const isVoip = isVoipExplicit;
+          console.log(`[APNs] Provider found for user ${userId}, isDev: ${user.isDev}`);
+          const note = new apn.Notification();
+          const isVoip = isVoipExplicit;
         
         // Check if this is a reject call notification (for cutting/rejecting calls on iOS)
-        const isRejectCall = data.isRejectCall === true || data.isRejectCall === 'true';
+        // BUT: If type is "reject", don't treat it as call rejection - it's just a normal reject notification
+        const isRejectCall = !isRejectType && (data.isRejectCall === true || data.isRejectCall === 'true');
 
         const voipBundle = process.env.APNS_VOIP_BUNDLE_ID || (process.env.APNS_BUNDLE_ID ? `${process.env.APNS_BUNDLE_ID}.voip` : undefined);
         
@@ -467,6 +491,61 @@ class NotificationService {
             status: "decline"
           };
           console.log(`[APNs] Sending call rejection notification to iOS user ${userId} with payload:`, note.payload);
+        } else if (isRejectType) {
+          // For reject type on iOS: Send silent background notification
+          // iOS 13+ requires explicit push_type: "background" for background notifications
+          // This is a background notification that should wake up the app without user interaction
+          note.topic = process.env.APNS_BUNDLE_ID;
+          
+          // CRITICAL: Set push type to "background" for background notifications (iOS 13+)
+          // This tells iOS that this is a background notification, not a user-facing alert
+          note.pushType = 'background';
+          
+          // CRITICAL: For background notifications, set contentAvailable as number 1
+          // The APNs library automatically converts this to "content-available": 1 in the aps dictionary
+          // This wakes up the app in the background
+          note.contentAvailable = 1;
+          
+          // Set priority to 10 (high priority) for background notifications
+          // Priority 10 ensures immediate delivery for background notifications
+          note.priority = 10;
+          
+          // No alert, sound, or badge for silent background notification
+          // These properties should NOT be set for background notifications
+          // Setting them would convert this to a user-facing notification
+          
+          // Build payload with ONLY essential fields for iOS background detection
+          // CRITICAL: For iOS background notifications (iOS 13+):
+          // 1. push_type: "background" is set on note.pushType (handled by APNs library)
+          // 2. aps with ONLY content-available: 1 (automatically added by library from note.contentAvailable)
+          // 3. status: "decline" at top level (required for call rejection detection in app)
+          // 4. NO other fields - keep payload minimal for proper iOS background detection
+          note.payload = {
+            aps: {
+              "content-available": 1
+              // No alert, sound, or badge - this is a silent background notification
+            },
+            status: "decline"
+            // Only status and aps - minimal payload for iOS background notification
+          };
+          
+          console.log(`[APNs] Sending iOS reject notification (background type) to user ${userId}`);
+          console.log(`[APNs] iOS Background Notification Configuration:`);
+          console.log(`[APNs]   - pushType: background (iOS 13+ requirement)`);
+          console.log(`[APNs]   - contentAvailable: 1 (wakes app in background)`);
+          console.log(`[APNs]   - priority: 10 (high priority for immediate delivery)`);
+          console.log(`[APNs]   - No alert/sound/badge (silent background notification)`);
+          console.log(`[APNs] Note configuration:`, {
+            topic: note.topic,
+            pushType: note.pushType,
+            contentAvailable: note.contentAvailable,
+            contentAvailableType: typeof note.contentAvailable,
+            priority: note.priority,
+            sound: note.sound,
+            alert: note.alert,
+            badge: note.badge
+          });
+          console.log(`[APNs] Reject payload for iOS background notification:`, JSON.stringify(note.payload, null, 2));
         } else {
           note.topic = isVoip && voipBundle ? voipBundle : process.env.APNS_BUNDLE_ID;
           if (isVoip) {
@@ -485,31 +564,88 @@ class NotificationService {
           }
         }
         // Match Flutter's expected payload shape for VoIP pushes
-        if (isVoip && !isRejectCall) {
-          note.payload = {
-            extra: {
-              ...data,
-              ...(options.customPayload ? { customPayload: options.customPayload } : {}),
-              clickAction: 'FLUTTER_NOTIFICATION_CLICK'
-            }
-          };
-        } else if (!isRejectCall) {
-          note.payload = { ...data, ...(options.customPayload ? { customPayload: options.customPayload } : {}) };
+        // For reject type, payload is already set above, so skip here
+        if (!isRejectType) {
+          if (isVoip && !isRejectCall) {
+            note.payload = {
+              extra: {
+                ...data,
+                ...(options.customPayload ? { customPayload: options.customPayload } : {}),
+                clickAction: 'FLUTTER_NOTIFICATION_CLICK'
+              }
+            };
+          } else if (!isRejectCall) {
+            note.payload = { ...data, ...(options.customPayload ? { customPayload: options.customPayload } : {}) };
+          }
         }
 
-        console.log("note : ",note)
-        console.log("user.apnsToken : ",isVoip ? user.voipToken : user.apnsToken)
-        console.log(`Using ${user.isDev ? 'sandbox' : 'production'} APNs for user ${userId}`)
-        apnsResponse = await userApnsProvider.send(note, user.apnsToken);
-        console.log("apnsResponse : ",apnsResponse)
-        console.log('[APNs] sendToUser', {
-          userId,
-          isVoip,
-          topic: note.topic,
-          title: notificationData.title,
-          sent: (apnsResponse && apnsResponse.sent && apnsResponse.sent.length) || 0,
-          failed: (apnsResponse && apnsResponse.failed && apnsResponse.failed.length) || 0
-        });
+        console.log(`[APNs] ===== iOS NOTIFICATION DETAILS =====`);
+        console.log(`[APNs] User ID: ${userId}`);
+        console.log(`[APNs] Device Type: ${user.isDev ? 'sandbox' : 'production'}`);
+        console.log(`[APNs] Token: ${user.apnsToken ? user.apnsToken.substring(0, 20) + '...' : 'null'}`);
+        console.log(`[APNs] Notification Type: ${notificationData.type || 'general'}`);
+        console.log(`[APNs] Is Reject Type: ${isRejectType}`);
+        console.log(`[APNs] Is VoIP: ${isVoip}`);
+        console.log(`[APNs] Topic: ${note.topic}`);
+        console.log(`[APNs] Content Available (direct): ${note.contentAvailable} (type: ${typeof note.contentAvailable})`);
+        console.log(`[APNs] Content Available (via aps): ${note.aps ? note.aps['content-available'] : 'aps not set'}`);
+        console.log(`[APNs] Priority: ${note.priority}`);
+        console.log(`[APNs] Sound: ${note.sound !== undefined ? note.sound : 'not set'}`);
+        console.log(`[APNs] Push Type: ${note.pushType || 'none'}`);
+        console.log(`[APNs] Alert:`, note.alert !== undefined ? note.alert : 'not set (silent)');
+        console.log(`[APNs] Badge: ${note.badge !== undefined ? note.badge : 'not set'}`);
+        console.log(`[APNs] Payload:`, JSON.stringify(note.payload, null, 2));
+        console.log(`[APNs] APS Object:`, note.aps ? JSON.stringify(note.aps, null, 2) : 'not set');
+        console.log(`[APNs] Full Note Object Keys:`, Object.keys(note));
+        console.log(`[APNs] ====================================`);
+        
+        try {
+          // For background notifications, ensure proper headers are set
+          // The APNs library should handle this automatically with pushType: 'background'
+          apnsResponse = await userApnsProvider.send(note, user.apnsToken);
+          console.log(`[APNs] ===== SEND RESPONSE =====`);
+          console.log(`[APNs] Full Response:`, JSON.stringify(apnsResponse, null, 2));
+          console.log(`[APNs] Sent Count: ${(apnsResponse && apnsResponse.sent && apnsResponse.sent.length) || 0}`);
+          console.log(`[APNs] Failed Count: ${(apnsResponse && apnsResponse.failed && apnsResponse.failed.length) || 0}`);
+          
+          // Log the final notification structure that was sent
+          if (isRejectType) {
+            console.log(`[APNs] Final notification structure for iOS background detection:`, {
+              pushType: note.pushType,
+              priority: note.priority,
+              contentAvailable: note.contentAvailable,
+              payload: note.payload,
+              aps: note.aps
+            });
+          }
+          
+          if (apnsResponse && apnsResponse.sent && apnsResponse.sent.length > 0) {
+            console.log(`[APNs] ✓ Notification sent successfully to iOS device`);
+            apnsResponse.sent.forEach((sent, index) => {
+              console.log(`[APNs] Sent [${index}]:`, {
+                device: sent.device ? sent.device.substring(0, 20) + '...' : 'null',
+                response: sent.response || 'no response'
+              });
+            });
+          }
+          
+          if (apnsResponse && apnsResponse.failed && apnsResponse.failed.length > 0) {
+            console.error(`[APNs] ✗ Notification failed for iOS device`);
+            apnsResponse.failed.forEach((failed, index) => {
+              console.error(`[APNs] Failed [${index}]:`, {
+                device: failed.device ? failed.device.substring(0, 20) + '...' : 'null',
+                status: failed.status,
+                response: failed.response || 'no response',
+                error: failed.error || 'no error'
+              });
+            });
+          }
+          console.log(`[APNs] =========================`);
+        } catch (sendError) {
+          console.error(`[APNs] ✗ Error sending notification to iOS:`, sendError);
+          throw sendError;
+        }
+        
         deliverySucceeded = apnsResponse && apnsResponse.sent && apnsResponse.sent.length > 0;
         if (!deliverySucceeded) {
           const reasons = (apnsResponse && apnsResponse.failed || []).map(f => ({ device: f.device, status: f.status, reason: f.response && f.response.reason, error: f.error && f.error.message }));
@@ -603,30 +739,79 @@ class NotificationService {
       if (!deliverySucceeded && (isAndroid || !isIOS) && user.fcmToken && this.messaging) {
         // For Android VoIP calls, send only data payload (no notification parameter)
         // This allows the app to handle the call silently without showing a notification banner
-        const isVoipForAndroid = isVoipExplicit && isAndroid;
+        // BUT: For appointment reject or reject type, we don't want VoIP call notification, only normal notification
+        const isAppointmentReject = data.isAppointmentReject === true || data.isAppointmentReject === 'true';
+        const isRejectType = (
+          (typeof notificationData.type === 'string' && notificationData.type.toLowerCase() === 'reject') ||
+          (typeof data.type === 'string' && data.type.toLowerCase() === 'reject')
+        );
+        const isVoipForAndroid = isVoipExplicit && isAndroid && !isAppointmentReject && !isRejectType;
+        
+        // For reject type, send ONLY silent data-only payload (no notification title/body, no VoIP)
+        if (isRejectType) {
+          console.log(`[FCM] Reject type notification - sending SILENT data-only payload (NO notification, NO VoIP, NO body)`);
+        } else if ((isAppointmentReject || isRejectType) && isAndroid) {
+          console.log(`[FCM] Reject notification for Android (type: ${notificationData.type || data.type}) - sending normal notification (NOT VoIP call notification)`);
+        }
+        
+        // For reject type notifications, exclude ALL call-related data to prevent showing incoming call UI
+        // This includes fields that might trigger call UI on client side
+        const callRelatedFields = [
+          'agoraid', 'channelid', 'agorakey', 'callid', 'calltype', 'iscall', 'pushtype', 'voip',
+          'name', 'image', 'screen', 'callername', 'callerid', 'callername', 'callerimage',
+          'videocall', 'videocallid', 'callstatus', 'callaction', 'incomingcall'
+        ];
+        const filteredData = isRejectType 
+          ? Object.fromEntries(
+              Object.entries(data).filter(([key]) => !callRelatedFields.includes(key.toLowerCase()))
+            )
+          : data;
+        
+        console.log(`[FCM] Data filtering for reject type:`, {
+          isRejectType,
+          originalDataKeys: Object.keys(data),
+          filteredDataKeys: Object.keys(filteredData),
+          removedKeys: Object.keys(data).filter(key => callRelatedFields.includes(key.toLowerCase()))
+        });
         
         // Build data payload
         const dataPayload = {
           // Convert all data values to strings for Firebase FCM compatibility
           ...Object.fromEntries(
-            Object.entries(data).map(([key, value]) => [
+            Object.entries(filteredData).map(([key, value]) => [
               key, 
               typeof value === 'string' ? value : JSON.stringify(value)
             ])
           ),
           ...(options.customPayload ? { customPayload: JSON.stringify(options.customPayload) } : {}),
           clickAction: 'FLUTTER_NOTIFICATION_CLICK',
-          sound: 'default',
+          // For reject type, don't add sound
+          ...(isRejectType ? {} : { sound: 'default' }),
           // Add notification type for Android handling
           notificationType: notificationData.type || 'general',
           // Add timestamp for Android
           timestamp: Date.now().toString(),
+          // Explicitly mark as reject to prevent call UI on client side
+          // Add multiple flags to ensure client doesn't show call UI
+          ...(isRejectType ? { 
+            isReject: 'true', 
+            shouldNotShowCall: 'true', 
+            type: 'reject',
+            isCallNotification: 'false',
+            showCallUI: 'false',
+            isVideoCall: 'false',
+            isIncomingCall: 'false'
+          } : {}),
         };
         
-        // Build message - for VoIP on Android, exclude notification parameter
+        // Build message - for reject type, send ONLY data payload (no notification, no VoIP)
+        // For VoIP on Android, exclude notification parameter
         const message = {
           token: user.fcmToken,
-          ...(isVoipForAndroid ? {} : {
+          // For reject type: NO notification parameter (silent data-only)
+          // For VoIP: NO notification parameter (data-only for call handling)
+          // Otherwise: Include notification with title and body
+          ...(isRejectType || isVoipForAndroid ? {} : {
             notification: {
               title: notificationData.title,
               body: notificationData.body,
@@ -634,7 +819,10 @@ class NotificationService {
           }),
           data: dataPayload,
           android: {
-            ...(isVoipForAndroid ? {} : {
+            // For reject type: NO notification parameter (silent data-only)
+            // For VoIP: NO notification parameter (data-only for call handling)
+            // Otherwise: Include notification with sound, icon, etc.
+            ...(isRejectType || isVoipForAndroid ? {} : {
               notification: {
                 sound: 'default',
                 channelId: 'baroni_notifications', // Use a specific channel instead of 'default'
@@ -662,8 +850,9 @@ class NotificationService {
             // Add Android-specific data
             data: {
               // Convert all data values to strings for Firebase FCM compatibility
+              // For reject type, use filtered data (without call-related fields)
               ...Object.fromEntries(
-                Object.entries(data).map(([key, value]) => [
+                Object.entries(filteredData).map(([key, value]) => [
                   key, 
                   typeof value === 'string' ? value : JSON.stringify(value)
                 ])
@@ -672,6 +861,16 @@ class NotificationService {
               clickAction: 'FLUTTER_NOTIFICATION_CLICK',
               notificationType: notificationData.type || 'general',
               timestamp: Date.now().toString(),
+              // Explicitly mark as reject to prevent call UI on client side
+              // Add multiple flags to ensure client doesn't show call UI
+              ...(isRejectType ? { 
+                isReject: 'true', 
+                shouldNotShowCall: 'true',
+                isCallNotification: 'false',
+                showCallUI: 'false',
+                isVideoCall: 'false',
+                isIncomingCall: 'false'
+              } : {}),
             },
             // Add Android priority
             priority: 'high',
@@ -690,10 +889,11 @@ class NotificationService {
         
         console.log(`[FCM DEBUG] Complete message structure for user ${userId}:`, JSON.stringify(message, null, 2));
         
-        console.log(`[FCM] Sending ${isVoipForAndroid ? 'VoIP (data-only)' : 'notification'} to Android user ${userId}`, {
+        console.log(`[FCM] Sending ${isRejectType ? 'REJECT (silent data-only)' : isVoipForAndroid ? 'VoIP (data-only)' : 'notification'} to Android user ${userId}`, {
+          isRejectType,
           isVoip: isVoipForAndroid,
-          title: isVoipForAndroid ? 'N/A (data-only)' : notificationData.title,
-          body: isVoipForAndroid ? 'N/A (data-only)' : notificationData.body,
+          title: isRejectType || isVoipForAndroid ? 'N/A (data-only)' : notificationData.title,
+          body: isRejectType || isVoipForAndroid ? 'N/A (data-only)' : notificationData.body,
           channelId: isVoipForAndroid ? 'N/A (data-only)' : 'baroni_notifications',
           priority: 'high',
           fcmTokenPreview: user.fcmToken ? user.fcmToken.substring(0, 20) + '...' : 'null',

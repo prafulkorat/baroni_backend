@@ -241,7 +241,10 @@ class NotificationHelper {
           fanTemplate.body = `${starName} has rejected your appointment request.`;
           // For iOS devices, we need to send special payload to cut/reject the call
           // This will be handled in notificationService based on deviceType
-          data.isRejectCall = true; // Flag to indicate this is a call rejection
+          // Only set isRejectCall for iOS to cut the call, not for Android
+          // Android should receive normal notification only
+          data.isRejectCall = true; // Flag to indicate this is a call rejection (for iOS only)
+          data.isAppointmentReject = true; // Flag to prevent VoIP call notification on Android
         } else if (type === 'APPOINTMENT_CANCELLED') {
           fanTemplate.title = 'Appointment Cancelled';
           // Notify fan only when cancelled by star

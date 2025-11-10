@@ -23,30 +23,36 @@ const toAvailability = (a) => (
   } : a
 );
 
-const sanitize = (doc) => ({
-  id: doc._id,
-  star: toUser(doc.starId),
-  fan: toUser(doc.fanId),
-  availability: toAvailability(doc.availabilityId),
-  timeSlotId: doc.timeSlotId,
-  date: doc.date,
-  time: doc.time,
-  utcStartTime: doc.utcStartTime,
-  price: doc.price,
-  // Map in_progress to approved for outward responses as requested
-  status: doc.status === 'in_progress' ? 'approved' : doc.status,
-  ...(doc.paymentStatus ? { paymentStatus: doc.paymentStatus } : {}),
-  transactionId: doc.transactionId,
-  // Keep transaction status light; paymentStatus covers domain payment lifecycle
-  completedAt: doc.completedAt,
-  callDuration: typeof doc.callDuration === 'number' ? doc.callDuration / 60 : undefined, // Convert seconds to minutes for display
-  // Duration in seconds: 0 if pending/not completed, actual duration if completed
-  duration: doc.status === 'completed' && typeof doc.callDuration === 'number' ? doc.callDuration : 0,
-  ...(doc.isRescheduled !== undefined ? { isRescheduled: doc.isRescheduled } : {}),
-  ...(doc.parentAppointment ? { parentAppointment: doc.parentAppointment } : {}),
-  createdAt: doc.createdAt,
-  updatedAt: doc.updatedAt,
-});
+const sanitize = (doc) => {
+  // Calculate duration in seconds - use callDuration if available, otherwise 0
+  const durationInSeconds = typeof doc.callDuration === 'number' ? doc.callDuration : 0;
+  
+  return {
+    id: doc._id,
+    star: toUser(doc.starId),
+    fan: toUser(doc.fanId),
+    availability: toAvailability(doc.availabilityId),
+    timeSlotId: doc.timeSlotId,
+    date: doc.date,
+    time: doc.time,
+    utcStartTime: doc.utcStartTime,
+    price: doc.price,
+    // Map in_progress to approved for outward responses as requested
+    status: doc.status === 'in_progress' ? 'approved' : doc.status,
+    ...(doc.paymentStatus ? { paymentStatus: doc.paymentStatus } : {}),
+    transactionId: doc.transactionId,
+    // Keep transaction status light; paymentStatus covers domain payment lifecycle
+    completedAt: doc.completedAt,
+    // Both callDuration and duration should be in seconds with same value
+    callDuration: durationInSeconds, // Duration in seconds
+    duration: durationInSeconds, // Duration in seconds (same as callDuration)
+    // Always include isRescheduled flag (defaults to false if not set)
+    isRescheduled: doc.isRescheduled === true,
+    ...(doc.parentAppointment ? { parentAppointment: doc.parentAppointment } : {}),
+    createdAt: doc.createdAt,
+    updatedAt: doc.updatedAt,
+  };
+};
 
 // Get single appointment details
 export const getAppointmentDetails = async (req, res) => {
@@ -419,12 +425,66 @@ export const listAppointments = async (req, res) => {
       }
     }
     
+    // Check if date filter is applied
+    const hasDateFilter = !!(date || startDate || endDate);
+    
     // Status filtering
     if (status && typeof status === 'string' && status.trim()) {
       const validStatuses = ['pending', 'approved', 'rejected', 'cancelled', 'completed'];
       if (validStatuses.includes(status.trim())) {
         filter.status = status.trim();
       }
+    }
+    
+    // Default list filtering: If no date filter is applied, restrict completed appointments
+    // Only show completed appointments from today onwards, hide completed appointments from yesterday or before
+    // Example: If today is 10/11, don't show completed appointments from 9/10 or before
+    if (!hasDateFilter) {
+      // No date filter - apply default restrictions for completed appointments
+      // Get today's date in YYYY-MM-DD format (start of today)
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const todayStr = today.toISOString().split('T')[0]; // YYYY-MM-DD format
+      
+      console.log(`[ListAppointments] Today's date: ${todayStr} - filtering out completed appointments before this date`);
+      
+      // If status filter is 'completed', only show completed from today onwards
+      if (filter.status === 'completed') {
+        // Add date restriction for completed appointments - only today and future
+        if (filter.date) {
+          // If date filter already exists, combine with $and to ensure date >= today
+          filter.$and = [
+            { date: filter.date },
+            { date: { $gte: todayStr } }
+          ];
+          delete filter.date;
+        } else {
+          // Only show completed appointments from today onwards (exclude yesterday and before)
+          filter.date = { $gte: todayStr };
+        }
+      } else {
+        // For other statuses or no status filter, exclude old completed appointments
+        // Add condition: either status is not 'completed', or if it is 'completed', date must be >= today
+        const existingStatus = filter.status;
+        if (existingStatus) {
+          // Status filter exists and it's not 'completed' - no need to filter out old completed
+          // Just keep the status filter as is (pending, approved, etc. will show all dates)
+        } else {
+          // No status filter - exclude old completed appointments (yesterday and before)
+          // Show: all non-completed appointments OR completed appointments from today onwards
+          filter.$or = [
+            { status: { $ne: 'completed' } },
+            { 
+              status: 'completed',
+              date: { $gte: todayStr } // Only today and future dates
+            }
+          ];
+        }
+      }
+      
+      console.log(`[ListAppointments] No date filter applied - restricting completed appointments to ${todayStr} onwards (excluding yesterday and before)`);
+    } else {
+      console.log(`[ListAppointments] Date filter applied - showing all appointments based on date filter (no restriction on completed)`);
     }
     
     // Pagination - fetch all first for proper global sorting, then paginate
@@ -998,12 +1058,27 @@ export const completeAppointment = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Only approved, in-progress, or completed appointments can have duration added' });
     }
 
-    // callDuration is already in seconds, use it directly
+    // Validate callDuration is a valid number
+    if (typeof callDuration !== 'number' || isNaN(callDuration) || callDuration < 0) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'callDuration must be a valid number (in seconds) and cannot be negative' 
+      });
+    }
+    
+    // callDuration is already in seconds, round it to ensure it's an integer
     const durationInSeconds = Math.round(callDuration);
     
-    // Get current duration (ensure it's a number)
+    // Get current duration (ensure it's a number, default to 0 if not set)
     const currentDuration = typeof appt.callDuration === 'number' ? appt.callDuration : 0;
     const newTotalDuration = currentDuration + durationInSeconds;
+    
+    console.log(`[CompleteAppointment] Duration calculation (all in seconds):`, {
+      receivedCallDuration: callDuration,
+      roundedDurationInSeconds: durationInSeconds,
+      currentDurationSeconds: currentDuration,
+      newTotalDurationSeconds: newTotalDuration
+    });
     
     console.log(`[CompleteAppointment] Duration accumulation:`, {
       currentDurationSeconds: currentDuration,
@@ -1083,14 +1158,19 @@ export const completeAppointment = async (req, res) => {
     // Note: Completion status will be set by cron job when duration >= 300 seconds
     // Do not send completion notification here - cron will handle it
     
+    // Get final duration in seconds (after atomic update)
+    const finalDurationSeconds = typeof updated.callDuration === 'number' ? updated.callDuration : 0;
+    
     return res.json({ 
       success: true, 
       message: 'Call duration added successfully',
       data: {
-        appointment: sanitize(updated),
-        totalDurationSeconds: updated.callDuration,
-        totalDurationMinutes: updated.callDuration / 60,
-        isFullyCompleted: updated.callDuration >= 300
+        appointment: sanitize(updated), // Both callDuration and duration will be in seconds with same value
+        // Additional duration info in seconds
+        totalDurationSeconds: finalDurationSeconds,
+        callDuration: finalDurationSeconds, // Duration in seconds
+        duration: finalDurationSeconds, // Duration in seconds (same as callDuration)
+        isFullyCompleted: finalDurationSeconds >= 300
       }
     });
   } catch (err) {

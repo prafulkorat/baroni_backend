@@ -10,12 +10,22 @@ const imageOnlyFilter = (_req, file, cb) => {
   }
 };
 
+// Allowed video file extensions
+const ALLOWED_VIDEO_EXTENSIONS = ['.mp4', '.mov', '.avi', '.webm', '.mkv', '.flv', '.wmv', '.m4v', '.3gp'];
+
 const videoOnlyFilter = (_req, file, cb) => {
-  if (file.mimetype.startsWith('video/')) {
-    cb(null, true);
-  } else {
-    cb(new Error('Only video uploads are allowed'));
+  // Check mimetype
+  if (!file.mimetype.startsWith('video/')) {
+    return cb(new Error('Only video uploads are allowed'));
   }
+  
+  // Check file extension
+  const fileExtension = file.originalname.toLowerCase().substring(file.originalname.lastIndexOf('.'));
+  if (!ALLOWED_VIDEO_EXTENSIONS.includes(fileExtension)) {
+    return cb(new Error(`Video file extension not allowed. Allowed extensions: ${ALLOWED_VIDEO_EXTENSIONS.join(', ')}`));
+  }
+  
+  cb(null, true);
 };
 
 export const upload = multer({ storage, fileFilter: imageOnlyFilter, limits: { fileSize: 5 * 1024 * 1024 } });
@@ -39,8 +49,16 @@ const mixedFileFilter = (_req, file, cb) => {
   }
   const isSampleVideoIndexed = /^dedicationSampleVideo\[\d+\]$/.test(file.fieldname);
   if (isSampleVideoIndexed) {
-    if (file.mimetype.startsWith('video/')) return cb(null, true);
-    return cb(new Error('Only video uploads are allowed for dedicationSampleVideo[index]'));
+    // Check mimetype
+    if (!file.mimetype.startsWith('video/')) {
+      return cb(new Error('Only video uploads are allowed for dedicationSampleVideo[index]'));
+    }
+    // Check file extension
+    const fileExtension = file.originalname.toLowerCase().substring(file.originalname.lastIndexOf('.'));
+    if (!ALLOWED_VIDEO_EXTENSIONS.includes(fileExtension)) {
+      return cb(new Error(`Video file extension not allowed. Allowed extensions: ${ALLOWED_VIDEO_EXTENSIONS.join(', ')}`));
+    }
+    return cb(null, true);
   }
   return cb(new Error('Unexpected field'));
 };
