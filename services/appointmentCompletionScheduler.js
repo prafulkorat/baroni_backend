@@ -33,17 +33,18 @@ const parseAppointmentStartTime = (dateStr, timeStr) => {
 
 /**
  * Process appointments that should be completed or rescheduled
- * 1. If duration >= 300 seconds OR 5 minutes passed since scheduled time with any duration -> mark completed
- * 2. If 5 minutes passed since scheduled time with NO duration -> mark rescheduled
+ * 1. If duration >= 300 seconds (5 minutes) -> mark completed
+ * 2. If call duration exists AND 10 minutes passed since scheduled time -> mark completed
+ * 3. If 10 minutes passed since scheduled time with NO duration -> mark rescheduled
  * @returns {Promise<Object>} Processing result
  */
 export const processCompletedAppointments = async () => {
   try {
-    const COMPLETE_DURATION_SECONDS = 300; // 5 minutes
-    const RESCHEDULE_TIMEOUT_MINUTES = 5; // 5 minutes after scheduled time
+    const COMPLETE_DURATION_SECONDS = 300; // 5 minutes (300 seconds)
+    const COMPLETE_TIMEOUT_MINUTES = 10; // 10 minutes after scheduled time (if duration exists)
+    const RESCHEDULE_TIMEOUT_MINUTES = 10; // 10 minutes after scheduled time (if no duration)
     
     const now = new Date();
-    const rescheduleThreshold = new Date(now.getTime() - (RESCHEDULE_TIMEOUT_MINUTES * 60 * 1000));
     
     // Find appointments that are approved or in_progress
     const appointments = await Appointment.find({
@@ -67,16 +68,28 @@ export const processCompletedAppointments = async () => {
           // Fallback: parse from date and time (for backward compatibility with old appointments)
           scheduledStartTime = parseAppointmentStartTime(appt.date, appt.time);
         }
+        
         const timeSinceScheduled = now.getTime() - scheduledStartTime.getTime();
         const minutesSinceScheduled = timeSinceScheduled / (60 * 1000);
         
-        const hasDuration = appt.callDuration && appt.callDuration > 0;
-        const durationReached = appt.callDuration >= COMPLETE_DURATION_SECONDS;
-        const timePassedWithDuration = minutesSinceScheduled >= RESCHEDULE_TIMEOUT_MINUTES && hasDuration;
+        const hasDuration = typeof appt.callDuration === 'number' && appt.callDuration > 0;
+        const durationReached = typeof appt.callDuration === 'number' && appt.callDuration >= COMPLETE_DURATION_SECONDS;
+        // If call duration exists AND 10 minutes passed since scheduled time -> mark completed
+        const timePassedWithDuration = minutesSinceScheduled >= COMPLETE_TIMEOUT_MINUTES && hasDuration;
+        
+        console.log(`[AppointmentCompletionScheduler] Processing appointment ${appt._id}:`, {
+          status: appt.status,
+          callDuration: appt.callDuration || 0,
+          hasDuration,
+          durationReached,
+          minutesSinceScheduled: minutesSinceScheduled.toFixed(2),
+          timePassedWithDuration,
+          scheduledStartTime: scheduledStartTime.toISOString()
+        });
         
         // Case 1: Mark as completed if:
-        // - Duration reached 300 seconds, OR
-        // - 5+ minutes passed since scheduled time AND has some duration (even minimal)
+        // - Duration reached 300 seconds (5 minutes), OR
+        // - Call duration exists AND 10+ minutes passed since scheduled time
         if (durationReached || timePassedWithDuration) {
           const appointment = await Appointment.findById(appt._id);
           if (!appointment) continue;
@@ -111,9 +124,9 @@ export const processCompletedAppointments = async () => {
           } catch (_e) {}
 
           completedCount++;
-          console.log(`[AppointmentCompletionScheduler] Completed appointment ${appointment._id} - Duration: ${appointment.callDuration}s, Time since scheduled: ${minutesSinceScheduled.toFixed(2)} min`);
+          console.log(`[AppointmentCompletionScheduler] ✅ Completed appointment ${appointment._id} - Duration: ${appointment.callDuration || 0}s, Time since scheduled: ${minutesSinceScheduled.toFixed(2)} min`);
         }
-        // Case 2: Mark as rescheduled if 5+ minutes passed with NO duration
+        // Case 2: Mark as rescheduled if 10+ minutes passed with NO duration
         else if (minutesSinceScheduled >= RESCHEDULE_TIMEOUT_MINUTES && !hasDuration) {
           const appointment = await Appointment.findById(appt._id);
           if (!appointment) continue;

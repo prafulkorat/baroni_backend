@@ -240,7 +240,7 @@ export const becomeStar = async (req, res) => {
                 // Create default 5 rating for the new star
                 await createDefaultRating(req.user._id);
 
-                // Create default daily slots for the new star (5 slots from 21:00-23:00, 20 min each)
+                // Create default daily slots for the new star (5 slots from 21:00-21:50, 10 min each)
                 await createDefaultDailySlots(req.user._id);
 
                 // Send star promotion notification for coin-only payments

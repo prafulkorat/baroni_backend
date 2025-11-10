@@ -12,7 +12,7 @@ const configSchema = new mongoose.Schema(
     serviceLimits: {
       liveShowDuration: { type: Number, default: 20 }, // in minutes
       videoCallDuration: { type: Number, default: 5 }, // in minutes
-      slotDuration: { type: Number, default: 20 }, // in minutes
+      slotDuration: { type: Number, default: 10 }, // in minutes
       dedicationUploadSize: { type: Number, default: 20 }, // in MB
       maxLiveShowParticipants: { type: Number, default: 10000 },
       reconnectionTimeout: { type: Number, default: 5 } // in minutes

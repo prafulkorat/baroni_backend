@@ -4,8 +4,8 @@ import { convertLocalToUTC } from './timezoneHelper.js';
 
 /**
  * Generate default weekly slots for a new Star
- * Creates 5 slots from 21:00 - 23:00 (each slot is 20 minutes) for next 7 days (1 week)
- * Slots: 21:00-21:20, 21:20-21:40, 21:40-22:00, 22:00-22:20, 22:20-22:40
+ * Creates 5 slots from 21:00 - 21:50 (each slot is 10 minutes) for next 7 days (1 week)
+ * Slots: 21:00-21:10, 21:10-21:20, 21:20-21:30, 21:30-21:40, 21:40-21:50
  * @param {string|ObjectId} userId - User ID of the new star
  * @returns {Promise<void>}
  */
@@ -54,13 +54,13 @@ export const createDefaultDailySlots = async (userId) => {
             }
         };
 
-        // Generate 5 slots of 20 minutes each starting from 21:00
+        // Generate 5 slots of 10 minutes each starting from 21:00
         const slotStrings = [
-            '21:00 - 21:20',
-            '21:20 - 21:40',
-            '21:40 - 22:00',
-            '22:00 - 22:20',
-            '22:20 - 22:40'
+            '21:00 - 21:10',
+            '21:10 - 21:20',
+            '21:20 - 21:30',
+            '21:30 - 21:40',
+            '21:40 - 21:50'
         ];
 
         // Get today's date in YYYY-MM-DD format based on star's country timezone

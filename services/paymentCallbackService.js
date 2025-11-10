@@ -243,7 +243,7 @@ export const processPaymentCallback = async (callbackData) => {
             // Create default 5 rating for the new star
             await createDefaultRating(transaction.payerId);
             
-            // Create default daily slots for the new star (5 slots from 21:00-23:00, 20 min each)
+            // Create default daily slots for the new star (5 slots from 21:00-21:50, 10 min each)
             await createDefaultDailySlots(transaction.payerId);
           }
           
