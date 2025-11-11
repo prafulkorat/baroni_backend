@@ -60,14 +60,14 @@ const handleAvailabilityModeSwitching = async (userId, isWeekly, isDaily) => {
     if (activeAppointments.length === 0) {
         if (isWeekly) {
             // Switching to weekly mode - merge daily slots into weekly availabilities
-            // Don't delete daily availabilities, just update their mode flags to preserve slots
+            // Keep both daily and weekly availabilities separate - don't convert
             await mergeDailySlotsToWeekly(userId);
-            await convertDailyToWeekly(userId);
+            // Don't convert - keep daily and weekly separate
         } else if (isDaily) {
             // Switching to daily mode - merge weekly slots into daily availabilities
-            // Don't delete weekly availabilities, just update their mode flags to preserve slots
+            // Keep both daily and weekly availabilities separate - don't convert
             await mergeWeeklySlotsToDaily(userId);
-            await convertWeeklyToDaily(userId);
+            // Don't convert - keep daily and weekly separate
             await cleanupSpecificDateAvailabilities(userId);
         } else {
             // Switching to specific date mode - cleanup weekly and daily availabilities
@@ -212,62 +212,6 @@ const mergeWeeklySlotsToDaily = async (userId) => {
         console.log(`[AvailabilitySwitch] Merged weekly slots to daily for ${mergedCount} availabilities`);
     } catch (error) {
         console.error('[AvailabilitySwitch] Error merging weekly slots to daily:', error);
-        throw error;
-    }
-};
-
-// Convert remaining daily availabilities to weekly (preserve slots)
-const convertDailyToWeekly = async (userId) => {
-    try {
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const todayStr = formatLocalYMD(today);
-
-        const dailyAvailabilities = await Availability.find({
-            userId: userId,
-            date: { $gte: todayStr },
-            isDaily: true
-        });
-
-        let convertedCount = 0;
-        for (const availability of dailyAvailabilities) {
-            availability.isWeekly = true;
-            availability.isDaily = false;
-            await availability.save();
-            convertedCount++;
-        }
-
-        console.log(`[AvailabilitySwitch] Converted ${convertedCount} daily availabilities to weekly (preserved slots)`);
-    } catch (error) {
-        console.error('[AvailabilitySwitch] Error converting daily to weekly:', error);
-        throw error;
-    }
-};
-
-// Convert remaining weekly availabilities to daily (preserve slots)
-const convertWeeklyToDaily = async (userId) => {
-    try {
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const todayStr = formatLocalYMD(today);
-
-        const weeklyAvailabilities = await Availability.find({
-            userId: userId,
-            date: { $gte: todayStr },
-            isWeekly: true
-        });
-
-        let convertedCount = 0;
-        for (const availability of weeklyAvailabilities) {
-            availability.isDaily = true;
-            availability.isWeekly = false;
-            await availability.save();
-            convertedCount++;
-        }
-
-        console.log(`[AvailabilitySwitch] Converted ${convertedCount} weekly availabilities to daily (preserved slots)`);
-    } catch (error) {
-        console.error('[AvailabilitySwitch] Error converting weekly to daily:', error);
         throw error;
     }
 };
@@ -440,8 +384,11 @@ export const createAvailability = async (req, res) => {
             return res.status(400).json({ success: false, message: errorMessage || 'Validation failed' });
         }
 
-        const isWeekly = Boolean(req.body.isWeekly);
-        const isDaily = Boolean(req.body.isDaily);
+        // Check if flags are provided in request
+        const hasIsWeekly = req.body.hasOwnProperty('isWeekly');
+        const hasIsDaily = req.body.hasOwnProperty('isDaily');
+        const isWeekly = hasIsWeekly ? Boolean(req.body.isWeekly) : undefined;
+        const isDaily = hasIsDaily ? Boolean(req.body.isDaily) : undefined;
 
         if (isWeekly && isDaily) {
             return res.status(400).json({
@@ -450,8 +397,10 @@ export const createAvailability = async (req, res) => {
             });
         }
 
-        // Enhanced availability mode switching logic
-        await handleAvailabilityModeSwitching(req.user._id, isWeekly, isDaily);
+        // Enhanced availability mode switching logic (only if flags are provided)
+        if (hasIsWeekly || hasIsDaily) {
+            await handleAvailabilityModeSwitching(req.user._id, isWeekly || false, isDaily || false);
+        }
 
         // Get user's country for timezone conversion
         const user = await User.findById(req.user._id).select('country').lean();
@@ -626,15 +575,21 @@ export const createAvailability = async (req, res) => {
                 // Preserve all existing slots - don't replace, just merge
                 existingAvailability.timeSlots = existingSlots;
                 
-                // Update mode flags without affecting existing slots
-                if (isWeekly) {
-                    existingAvailability.isWeekly = true;
-                    existingAvailability.isDaily = false;
+                // Update mode flags - preserve existing flags if new flags are not provided
+                // Only update flags if explicitly provided in request
+                if (isWeekly !== undefined && isWeekly !== null) {
+                    existingAvailability.isWeekly = Boolean(isWeekly);
+                    if (isWeekly) {
+                        existingAvailability.isDaily = false;
+                    }
                 }
-                if (isDaily) {
-                    existingAvailability.isDaily = true;
-                    existingAvailability.isWeekly = false;
+                if (isDaily !== undefined && isDaily !== null) {
+                    existingAvailability.isDaily = Boolean(isDaily);
+                    if (isDaily) {
+                        existingAvailability.isWeekly = false;
+                    }
                 }
+                // If flags are not provided, preserve existing flags
                 
                 const saved = await existingAvailability.save();
                 console.log(`[Availability] Merged slots for date ${isoDateStr}: ${existingSlots.length} total slots (${newSlots.length} new slots added)`);
@@ -644,8 +599,8 @@ export const createAvailability = async (req, res) => {
             const created = await Availability.create({
                 userId: req.user._id,
                 date: String(isoDateStr).trim(),
-                isWeekly: isWeekly && !isDaily,
-                isDaily: isDaily,
+                isWeekly: isWeekly === true,
+                isDaily: isDaily === true,
                 timeSlots: normalizedTimeSlots,
             });
             return { action: 'created', doc: created };
