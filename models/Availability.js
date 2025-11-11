@@ -26,7 +26,10 @@ const availabilitySchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-availabilitySchema.index({ userId: 1, date: 1 }, { unique: true });
+// Allow multiple entries per date for different modes (daily/weekly)
+// Unique constraint: same user, same date, same mode combination
+// This allows: weekly entry + daily entry for same date
+availabilitySchema.index({ userId: 1, date: 1, isDaily: 1, isWeekly: 1 }, { unique: true });
 
 const Availability = mongoose.model('Availability', availabilitySchema);
 export default Availability;

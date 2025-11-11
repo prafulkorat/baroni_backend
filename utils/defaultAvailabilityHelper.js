@@ -108,7 +108,14 @@ export const createDefaultDailySlots = async (userId) => {
             });
 
             if (existingAvailability) {
-                // If availability exists, merge slots (avoid duplicates)
+                // If availability exists, check if it's daily - don't overwrite daily entries
+                if (existingAvailability.isDaily) {
+                    // This is a daily entry - don't modify it, skip
+                    console.log(`[DefaultSlots] Skipping date ${dateStr} - daily entry already exists`);
+                    continue;
+                }
+
+                // If it's weekly or no flag, merge slots (avoid duplicates)
                 const existingSlotsMap = new Map();
                 existingAvailability.timeSlots.forEach(slot => {
                     existingSlotsMap.set(slot.slot, slot);
@@ -123,9 +130,11 @@ export const createDefaultDailySlots = async (userId) => {
                     }
                 });
 
-                // Set isWeekly flag (weekly mode)
-                existingAvailability.isWeekly = true;
-                existingAvailability.isDaily = false;
+                // Set isWeekly flag (weekly mode) - only if not daily
+                if (!existingAvailability.isDaily) {
+                    existingAvailability.isWeekly = true;
+                    existingAvailability.isDaily = false;
+                }
                 await existingAvailability.save();
                 updatedCount++;
                 console.log(`[DefaultSlots] Updated existing availability for user ${userId} on ${dateStr}. Added ${addedCount} new slots.`);

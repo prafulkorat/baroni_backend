@@ -64,10 +64,10 @@ const handleAvailabilityModeSwitching = async (userId, isWeekly, isDaily) => {
             await mergeDailySlotsToWeekly(userId);
             // Don't convert - keep daily and weekly separate
         } else if (isDaily) {
-            // Switching to daily mode - merge weekly slots into daily availabilities
-            // Keep both daily and weekly availabilities separate - don't convert
-            await mergeWeeklySlotsToDaily(userId);
-            // Don't convert - keep daily and weekly separate
+            // Daily mode - don't delete weekly entries, keep them separate
+            // Daily entries will be created separately with isDaily: true
+            // Weekly entries will remain with isWeekly: true
+            // Don't merge or delete - keep both separate
             await cleanupSpecificDateAvailabilities(userId);
         } else {
             // Switching to specific date mode - cleanup weekly and daily availabilities
@@ -501,9 +501,16 @@ export const createAvailability = async (req, res) => {
 
         // Helper function to upsert availability for a single date
         const upsertOne = async (isoDateStr, normalizedTimeSlots) => {
+            // Determine the mode for this availability
+            const modeIsWeekly = isWeekly === true;
+            const modeIsDaily = isDaily === true;
+            
+            // Find existing availability with same mode
             const existingAvailability = await Availability.findOne({
                 userId: req.user._id,
                 date: String(isoDateStr).trim(),
+                isWeekly: modeIsWeekly,
+                isDaily: modeIsDaily
             });
 
             if (existingAvailability) {
