@@ -603,14 +603,75 @@ export const createAvailability = async (req, res) => {
                 return { action: 'updated', doc: saved };
             }
 
-            const created = await Availability.create({
-                userId: req.user._id,
-                date: String(isoDateStr).trim(),
-                isWeekly: isWeekly === true,
-                isDaily: isDaily === true,
-                timeSlots: normalizedTimeSlots,
-            });
-            return { action: 'created', doc: created };
+            // Try to create new availability
+            // If old unique index exists, it will fail with duplicate key error
+            // In that case, find existing entry and merge slots
+            try {
+                const created = await Availability.create({
+                    userId: req.user._id,
+                    date: String(isoDateStr).trim(),
+                    isWeekly: isWeekly === true,
+                    isDaily: isDaily === true,
+                    timeSlots: normalizedTimeSlots,
+                });
+                return { action: 'created', doc: created };
+            } catch (createError) {
+                // Handle duplicate key error (E11000) - old index still exists
+                if (createError.code === 11000 || createError.message.includes('duplicate key')) {
+                    console.log(`[Availability] Duplicate key error for date ${isoDateStr}, finding existing entry to merge`);
+                    
+                    // Find existing entry (regardless of mode - old index doesn't check mode)
+                    const existingEntry = await Availability.findOne({
+                        userId: req.user._id,
+                        date: String(isoDateStr).trim(),
+                    });
+
+                    if (existingEntry) {
+                        // Merge slots into existing entry, preserve its mode flags
+                        const existingSlots = existingEntry.timeSlots || [];
+                        const newSlots = normalizedTimeSlots;
+                        const existingSlotsMap = new Map();
+                        
+                        // Create a map of existing slots by slot string for quick lookup
+                        existingSlots.forEach((slot) => {
+                            existingSlotsMap.set(slot.slot, slot);
+                        });
+                        
+                        // Merge new slots with existing slots - don't delete existing slots
+                        newSlots.forEach((newSlot) => {
+                            if (existingSlotsMap.has(newSlot.slot)) {
+                                // Slot already exists - update status and UTC times if needed
+                                const existingSlot = existingSlotsMap.get(newSlot.slot);
+                                if (existingSlot.status !== newSlot.status) {
+                                    existingSlot.status = newSlot.status;
+                                }
+                                // Update UTC times if they're missing
+                                if (!existingSlot.utcStartTime || !existingSlot.utcEndTime) {
+                                    existingSlot.utcStartTime = newSlot.utcStartTime;
+                                    existingSlot.utcEndTime = newSlot.utcEndTime;
+                                }
+                            } else {
+                                // New slot - add it to existing slots
+                                existingSlots.push(newSlot);
+                            }
+                        });
+                        
+                        // Preserve existing mode flags - don't change them
+                        // This allows weekly and daily entries to coexist (once new index is applied)
+                        existingEntry.timeSlots = existingSlots;
+                        
+                        const saved = await existingEntry.save();
+                        console.log(`[Availability] Merged slots into existing entry for date ${isoDateStr}: ${existingSlots.length} total slots (preserved all existing slots)`);
+                        return { action: 'updated', doc: saved };
+                    } else {
+                        // Entry not found but duplicate key error - this shouldn't happen
+                        throw new Error(`Duplicate key error but entry not found for date ${isoDateStr}`);
+                    }
+                } else {
+                    // Re-throw other errors
+                    throw createError;
+                }
+            }
         };
 
         // Helper function to process a single date
