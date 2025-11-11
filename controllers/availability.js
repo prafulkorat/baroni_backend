@@ -56,14 +56,18 @@ const handleAvailabilityModeSwitching = async (userId, isWeekly, isDaily) => {
         // If not switching modes, allow adding new slots
     }
 
-    // Only proceed with cleanup if no active appointments and user is switching modes
+    // Only proceed with mode switching if no active appointments
     if (activeAppointments.length === 0) {
         if (isWeekly) {
-            // Switching to weekly mode - cleanup daily and specific date availabilities
-            await cleanupNonWeeklyAvailabilities(userId);
+            // Switching to weekly mode - merge daily slots into weekly availabilities
+            // Don't delete daily availabilities, just update their mode flags to preserve slots
+            await mergeDailySlotsToWeekly(userId);
+            await convertDailyToWeekly(userId);
         } else if (isDaily) {
-            // Switching to daily mode - cleanup weekly and specific date availabilities
-            await cleanupWeeklyAvailabilities(userId);
+            // Switching to daily mode - merge weekly slots into daily availabilities
+            // Don't delete weekly availabilities, just update their mode flags to preserve slots
+            await mergeWeeklySlotsToDaily(userId);
+            await convertWeeklyToDaily(userId);
             await cleanupSpecificDateAvailabilities(userId);
         } else {
             // Switching to specific date mode - cleanup weekly and daily availabilities
@@ -72,6 +76,200 @@ const handleAvailabilityModeSwitching = async (userId, isWeekly, isDaily) => {
         }
     }
     // If there are active appointments, skip cleanup to preserve existing slots
+};
+
+// Merge daily slots into weekly availabilities (preserve daily slots when switching to weekly)
+const mergeDailySlotsToWeekly = async (userId) => {
+    try {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const todayStr = formatLocalYMD(today);
+
+        // Find all daily availabilities
+        const dailyAvailabilities = await Availability.find({
+            userId: userId,
+            date: { $gte: todayStr },
+            isDaily: true
+        });
+
+        if (dailyAvailabilities.length === 0) {
+            return; // No daily availabilities to merge
+        }
+
+        // Find all weekly availabilities
+        const weeklyAvailabilities = await Availability.find({
+            userId: userId,
+            date: { $gte: todayStr },
+            isWeekly: true
+        });
+
+        let mergedCount = 0;
+        
+        // For each daily availability, merge its slots into the corresponding weekly availability
+        for (const dailyAvail of dailyAvailabilities) {
+            // Find weekly availability for the same date
+            const weeklyAvail = weeklyAvailabilities.find(w => w.date === dailyAvail.date);
+            
+            if (weeklyAvail) {
+                // Merge slots: add daily slots to weekly if they don't already exist
+                const existingSlotsMap = new Map();
+                weeklyAvail.timeSlots.forEach(slot => {
+                    existingSlotsMap.set(slot.slot, slot);
+                });
+
+                let addedCount = 0;
+                dailyAvail.timeSlots.forEach(dailySlot => {
+                    if (!existingSlotsMap.has(dailySlot.slot)) {
+                        weeklyAvail.timeSlots.push(dailySlot);
+                        addedCount++;
+                    }
+                });
+
+                if (addedCount > 0) {
+                    await weeklyAvail.save();
+                    mergedCount++;
+                    console.log(`[AvailabilitySwitch] Merged ${addedCount} daily slots into weekly availability for date ${dailyAvail.date}`);
+                }
+            } else {
+                // No weekly availability for this date - convert daily to weekly
+                dailyAvail.isWeekly = true;
+                dailyAvail.isDaily = false;
+                await dailyAvail.save();
+                mergedCount++;
+                console.log(`[AvailabilitySwitch] Converted daily availability to weekly for date ${dailyAvail.date}`);
+            }
+        }
+
+        console.log(`[AvailabilitySwitch] Merged daily slots to weekly for ${mergedCount} availabilities`);
+    } catch (error) {
+        console.error('[AvailabilitySwitch] Error merging daily slots to weekly:', error);
+        throw error;
+    }
+};
+
+// Merge weekly slots into daily availabilities (preserve weekly slots when switching to daily)
+const mergeWeeklySlotsToDaily = async (userId) => {
+    try {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const todayStr = formatLocalYMD(today);
+
+        // Find all weekly availabilities
+        const weeklyAvailabilities = await Availability.find({
+            userId: userId,
+            date: { $gte: todayStr },
+            isWeekly: true
+        });
+
+        if (weeklyAvailabilities.length === 0) {
+            return; // No weekly availabilities to merge
+        }
+
+        // Find all daily availabilities
+        const dailyAvailabilities = await Availability.find({
+            userId: userId,
+            date: { $gte: todayStr },
+            isDaily: true
+        });
+
+        let mergedCount = 0;
+        
+        // For each weekly availability, merge its slots into the corresponding daily availability
+        for (const weeklyAvail of weeklyAvailabilities) {
+            // Find daily availability for the same date
+            const dailyAvail = dailyAvailabilities.find(d => d.date === weeklyAvail.date);
+            
+            if (dailyAvail) {
+                // Merge slots: add weekly slots to daily if they don't already exist
+                const existingSlotsMap = new Map();
+                dailyAvail.timeSlots.forEach(slot => {
+                    existingSlotsMap.set(slot.slot, slot);
+                });
+
+                let addedCount = 0;
+                weeklyAvail.timeSlots.forEach(weeklySlot => {
+                    if (!existingSlotsMap.has(weeklySlot.slot)) {
+                        dailyAvail.timeSlots.push(weeklySlot);
+                        addedCount++;
+                    }
+                });
+
+                if (addedCount > 0) {
+                    await dailyAvail.save();
+                    mergedCount++;
+                    console.log(`[AvailabilitySwitch] Merged ${addedCount} weekly slots into daily availability for date ${weeklyAvail.date}`);
+                }
+            } else {
+                // No daily availability for this date - convert weekly to daily
+                weeklyAvail.isDaily = true;
+                weeklyAvail.isWeekly = false;
+                await weeklyAvail.save();
+                mergedCount++;
+                console.log(`[AvailabilitySwitch] Converted weekly availability to daily for date ${weeklyAvail.date}`);
+            }
+        }
+
+        console.log(`[AvailabilitySwitch] Merged weekly slots to daily for ${mergedCount} availabilities`);
+    } catch (error) {
+        console.error('[AvailabilitySwitch] Error merging weekly slots to daily:', error);
+        throw error;
+    }
+};
+
+// Convert remaining daily availabilities to weekly (preserve slots)
+const convertDailyToWeekly = async (userId) => {
+    try {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const todayStr = formatLocalYMD(today);
+
+        const dailyAvailabilities = await Availability.find({
+            userId: userId,
+            date: { $gte: todayStr },
+            isDaily: true
+        });
+
+        let convertedCount = 0;
+        for (const availability of dailyAvailabilities) {
+            availability.isWeekly = true;
+            availability.isDaily = false;
+            await availability.save();
+            convertedCount++;
+        }
+
+        console.log(`[AvailabilitySwitch] Converted ${convertedCount} daily availabilities to weekly (preserved slots)`);
+    } catch (error) {
+        console.error('[AvailabilitySwitch] Error converting daily to weekly:', error);
+        throw error;
+    }
+};
+
+// Convert remaining weekly availabilities to daily (preserve slots)
+const convertWeeklyToDaily = async (userId) => {
+    try {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const todayStr = formatLocalYMD(today);
+
+        const weeklyAvailabilities = await Availability.find({
+            userId: userId,
+            date: { $gte: todayStr },
+            isWeekly: true
+        });
+
+        let convertedCount = 0;
+        for (const availability of weeklyAvailabilities) {
+            availability.isDaily = true;
+            availability.isWeekly = false;
+            await availability.save();
+            convertedCount++;
+        }
+
+        console.log(`[AvailabilitySwitch] Converted ${convertedCount} weekly availabilities to daily (preserved slots)`);
+    } catch (error) {
+        console.error('[AvailabilitySwitch] Error converting weekly to daily:', error);
+        throw error;
+    }
 };
 
 // Cleanup non-weekly availabilities (daily and specific date)
