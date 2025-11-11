@@ -847,7 +847,17 @@ export const updateAvailability = async (req, res) => {
                     }
                 }
 
-                item.timeSlots = timeSlots.map((t) => {
+                // Merge existing slots with new slots - preserve all existing slots
+                const existingSlots = item.timeSlots || [];
+                const existingSlotsMap = new Map();
+                
+                // Create a map of existing slots by slot string for quick lookup
+                existingSlots.forEach((slot) => {
+                    existingSlotsMap.set(slot.slot, slot);
+                });
+                
+                // Normalize and process new slots
+                const normalizedNewSlots = timeSlots.map((t) => {
                     if (typeof t === 'string') {
                         const slot = normalizeTimeSlotString(String(t));
                         const dateStr = item.date || date;
@@ -882,6 +892,28 @@ export const updateAvailability = async (req, res) => {
                     }
                     throw new Error('Invalid time slot entry');
                 });
+                
+                // Merge new slots with existing slots - don't delete existing slots
+                normalizedNewSlots.forEach((newSlot) => {
+                    if (existingSlotsMap.has(newSlot.slot)) {
+                        // Slot already exists - update status and UTC times if needed
+                        const existingSlot = existingSlotsMap.get(newSlot.slot);
+                        if (existingSlot.status !== newSlot.status) {
+                            existingSlot.status = newSlot.status;
+                        }
+                        // Update UTC times if they're missing or different
+                        if (!existingSlot.utcStartTime || !existingSlot.utcEndTime) {
+                            existingSlot.utcStartTime = newSlot.utcStartTime;
+                            existingSlot.utcEndTime = newSlot.utcEndTime;
+                        }
+                    } else {
+                        // New slot - add it to existing slots
+                        existingSlots.push(newSlot);
+                    }
+                });
+                
+                // Preserve all existing slots - don't replace, just merge
+                item.timeSlots = existingSlots;
             } catch (e) {
                 return res.status(400).json({ success: false, message: 'Invalid timeSlots: provide strings or { slot, status } with valid formats' });
             }
