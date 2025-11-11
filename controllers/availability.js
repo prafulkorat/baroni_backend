@@ -843,10 +843,66 @@ export const listMyAvailabilities = async (req, res) => {
             date: { $gte: todayStr } // Compare strings in YYYY-MM-DD format
         }).sort({ date: 1, createdAt: -1 });
 
+        // Group availabilities by date and merge slots from both daily and weekly
+        const mergedByDate = new Map();
+        
+        items.forEach(item => {
+            const dateKey = item.date;
+            
+            if (!mergedByDate.has(dateKey)) {
+                // First availability for this date - use it as base
+                mergedByDate.set(dateKey, {
+                    _id: item._id,
+                    userId: item.userId,
+                    date: item.date,
+                    isWeekly: item.isWeekly || false,
+                    isDaily: item.isDaily || false,
+                    timeSlots: [...(item.timeSlots || [])],
+                    createdAt: item.createdAt,
+                    updatedAt: item.updatedAt
+                });
+            } else {
+                // Merge slots from this availability into existing one
+                const merged = mergedByDate.get(dateKey);
+                const existingSlotsMap = new Map();
+                
+                // Create map of existing slots
+                merged.timeSlots.forEach(slot => {
+                    existingSlotsMap.set(slot.slot, slot);
+                });
+                
+                // Add new slots that don't already exist
+                item.timeSlots.forEach(slot => {
+                    if (!existingSlotsMap.has(slot.slot)) {
+                        merged.timeSlots.push(slot);
+                    }
+                });
+                
+                // Update mode flags - if either is weekly/daily, mark accordingly
+                if (item.isWeekly) merged.isWeekly = true;
+                if (item.isDaily) merged.isDaily = true;
+                
+                // Use the earliest createdAt and latest updatedAt
+                if (item.createdAt < merged.createdAt) {
+                    merged.createdAt = item.createdAt;
+                }
+                if (item.updatedAt > merged.updatedAt) {
+                    merged.updatedAt = item.updatedAt;
+                }
+            }
+        });
+
+        // Convert map to array and sort by date
+        const mergedItems = Array.from(mergedByDate.values()).sort((a, b) => {
+            if (a.date < b.date) return -1;
+            if (a.date > b.date) return 1;
+            return 0;
+        });
+
         return res.status(200).json({
             success: true,
             message: 'Availabilities retrieved successfully',
-            data: items.map(item => sanitize(item))
+            data: mergedItems.map(item => sanitize(item))
         });
     } catch (error) {
         return res.status(500).json({ success: false, message: error.message });

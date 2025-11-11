@@ -997,11 +997,55 @@ export const getStarById = async (req, res) => {
             return equivalentUTCTime;
         }
 
+        // Merge availabilities by date (combine daily and weekly slots for same date)
+        const mergedByDate = new Map();
+        
+        availability.forEach(item => {
+            const doc = typeof item.toObject === 'function' ? item.toObject() : item;
+            const dateKey = doc.date;
+            
+            if (!mergedByDate.has(dateKey)) {
+                // First availability for this date - use it as base
+                mergedByDate.set(dateKey, {
+                    _id: doc._id,
+                    userId: doc.userId,
+                    date: doc.date,
+                    isWeekly: doc.isWeekly || false,
+                    isDaily: doc.isDaily || false,
+                    timeSlots: [...(doc.timeSlots || [])],
+                    createdAt: doc.createdAt,
+                    updatedAt: doc.updatedAt
+                });
+            } else {
+                // Merge slots from this availability into existing one
+                const merged = mergedByDate.get(dateKey);
+                const existingSlotsMap = new Map();
+                
+                // Create map of existing slots
+                merged.timeSlots.forEach(slot => {
+                    existingSlotsMap.set(slot.slot, slot);
+                });
+                
+                // Add new slots that don't already exist
+                doc.timeSlots.forEach(slot => {
+                    if (!existingSlotsMap.has(slot.slot)) {
+                        merged.timeSlots.push(slot);
+                    }
+                });
+                
+                // Update mode flags - if either is weekly/daily, mark accordingly
+                if (doc.isWeekly) merged.isWeekly = true;
+                if (doc.isDaily) merged.isDaily = true;
+            }
+        });
+
+        // Convert map to array
+        const mergedAvailability = Array.from(mergedByDate.values());
+
         // Filter out unavailable (booked) time slots from availability and sort by nearest
-        const filteredAvailability = Array.isArray(availability)
-            ? availability
-                .map((doc) => {
-                    const item = typeof doc.toObject === 'function' ? doc.toObject() : doc;
+        const filteredAvailability = Array.isArray(mergedAvailability)
+            ? mergedAvailability
+                .map((item) => {
                     const timeSlots = Array.isArray(item.timeSlots)
                         ? item.timeSlots
                             .filter((s) => {
