@@ -638,7 +638,7 @@ export const createAvailability = async (req, res) => {
             } catch (createError) {
                 // Handle duplicate key error (E11000) - old index still exists
                 if (createError.code === 11000 || createError.message.includes('duplicate key')) {
-                    console.log(`[Availability] Duplicate key error for date ${isoDateStr}, finding existing entry to merge`);
+                    console.log(`[Availability] Duplicate key error for date ${isoDateStr}, finding existing entry`);
                     
                     // Find existing entry (regardless of mode - old index doesn't check mode)
                     const existingEntry = await Availability.findOne({
@@ -647,43 +647,76 @@ export const createAvailability = async (req, res) => {
                     });
 
                     if (existingEntry) {
-                        // Merge slots into existing entry, preserve its mode flags
-                        const existingSlots = existingEntry.timeSlots || [];
-                        const newSlots = normalizedTimeSlots;
-                        const existingSlotsMap = new Map();
+                        // Check if existing entry has different mode than what we're trying to create
+                        const existingIsWeekly = existingEntry.isWeekly === true;
+                        const existingIsDaily = existingEntry.isDaily === true;
+                        const existingIsSpecific = !existingIsWeekly && !existingIsDaily;
                         
-                        // Create a map of existing slots by slot string for quick lookup
-                        existingSlots.forEach((slot) => {
-                            existingSlotsMap.set(slot.slot, slot);
-                        });
+                        // If trying to create daily entry but existing is weekly
+                        // Convert weekly entry to daily and merge slots (due to old index constraint)
+                        if (modeIsDaily && existingIsWeekly) {
+                            console.log(`[Availability] Converting weekly entry to daily for date ${isoDateStr} and merging slots`);
+                            // Convert to daily mode
+                            existingEntry.isDaily = true;
+                            existingEntry.isWeekly = false;
+                            // Continue to merge slots below
+                        }
                         
-                        // Merge new slots with existing slots - don't delete existing slots
-                        newSlots.forEach((newSlot) => {
-                            if (existingSlotsMap.has(newSlot.slot)) {
-                                // Slot already exists - update status and UTC times if needed
-                                const existingSlot = existingSlotsMap.get(newSlot.slot);
-                                if (existingSlot.status !== newSlot.status) {
-                                    existingSlot.status = newSlot.status;
+                        // If trying to create weekly entry but existing is daily
+                        // Convert daily entry to weekly and merge slots (due to old index constraint)
+                        if (modeIsWeekly && existingIsDaily) {
+                            console.log(`[Availability] Converting daily entry to weekly for date ${isoDateStr} and merging slots`);
+                            // Convert to weekly mode
+                            existingEntry.isWeekly = true;
+                            existingEntry.isDaily = false;
+                            // Continue to merge slots below
+                        }
+                        
+                        // If modes match or both are specific date, merge slots
+                        const modesMatch = (modeIsWeekly && existingIsWeekly) || 
+                                         (modeIsDaily && existingIsDaily) || 
+                                         (isSpecificDate && existingIsSpecific);
+                        
+                        if (modesMatch) {
+                            // Merge slots into existing entry, preserve its mode flags
+                            const existingSlots = existingEntry.timeSlots || [];
+                            const newSlots = normalizedTimeSlots;
+                            const existingSlotsMap = new Map();
+                            
+                            // Create a map of existing slots by slot string for quick lookup
+                            existingSlots.forEach((slot) => {
+                                existingSlotsMap.set(slot.slot, slot);
+                            });
+                            
+                            // Merge new slots with existing slots - don't delete existing slots
+                            newSlots.forEach((newSlot) => {
+                                if (existingSlotsMap.has(newSlot.slot)) {
+                                    // Slot already exists - update status and UTC times if needed
+                                    const existingSlot = existingSlotsMap.get(newSlot.slot);
+                                    if (existingSlot.status !== newSlot.status) {
+                                        existingSlot.status = newSlot.status;
+                                    }
+                                    // Update UTC times if they're missing
+                                    if (!existingSlot.utcStartTime || !existingSlot.utcEndTime) {
+                                        existingSlot.utcStartTime = newSlot.utcStartTime;
+                                        existingSlot.utcEndTime = newSlot.utcEndTime;
+                                    }
+                                } else {
+                                    // New slot - add it to existing slots
+                                    existingSlots.push(newSlot);
                                 }
-                                // Update UTC times if they're missing
-                                if (!existingSlot.utcStartTime || !existingSlot.utcEndTime) {
-                                    existingSlot.utcStartTime = newSlot.utcStartTime;
-                                    existingSlot.utcEndTime = newSlot.utcEndTime;
-                                }
-                            } else {
-                                // New slot - add it to existing slots
-                                existingSlots.push(newSlot);
-                            }
-                        });
-                        
-                        // Always preserve existing mode flags - don't change them
-                        // This allows weekly, daily, and specific date entries to coexist
-                        // Mode flags should only be changed when explicitly updating mode, not when adding slots
-                        existingEntry.timeSlots = existingSlots;
-                        
-                        const saved = await existingEntry.save();
-                        console.log(`[Availability] Merged slots into existing entry for date ${isoDateStr}: ${existingSlots.length} total slots (preserved all existing slots and mode flags)`);
-                        return { action: 'updated', doc: saved };
+                            });
+                            
+                            // Always preserve existing mode flags - don't change them
+                            existingEntry.timeSlots = existingSlots;
+                            
+                            const saved = await existingEntry.save();
+                            console.log(`[Availability] Merged slots into existing entry for date ${isoDateStr}: ${existingSlots.length} total slots (preserved all existing slots and mode flags)`);
+                            return { action: 'updated', doc: saved };
+                        } else {
+                            // Modes don't match - cannot merge due to old index constraint
+                            throw new Error(`Cannot add ${modeIsDaily ? 'daily' : modeIsWeekly ? 'weekly' : 'specific date'} slots. ${existingIsDaily ? 'Daily' : existingIsWeekly ? 'Weekly' : 'Specific date'} entry already exists for date ${isoDateStr}. Please wait for database migration to support multiple entries per date.`);
+                        }
                     } else {
                         // Entry not found but duplicate key error - this shouldn't happen
                         throw new Error(`Duplicate key error but entry not found for date ${isoDateStr}`);
