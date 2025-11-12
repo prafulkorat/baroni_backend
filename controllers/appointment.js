@@ -705,13 +705,25 @@ export const approveAppointment = async (req, res) => {
     appt.status = 'approved';
     const updated = await appt.save();
 
-    const availability = await Availability.findOne({ _id: appt.availabilityId, userId: appt.starId });
-    if (availability) {
-      const slot = availability.timeSlots.find((s) => String(s._id) === String(appt.timeSlotId));
-      if (slot) {
-        slot.status = 'unavailable';
-        await availability.save();
-      }
+    // Mark the slot as unavailable when appointment is approved
+    // This ensures the slot is blocked and won't show up for other fans
+    try {
+      const updateResult = await Availability.updateOne(
+        { 
+          _id: appt.availabilityId, 
+          userId: appt.starId, 
+          'timeSlots._id': appt.timeSlotId 
+        },
+        { 
+          $set: { 
+            'timeSlots.$.status': 'unavailable'
+          } 
+        }
+      );
+      console.log(`[ApproveAppointment] Slot marked as unavailable for appointment ${appt._id}, updateResult:`, updateResult);
+    } catch (slotError) {
+      console.error(`[ApproveAppointment] Error updating slot status for appointment ${appt._id}:`, slotError);
+      // Continue even if slot update fails - appointment is already approved
     }
 
     // Send notification to fan about appointment approval
@@ -796,13 +808,28 @@ export const rejectAppointment = async (req, res) => {
     }
     const updated = await appt.save();
 
-    // Free the reserved slot if it was marked unavailable (pending hybrid reservation)
+    // Free the reserved slot when appointment is rejected
+    // This makes the slot available again for other fans to book
     try {
-      await Availability.updateOne(
-        { _id: appt.availabilityId, userId: appt.starId, 'timeSlots._id': appt.timeSlotId },
-        { $set: { 'timeSlots.$.status': 'available' } }
+      const updateResult = await Availability.updateOne(
+        { 
+          _id: appt.availabilityId, 
+          userId: appt.starId, 
+          'timeSlots._id': appt.timeSlotId 
+        },
+        { 
+          $set: { 
+            'timeSlots.$.status': 'available',
+            'timeSlots.$.paymentReferenceId': null,
+            'timeSlots.$.lockedAt': null
+          } 
+        }
       );
-    } catch (_e) {}
+      console.log(`[RejectAppointment] Slot freed for appointment ${appt._id}, updateResult:`, updateResult);
+    } catch (slotError) {
+      console.error(`[RejectAppointment] Error freeing slot for appointment ${appt._id}:`, slotError);
+      // Continue even if slot update fails - appointment is already rejected
+    }
 
     // Send notification to fan about appointment rejection
     try {

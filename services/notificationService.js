@@ -5,6 +5,7 @@ import Notification from '../models/Notification.js';
 import fs from 'fs';
 import path from 'path';
 import dotenv from 'dotenv';
+import mongoose from 'mongoose';
 
 // Load environment variables
 dotenv.config();
@@ -333,12 +334,39 @@ class NotificationService {
       optionsKeys: Object.keys(options)
     });
 
+    // Validate userId is a valid ObjectId
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      const errorMsg = `Invalid userId format. Expected a valid ObjectId, but received: ${userId}`;
+      console.error(`[NOTIFICATION ERROR] ${errorMsg}`);
+      return {
+        success: false,
+        error: errorMsg,
+        message: errorMsg
+      };
+    }
+
     // Fetch user name to include in notification data
     let userName = 'User';
     try {
       const user = await User.findById(userId).select('name pseudo');
+      if (!user) {
+        const errorMsg = `User not found with id: ${userId}`;
+        console.error(`[NOTIFICATION ERROR] ${errorMsg}`);
+        return {
+          success: false,
+          error: errorMsg,
+          message: errorMsg
+        };
+      }
       userName = user?.name || user?.pseudo || userName;
-    } catch (_e) {}
+    } catch (error) {
+      console.error(`[NOTIFICATION ERROR] Error fetching user ${userId}:`, error);
+      return {
+        success: false,
+        error: error.message || 'Error fetching user',
+        message: error.message || 'Error fetching user'
+      };
+    }
 
     // Add user name to notification data
     const enrichedData = {
@@ -716,7 +744,23 @@ class NotificationService {
       }
 
       // Handle VoIP token separately ONLY when explicitly requested
-      if (!deliverySucceeded && user.voipToken && isVoipExplicit) {
+      // IMPORTANT: For appointment requests and other non-VoIP notifications, 
+      // do NOT send to VoIP token to prevent duplicate notifications on iOS
+      // Only send to VoIP token if:
+      // 1. APNs delivery failed AND
+      // 2. VoIP is explicitly requested (isVoipExplicit) AND
+      // 3. This is NOT an appointment request notification
+      const isAppointmentRequest = notificationData.type === 'appointment' || 
+                                    data.eventType === 'APPOINTMENT_CREATED' ||
+                                    (notificationData.title && notificationData.title.toLowerCase().includes('appointment request'));
+      
+      // Log if we're skipping VoIP for appointment requests
+      if (isAppointmentRequest && user.voipToken && isVoipExplicit) {
+        console.log(`[VoIP] Skipping VoIP notification for appointment request to prevent duplicates - user ${userId}`);
+      }
+      
+      if (!deliverySucceeded && user.voipToken && isVoipExplicit && !isAppointmentRequest) {
+        console.log(`[VoIP] Attempting VoIP notification for user ${userId} (APNs failed, VoIP explicitly requested, not appointment request)`);
         const userApnsProvider = this.getApnsProvider(user.isDev);
         if (userApnsProvider) {
         const voipTopic = getApnsTopic(true);
@@ -788,11 +832,12 @@ class NotificationService {
         );
         const isVoipForAndroid = isVoipExplicit && isAndroid && !isAppointmentReject && !isRejectType;
         
-        // For reject type, send ONLY silent data-only payload (no notification title/body, no VoIP)
+        // For reject type on Android, send normal notification (not silent)
+        // But ensure it doesn't trigger call UI by filtering call-related data
         if (isRejectType) {
-          console.log(`[FCM] Reject type notification - sending SILENT data-only payload (NO notification, NO VoIP, NO body)`);
-        } else if ((isAppointmentReject || isRejectType) && isAndroid) {
-          console.log(`[FCM] Reject notification for Android (type: ${notificationData.type || data.type}) - sending normal notification (NOT VoIP call notification)`);
+          console.log(`[FCM] Reject type notification for Android - sending normal notification (with title/body, NO call UI)`);
+        } else if (isAppointmentReject && isAndroid) {
+          console.log(`[FCM] Appointment reject notification for Android - sending normal notification (NOT VoIP call notification)`);
         }
         
         // For reject type notifications, exclude ALL call-related data to prevent showing incoming call UI
@@ -826,8 +871,7 @@ class NotificationService {
           ),
           ...(options.customPayload ? { customPayload: JSON.stringify(options.customPayload) } : {}),
           clickAction: 'FLUTTER_NOTIFICATION_CLICK',
-          // For reject type, don't add sound
-          ...(isRejectType ? {} : { sound: 'default' }),
+          // Sound is handled in android.notification, not in data payload
           // Add notification type for Android handling
           notificationType: notificationData.type || 'general',
           // Add timestamp for Android
@@ -845,14 +889,14 @@ class NotificationService {
           } : {}),
         };
         
-        // Build message - for reject type, send ONLY data payload (no notification, no VoIP)
-        // For VoIP on Android, exclude notification parameter
+        // Build message - for reject type on Android, send normal notification (not silent)
+        // For VoIP on Android, exclude notification parameter (data-only for call handling)
         const message = {
           token: user.fcmToken,
-          // For reject type: NO notification parameter (silent data-only)
+          // For reject type: Include notification (Android needs visible notification)
           // For VoIP: NO notification parameter (data-only for call handling)
           // Otherwise: Include notification with title and body
-          ...(isRejectType || isVoipForAndroid ? {} : {
+          ...(isVoipForAndroid ? {} : {
             notification: {
               title: notificationData.title,
               body: notificationData.body,
@@ -860,12 +904,13 @@ class NotificationService {
           }),
           data: dataPayload,
           android: {
-            // For reject type: NO notification parameter (silent data-only)
+            // For reject type: Include notification (Android needs visible notification)
             // For VoIP: NO notification parameter (data-only for call handling)
             // Otherwise: Include notification with sound, icon, etc.
-            ...(isRejectType || isVoipForAndroid ? {} : {
+            ...(isVoipForAndroid ? {} : {
               notification: {
-                sound: 'default',
+                // For reject type, use a lower priority sound or no sound
+                ...(isRejectType ? {} : { sound: 'default' }),
                 channelId: 'baroni_notifications', // Use a specific channel instead of 'default'
                 priority: 'high',
                 visibility: 'public',
@@ -930,11 +975,11 @@ class NotificationService {
         
         console.log(`[FCM DEBUG] Complete message structure for user ${userId}:`, JSON.stringify(message, null, 2));
         
-        console.log(`[FCM] Sending ${isRejectType ? 'REJECT (silent data-only)' : isVoipForAndroid ? 'VoIP (data-only)' : 'notification'} to Android user ${userId}`, {
+        console.log(`[FCM] Sending ${isRejectType ? 'REJECT (normal notification, no call UI)' : isVoipForAndroid ? 'VoIP (data-only)' : 'notification'} to Android user ${userId}`, {
           isRejectType,
           isVoip: isVoipForAndroid,
-          title: isRejectType || isVoipForAndroid ? 'N/A (data-only)' : notificationData.title,
-          body: isRejectType || isVoipForAndroid ? 'N/A (data-only)' : notificationData.body,
+          title: isVoipForAndroid ? 'N/A (data-only)' : notificationData.title,
+          body: isVoipForAndroid ? 'N/A (data-only)' : notificationData.body,
           channelId: isVoipForAndroid ? 'N/A (data-only)' : 'baroni_notifications',
           priority: 'high',
           fcmTokenPreview: user.fcmToken ? user.fcmToken.substring(0, 20) + '...' : 'null',

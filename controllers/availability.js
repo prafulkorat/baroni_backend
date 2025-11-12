@@ -806,9 +806,82 @@ export const createAvailability = async (req, res) => {
             // Normalize time slots
             let normalized;
             try {
+                // Validate timeSlots is an array
+                if (!Array.isArray(timeSlots) || timeSlots.length === 0) {
+                    throw new Error('timeSlots must be a non-empty array');
+                }
+                
+                // Validate each timeSlot entry before normalization
+                for (let i = 0; i < timeSlots.length; i++) {
+                    const t = timeSlots[i];
+                    if (t === null || t === undefined) {
+                        throw new Error(`timeSlots[${i}] is null or undefined`);
+                    }
+                    if (typeof t === 'string') {
+                        if (!t.trim()) {
+                            throw new Error(`timeSlots[${i}] is an empty string`);
+                        }
+                        // Check if it has the required format (start-end)
+                        const parts = t.split('-').map(p => p.trim());
+                        if (parts.length !== 2) {
+                            throw new Error(`timeSlots[${i}] must be in "start-end" format (e.g., "09:00-10:00"), but got: "${t}"`);
+                        }
+                        // Validate time format for each part
+                        const [start, end] = parts;
+                        try {
+                            // Try to validate start time
+                            if (!start.match(/^([01]?\d|2[0-3]):([0-5]\d)$/)) {
+                                throw new Error(`timeSlots[${i}] start time "${start}" is invalid. Hours must be 00-23, minutes must be 00-59`);
+                            }
+                            // Try to validate end time
+                            if (!end.match(/^([01]?\d|2[0-3]):([0-5]\d)$/)) {
+                                if (end.match(/^24:/)) {
+                                    throw new Error(`timeSlots[${i}] end time "${end}" is invalid. Hour 24 is not allowed (use 00:XX for next day). Slots cannot span midnight.`);
+                                }
+                                throw new Error(`timeSlots[${i}] end time "${end}" is invalid. Hours must be 00-23, minutes must be 00-59`);
+                            }
+                        } catch (timeError) {
+                            throw new Error(timeError.message);
+                        }
+                    } else if (t && typeof t === 'object') {
+                        if (!t.slot || typeof t.slot !== 'string' || !t.slot.trim()) {
+                            throw new Error(`timeSlots[${i}] object must have a non-empty "slot" string property`);
+                        }
+                        if (t.status && !['available', 'unavailable'].includes(t.status)) {
+                            throw new Error(`timeSlots[${i}] status must be "available" or "unavailable", but got: "${t.status}"`);
+                        }
+                        // Check slot format
+                        const parts = t.slot.split('-').map(p => p.trim());
+                        if (parts.length !== 2) {
+                            throw new Error(`timeSlots[${i}].slot must be in "start-end" format (e.g., "09:00-10:00"), but got: "${t.slot}"`);
+                        }
+                        // Validate time format for each part
+                        const [start, end] = parts;
+                        try {
+                            // Try to validate start time
+                            if (!start.match(/^([01]?\d|2[0-3]):([0-5]\d)$/)) {
+                                throw new Error(`timeSlots[${i}].slot start time "${start}" is invalid. Hours must be 00-23, minutes must be 00-59`);
+                            }
+                            // Try to validate end time
+                            if (!end.match(/^([01]?\d|2[0-3]):([0-5]\d)$/)) {
+                                if (end.match(/^24:/)) {
+                                    throw new Error(`timeSlots[${i}].slot end time "${end}" is invalid. Hour 24 is not allowed (use 00:XX for next day). Slots cannot span midnight.`);
+                                }
+                                throw new Error(`timeSlots[${i}].slot end time "${end}" is invalid. Hours must be 00-23, minutes must be 00-59`);
+                            }
+                        } catch (timeError) {
+                            throw new Error(timeError.message);
+                        }
+                    } else {
+                        throw new Error(`timeSlots[${i}] must be a string or an object { slot, status }, but got: ${typeof t}`);
+                    }
+                }
+                
                 normalized = normalizeTimeSlots(timeSlots, date);
             } catch (e) {
-                throw new Error('Invalid timeSlots: provide strings or { slot, status } with valid formats');
+                // Provide more specific error message
+                const errorMsg = e.message || 'Invalid timeSlots: provide strings or { slot, status } with valid formats';
+                throw new Error(errorMsg);
             }
 
             return { date: inputDate, normalized };
