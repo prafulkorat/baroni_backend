@@ -455,7 +455,13 @@ class NotificationService {
         (typeof data.type === 'string' && data.type.toLowerCase() === 'reject')
       );
       
-      const isVoipExplicit = !isRejectType && (
+      // Check if this is an appointment rejection (for iOS, we need to send special payload)
+      const isAppointmentReject = data.isAppointmentReject === true || data.isAppointmentReject === 'true';
+      
+      // For iOS: If type is "reject" OR it's an appointment rejection, send the reject payload
+      const shouldSendRejectPayloadForIOS = isIOS && (isRejectType || isAppointmentReject);
+      
+      const isVoipExplicit = !isRejectType && !isAppointmentReject && (
         options.apnsVoip === true ||
         (typeof data.pushType === 'string' && data.pushType.toLowerCase() === 'voip') ||
         (typeof notificationData.pushType === 'string' && notificationData.pushType.toLowerCase() === 'voip') ||
@@ -470,8 +476,8 @@ class NotificationService {
           const isVoip = isVoipExplicit;
         
         // Check if this is a reject call notification (for cutting/rejecting calls on iOS)
-        // BUT: If type is "reject", don't treat it as call rejection - it's just a normal reject notification
-        const isRejectCall = !isRejectType && (data.isRejectCall === true || data.isRejectCall === 'true');
+        // BUT: If type is "reject" or appointment reject, don't treat it as call rejection - it's just a normal reject notification
+        const isRejectCall = !isRejectType && !isAppointmentReject && (data.isRejectCall === true || data.isRejectCall === 'true');
 
         const voipBundle = process.env.APNS_VOIP_BUNDLE_ID || (process.env.APNS_BUNDLE_ID ? `${process.env.APNS_BUNDLE_ID}.voip` : undefined);
         
@@ -491,49 +497,58 @@ class NotificationService {
             status: "decline"
           };
           console.log(`[APNs] Sending call rejection notification to iOS user ${userId} with payload:`, note.payload);
-        } else if (isRejectType) {
-          // For reject type on iOS: Send silent background notification
+        } else if (isRejectType || isAppointmentReject) {
+          // For reject type OR appointment rejection on iOS: Send silent background notification
           // iOS 13+ requires explicit push_type: "background" for background notifications
           // This is a background notification that should wake up the app without user interaction
+          // When type is "reject" or appointment is rejected, send this exact payload structure
           note.topic = process.env.APNS_BUNDLE_ID;
           
           // CRITICAL: Set push type to "background" for background notifications (iOS 13+)
           // This tells iOS that this is a background notification, not a user-facing alert
           note.pushType = 'background';
           
-          // CRITICAL: For background notifications, set contentAvailable as number 1
+          // CRITICAL: For background notifications, set contentAvailable to true
           // The APNs library automatically converts this to "content-available": 1 in the aps dictionary
           // This wakes up the app in the background
-          note.contentAvailable = 1;
+          // IMPORTANT: Use true (boolean) instead of 1 for node-apn library
+          note.contentAvailable = true;
           
-          // Set priority to 10 (high priority) for background notifications
-          // Priority 10 ensures immediate delivery for background notifications
-          note.priority = 10;
+          // Set priority to 5 for background notifications (not 10)
+          // Priority 5 is correct for background notifications per Apple documentation
+          // Priority 10 is for alert notifications, not background
+          note.priority = 5;
           
           // No alert, sound, or badge for silent background notification
           // These properties should NOT be set for background notifications
           // Setting them would convert this to a user-facing notification
           
-          // Build payload with ONLY essential fields for iOS background detection
-          // CRITICAL: For iOS background notifications (iOS 13+):
-          // 1. push_type: "background" is set on note.pushType (handled by APNs library)
-          // 2. aps with ONLY content-available: 1 (automatically added by library from note.contentAvailable)
-          // 3. status: "decline" at top level (required for call rejection detection in app)
-          // 4. NO other fields - keep payload minimal for proper iOS background detection
+          // Build payload with explicit aps and custom fields
+          // CRITICAL: For background notifications, we need to explicitly set both:
+          // 1. aps object with content-available: 1
+          // 2. Custom fields (status: "decline")
+          // This matches the exact payload structure required: {"aps":{"content-available":1},"status":"decline"}
+          // IMPORTANT: Set payload.aps AFTER setting note.contentAvailable to ensure proper merge
+          // The library will merge note.contentAvailable into payload.aps, but we explicitly set it to be sure
+          const customPayload = {
+            status: "decline"
+          };
+          
+          // Merge with existing payload if any, then add aps
           note.payload = {
+            ...note.payload,
+            ...customPayload,
             aps: {
               "content-available": 1
-              // No alert, sound, or badge - this is a silent background notification
-            },
-            status: "decline"
-            // Only status and aps - minimal payload for iOS background notification
+            }
           };
           
           console.log(`[APNs] Sending iOS reject notification (background type) to user ${userId}`);
+          console.log(`[APNs] Reject Type: ${isRejectType}, Appointment Reject: ${isAppointmentReject}`);
           console.log(`[APNs] iOS Background Notification Configuration:`);
           console.log(`[APNs]   - pushType: background (iOS 13+ requirement)`);
-          console.log(`[APNs]   - contentAvailable: 1 (wakes app in background)`);
-          console.log(`[APNs]   - priority: 10 (high priority for immediate delivery)`);
+          console.log(`[APNs]   - contentAvailable: true (wakes app in background)`);
+          console.log(`[APNs]   - priority: 5 (correct priority for background notifications)`);
           console.log(`[APNs]   - No alert/sound/badge (silent background notification)`);
           console.log(`[APNs] Note configuration:`, {
             topic: note.topic,
@@ -545,7 +560,7 @@ class NotificationService {
             alert: note.alert,
             badge: note.badge
           });
-          console.log(`[APNs] Reject payload for iOS background notification:`, JSON.stringify(note.payload, null, 2));
+          console.log(`[APNs] Full payload (with explicit aps and custom fields):`, JSON.stringify(note.payload, null, 2));
         } else {
           note.topic = isVoip && voipBundle ? voipBundle : process.env.APNS_BUNDLE_ID;
           if (isVoip) {
@@ -564,8 +579,8 @@ class NotificationService {
           }
         }
         // Match Flutter's expected payload shape for VoIP pushes
-        // For reject type, payload is already set above, so skip here
-        if (!isRejectType) {
+        // For reject type or appointment reject, payload is already set above, so skip here
+        if (!isRejectType && !isAppointmentReject) {
           if (isVoip && !isRejectCall) {
             note.payload = {
               extra: {
@@ -585,6 +600,8 @@ class NotificationService {
         console.log(`[APNs] Token: ${user.apnsToken ? user.apnsToken.substring(0, 20) + '...' : 'null'}`);
         console.log(`[APNs] Notification Type: ${notificationData.type || 'general'}`);
         console.log(`[APNs] Is Reject Type: ${isRejectType}`);
+        console.log(`[APNs] Is Appointment Reject: ${isAppointmentReject}`);
+        console.log(`[APNs] Should Send Reject Payload: ${shouldSendRejectPayloadForIOS}`);
         console.log(`[APNs] Is VoIP: ${isVoip}`);
         console.log(`[APNs] Topic: ${note.topic}`);
         console.log(`[APNs] Content Available (direct): ${note.contentAvailable} (type: ${typeof note.contentAvailable})`);
@@ -594,8 +611,12 @@ class NotificationService {
         console.log(`[APNs] Push Type: ${note.pushType || 'none'}`);
         console.log(`[APNs] Alert:`, note.alert !== undefined ? note.alert : 'not set (silent)');
         console.log(`[APNs] Badge: ${note.badge !== undefined ? note.badge : 'not set'}`);
-        console.log(`[APNs] Payload:`, JSON.stringify(note.payload, null, 2));
-        console.log(`[APNs] APS Object:`, note.aps ? JSON.stringify(note.aps, null, 2) : 'not set');
+        console.log(`[APNs] Payload (custom fields):`, JSON.stringify(note.payload, null, 2));
+        console.log(`[APNs] APS Object (auto-generated):`, note.aps ? JSON.stringify(note.aps, null, 2) : 'not set');
+        // Log the compiled notification structure (final JSON that will be sent)
+        if (note.compiled) {
+          console.log(`[APNs] Compiled Notification (final JSON):`, JSON.stringify(note.compiled, null, 2));
+        }
         console.log(`[APNs] Full Note Object Keys:`, Object.keys(note));
         console.log(`[APNs] ====================================`);
         
@@ -609,13 +630,33 @@ class NotificationService {
           console.log(`[APNs] Failed Count: ${(apnsResponse && apnsResponse.failed && apnsResponse.failed.length) || 0}`);
           
           // Log the final notification structure that was sent
-          if (isRejectType) {
+          if (isRejectType || isAppointmentReject) {
+            // Try to get the compiled notification to see the final structure
+            let compiledPayload = null;
+            try {
+              // The compiled property might be available after sending
+              if (note.compiled) {
+                compiledPayload = note.compiled;
+              } else {
+                // Try to access the internal structure
+                compiledPayload = JSON.parse(JSON.stringify({
+                  aps: note.aps,
+                  ...note.payload
+                }));
+              }
+            } catch (e) {
+              compiledPayload = { error: 'Could not compile payload', message: e.message };
+            }
+            
             console.log(`[APNs] Final notification structure for iOS background detection:`, {
               pushType: note.pushType,
               priority: note.priority,
               contentAvailable: note.contentAvailable,
               payload: note.payload,
-              aps: note.aps
+              aps: note.aps,
+              compiledPayload: compiledPayload,
+              isRejectType,
+              isAppointmentReject
             });
           }
           

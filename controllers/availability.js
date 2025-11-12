@@ -70,9 +70,10 @@ const handleAvailabilityModeSwitching = async (userId, isWeekly, isDaily) => {
             // Don't merge or delete - keep both separate
             await cleanupSpecificDateAvailabilities(userId);
         } else {
-            // Switching to specific date mode - cleanup weekly and daily availabilities
-            await cleanupWeeklyAvailabilities(userId);
-            await cleanupDailyAvailabilities(userId);
+            // Both flags are false - this is a specific date entry
+            // Don't cleanup weekly and daily availabilities - they should remain
+            // Specific date entries can coexist with weekly and daily entries
+            console.log(`[AvailabilitySwitch] Specific date entry - preserving weekly and daily availabilities for user ${userId}`);
         }
     }
     // If there are active appointments, skip cleanup to preserve existing slots
@@ -398,7 +399,9 @@ export const createAvailability = async (req, res) => {
         }
 
         // Enhanced availability mode switching logic (only if flags are provided)
-        if (hasIsWeekly || hasIsDaily) {
+        // Don't call mode switching if both flags are false (specific date entry)
+        // Only call when explicitly switching to weekly or daily mode
+        if ((hasIsWeekly && isWeekly === true) || (hasIsDaily && isDaily === true)) {
             await handleAvailabilityModeSwitching(req.user._id, isWeekly || false, isDaily || false);
         }
 
@@ -502,12 +505,16 @@ export const createAvailability = async (req, res) => {
         // Helper function to upsert availability for a single date
         const upsertOne = async (isoDateStr, normalizedTimeSlots) => {
             // Determine the mode for this availability
-            const modeIsWeekly = isWeekly === true;
-            const modeIsDaily = isDaily === true;
-            const isSpecificDate = !modeIsWeekly && !modeIsDaily;
+            // If both flags are explicitly false OR not provided, treat as specific date entry
+            const modeIsWeekly = hasIsWeekly && isWeekly === true;
+            const modeIsDaily = hasIsDaily && isDaily === true;
+            // Specific date: both false OR both not provided OR one false and other not provided
+            const isSpecificDate = (!modeIsWeekly && !modeIsDaily);
+            
+            console.log(`[Availability] upsertOne for date ${isoDateStr}: hasIsWeekly=${hasIsWeekly}, hasIsDaily=${hasIsDaily}, isWeekly=${isWeekly}, isDaily=${isDaily}, modeIsWeekly=${modeIsWeekly}, modeIsDaily=${modeIsDaily}, isSpecificDate=${isSpecificDate}`);
             
             // Find existing availability
-            // For specific date entries (both false), find any existing entry for that date
+            // For specific date entries (both false or not provided), find any existing entry for that date
             // For weekly/daily entries, find entry with same mode
             let existingAvailability;
             if (isSpecificDate) {
@@ -516,6 +523,7 @@ export const createAvailability = async (req, res) => {
                     userId: req.user._id,
                     date: String(isoDateStr).trim(),
                 });
+                console.log(`[Availability] Specific date query - Found existing: ${existingAvailability ? 'Yes' : 'No'}, Entry mode: isWeekly=${existingAvailability?.isWeekly}, isDaily=${existingAvailability?.isDaily}`);
             } else {
                 // For weekly/daily entries, find entry with same mode
                 existingAvailability = await Availability.findOne({
@@ -524,6 +532,7 @@ export const createAvailability = async (req, res) => {
                     isWeekly: modeIsWeekly,
                     isDaily: modeIsDaily
                 });
+                console.log(`[Availability] Weekly/Daily query (isWeekly=${modeIsWeekly}, isDaily=${modeIsDaily}) - Found existing: ${existingAvailability ? 'Yes' : 'No'}`);
             }
 
             if (existingAvailability) {
@@ -569,9 +578,22 @@ export const createAvailability = async (req, res) => {
                 }
 
                 // Merge existing slots with new slots - preserve all existing slots
-                const existingSlots = existingAvailability.timeSlots || [];
+                // Create a deep copy of existing slots to avoid reference issues
+                // Use map to create new objects with all properties preserved
+                const existingSlots = (existingAvailability.timeSlots || []).map(slot => ({
+                    slot: slot.slot,
+                    status: slot.status,
+                    utcStartTime: slot.utcStartTime,
+                    utcEndTime: slot.utcEndTime,
+                    paymentReferenceId: slot.paymentReferenceId,
+                    lockedAt: slot.lockedAt,
+                    _id: slot._id
+                }));
                 const newSlots = normalizedTimeSlots;
                 const existingSlotsMap = new Map();
+                
+                console.log(`[Availability] Before merge - Existing slots count: ${existingSlots.length}, New slots count: ${newSlots.length}`);
+                console.log(`[Availability] Existing slots:`, existingSlots.map(s => s.slot));
                 
                 // Create a map of existing slots by slot string for quick lookup
                 existingSlots.forEach((slot) => {
@@ -579,21 +601,30 @@ export const createAvailability = async (req, res) => {
                 });
                 
                 // Merge new slots with existing slots - don't delete existing slots
+                let addedCount = 0;
+                let updatedCount = 0;
                 newSlots.forEach((newSlot) => {
                     if (existingSlotsMap.has(newSlot.slot)) {
                         // Slot already exists - only update status if different
                         const existingSlot = existingSlotsMap.get(newSlot.slot);
                         if (existingSlot.status !== newSlot.status) {
                             existingSlot.status = newSlot.status;
+                            updatedCount++;
                         }
                     } else {
                         // New slot - add it to existing slots
                         existingSlots.push(newSlot);
+                        addedCount++;
                     }
                 });
                 
+                console.log(`[Availability] After merge - Total slots: ${existingSlots.length}, Added: ${addedCount}, Updated: ${updatedCount}`);
+                console.log(`[Availability] Final slots:`, existingSlots.map(s => s.slot));
+                
                 // Preserve all existing slots - don't replace, just merge
+                // Use markModified to ensure Mongoose detects the change
                 existingAvailability.timeSlots = existingSlots;
+                existingAvailability.markModified('timeSlots');
                 
                 // Update mode flags - preserve existing flags for specific date entries
                 // For specific date entries (both false), preserve existing mode flags
@@ -620,6 +651,8 @@ export const createAvailability = async (req, res) => {
                 
                 const saved = await existingAvailability.save();
                 console.log(`[Availability] Merged slots for date ${isoDateStr}: ${existingSlots.length} total slots (${newSlots.length} new slots added)`);
+                console.log(`[Availability] Saved entry - timeSlots count: ${saved.timeSlots?.length || 0}`);
+                console.log(`[Availability] Saved entry - timeSlots:`, saved.timeSlots?.map(s => s.slot) || []);
                 return { action: 'updated', doc: saved };
             }
 
@@ -682,9 +715,22 @@ export const createAvailability = async (req, res) => {
                         
                         if (shouldMerge) {
                             // Merge slots into existing entry, preserve its mode flags
-                            const existingSlots = existingEntry.timeSlots || [];
+                            // Create a deep copy of existing slots to avoid reference issues
+                            // Use map to create new objects with all properties preserved
+                            const existingSlots = (existingEntry.timeSlots || []).map(slot => ({
+                                slot: slot.slot,
+                                status: slot.status,
+                                utcStartTime: slot.utcStartTime,
+                                utcEndTime: slot.utcEndTime,
+                                paymentReferenceId: slot.paymentReferenceId,
+                                lockedAt: slot.lockedAt,
+                                _id: slot._id
+                            }));
                             const newSlots = normalizedTimeSlots;
                             const existingSlotsMap = new Map();
+                            
+                            console.log(`[Availability] Duplicate key - Before merge - Existing slots count: ${existingSlots.length}, New slots count: ${newSlots.length}`);
+                            console.log(`[Availability] Duplicate key - Existing slots:`, existingSlots.map(s => s.slot));
                             
                             // Create a map of existing slots by slot string for quick lookup
                             existingSlots.forEach((slot) => {
@@ -692,12 +738,15 @@ export const createAvailability = async (req, res) => {
                             });
                             
                             // Merge new slots with existing slots - don't delete existing slots
+                            let addedCount = 0;
+                            let updatedCount = 0;
                             newSlots.forEach((newSlot) => {
                                 if (existingSlotsMap.has(newSlot.slot)) {
                                     // Slot already exists - update status and UTC times if needed
                                     const existingSlot = existingSlotsMap.get(newSlot.slot);
                                     if (existingSlot.status !== newSlot.status) {
                                         existingSlot.status = newSlot.status;
+                                        updatedCount++;
                                     }
                                     // Update UTC times if they're missing
                                     if (!existingSlot.utcStartTime || !existingSlot.utcEndTime) {
@@ -707,11 +756,17 @@ export const createAvailability = async (req, res) => {
                                 } else {
                                     // New slot - add it to existing slots
                                     existingSlots.push(newSlot);
+                                    addedCount++;
                                 }
                             });
                             
+                            console.log(`[Availability] Duplicate key - After merge - Total slots: ${existingSlots.length}, Added: ${addedCount}, Updated: ${updatedCount}`);
+                            console.log(`[Availability] Duplicate key - Final slots:`, existingSlots.map(s => s.slot));
+                            
                             // Mode flags have been updated above if conversion was needed
+                            // Use markModified to ensure Mongoose detects the change
                             existingEntry.timeSlots = existingSlots;
+                            existingEntry.markModified('timeSlots');
                             
                             const saved = await existingEntry.save();
                             console.log(`[Availability] Merged slots into existing entry for date ${isoDateStr}: ${existingSlots.length} total slots (preserved all existing slots and mode flags)`);
@@ -1135,7 +1190,17 @@ export const updateAvailability = async (req, res) => {
                 }
 
                 // Merge existing slots with new slots - preserve all existing slots
-                const existingSlots = item.timeSlots || [];
+                // Create a deep copy of existing slots to avoid reference issues
+                // Use map to create new objects with all properties preserved
+                const existingSlots = (item.timeSlots || []).map(slot => ({
+                    slot: slot.slot,
+                    status: slot.status,
+                    utcStartTime: slot.utcStartTime,
+                    utcEndTime: slot.utcEndTime,
+                    paymentReferenceId: slot.paymentReferenceId,
+                    lockedAt: slot.lockedAt,
+                    _id: slot._id
+                }));
                 const existingSlotsMap = new Map();
                 
                 // Create a map of existing slots by slot string for quick lookup
@@ -1200,7 +1265,9 @@ export const updateAvailability = async (req, res) => {
                 });
                 
                 // Preserve all existing slots - don't replace, just merge
+                // Use markModified to ensure Mongoose detects the change
                 item.timeSlots = existingSlots;
+                item.markModified('timeSlots');
             } catch (e) {
                 return res.status(400).json({ success: false, message: 'Invalid timeSlots: provide strings or { slot, status } with valid formats' });
             }
