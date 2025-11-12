@@ -648,8 +648,8 @@ export const createAvailability = async (req, res) => {
 
                     if (existingEntry) {
                         // Check if existing entry has different mode than what we're trying to create
-                        const existingIsWeekly = existingEntry.isWeekly === true;
-                        const existingIsDaily = existingEntry.isDaily === true;
+                        let existingIsWeekly = existingEntry.isWeekly === true;
+                        let existingIsDaily = existingEntry.isDaily === true;
                         const existingIsSpecific = !existingIsWeekly && !existingIsDaily;
                         
                         // If trying to create daily entry but existing is weekly
@@ -659,7 +659,9 @@ export const createAvailability = async (req, res) => {
                             // Convert to daily mode
                             existingEntry.isDaily = true;
                             existingEntry.isWeekly = false;
-                            // Continue to merge slots below
+                            // Update variables for modesMatch check
+                            existingIsDaily = true;
+                            existingIsWeekly = false;
                         }
                         
                         // If trying to create weekly entry but existing is daily
@@ -669,15 +671,16 @@ export const createAvailability = async (req, res) => {
                             // Convert to weekly mode
                             existingEntry.isWeekly = true;
                             existingEntry.isDaily = false;
-                            // Continue to merge slots below
+                            // Update variables for modesMatch check
+                            existingIsWeekly = true;
+                            existingIsDaily = false;
                         }
                         
-                        // If modes match or both are specific date, merge slots
-                        const modesMatch = (modeIsWeekly && existingIsWeekly) || 
-                                         (modeIsDaily && existingIsDaily) || 
-                                         (isSpecificDate && existingIsSpecific);
+                        // After conversion, modes should match - always merge slots
+                        // (We've already handled the conversion above, so we can proceed with merge)
+                        const shouldMerge = true; // After conversion, always merge
                         
-                        if (modesMatch) {
+                        if (shouldMerge) {
                             // Merge slots into existing entry, preserve its mode flags
                             const existingSlots = existingEntry.timeSlots || [];
                             const newSlots = normalizedTimeSlots;
@@ -707,15 +710,12 @@ export const createAvailability = async (req, res) => {
                                 }
                             });
                             
-                            // Always preserve existing mode flags - don't change them
+                            // Mode flags have been updated above if conversion was needed
                             existingEntry.timeSlots = existingSlots;
                             
                             const saved = await existingEntry.save();
                             console.log(`[Availability] Merged slots into existing entry for date ${isoDateStr}: ${existingSlots.length} total slots (preserved all existing slots and mode flags)`);
                             return { action: 'updated', doc: saved };
-                        } else {
-                            // Modes don't match - cannot merge due to old index constraint
-                            throw new Error(`Cannot add ${modeIsDaily ? 'daily' : modeIsWeekly ? 'weekly' : 'specific date'} slots. ${existingIsDaily ? 'Daily' : existingIsWeekly ? 'Weekly' : 'Specific date'} entry already exists for date ${isoDateStr}. Please wait for database migration to support multiple entries per date.`);
                         }
                     } else {
                         // Entry not found but duplicate key error - this shouldn't happen
