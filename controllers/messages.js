@@ -1,8 +1,164 @@
 import MessageModel from '../models/Message.js';
 import ConversationModel from '../models/Conversation.js';
 import User from '../models/User.js';
+import Appointment from '../models/Appointment.js';
+import DedicationRequest from '../models/DedicationRequest.js';
 import NotificationHelper from '../utils/notificationHelper.js';
 import { uploadFile } from '../utils/uploadFile.js';
+import { sanitizeUserData } from '../utils/userDataHelper.js';
+import crypto from 'crypto';
+import axios from 'axios';
+import agoraToken from 'agora-token';
+const { ChatTokenBuilder } = agoraToken;
+
+// Constants
+const AGORA_TOKEN_EXPIRATION = 31536000; // 1 year (365 * 24 * 60 * 60)
+
+// Helper: best-effort parse for legacy appointments without utcStartTime
+function parseLocalDateTime(dateStr, timeStr) {
+    try {
+        if (!dateStr || !timeStr || typeof dateStr !== 'string' || typeof timeStr !== 'string') {
+            return null;
+        }
+        const [year, month, day] = dateStr.split('-').map(v => parseInt(v, 10));
+        let hours = 0;
+        let minutes = 0;
+        const match = timeStr.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+        if (match) {
+            hours = parseInt(match[1], 10);
+            minutes = parseInt(match[2], 10);
+            const ampm = match[3].toUpperCase();
+            if (ampm === 'PM' && hours !== 12) hours += 12;
+            if (ampm === 'AM' && hours === 12) hours = 0;
+        }
+        const local = new Date(year || 0, (month || 1) - 1, day || 1, hours, minutes, 0, 0);
+        if (isNaN(local.getTime())) return null;
+        return local;
+    } catch (_) {
+        return null;
+    }
+}
+
+// Utility functions
+function sanitizeAgoraUsername(username) {
+    // Remove or replace invalid characters for Agora Chat
+    return username
+        .replace(/[^a-zA-Z0-9_-]/g, '_') // Replace invalid chars with underscore
+        .replace(/_{2,}/g, '_') // Replace multiple underscores with single
+        .replace(/^_|_$/g, '') // Remove leading/trailing underscores
+        .substring(0, 64); // Limit length to 64 characters
+}
+
+function validateAgoraUsername(username) {
+    // Basic validation - just check if it's not empty after sanitization
+    const sanitized = sanitizeAgoraUsername(username);
+    return sanitized.length > 0;
+}
+
+export function getAgoraUsername(user) {
+    // const rawUsername = user.pseudo || user.name || user._id.toString();
+    return user._id.toString();
+}
+
+function validateAgoraConfig() {
+    const AGORA_APP_ID = process.env.AGORA_APP_ID || '711381888';
+    const AGORA_APP_CERTIFICATE = process.env.AGORA_APP_CERTIFICATE || 'default_certificate';
+    
+    if (!AGORA_APP_ID || !AGORA_APP_CERTIFICATE) {
+        throw new Error('Agora configuration is missing');
+    }
+    
+    return { AGORA_APP_ID, AGORA_APP_CERTIFICATE };
+}
+
+// Agora Chat Token Generation Function
+export function generateChatToken(userId, expireInSeconds = AGORA_TOKEN_EXPIRATION) {
+  const { AGORA_APP_ID: APP_ID, AGORA_APP_CERTIFICATE: APP_CERT } = validateAgoraConfig();
+  
+  // Use agora-token package for proper token generation
+  const userToken = ChatTokenBuilder.buildUserToken(APP_ID, APP_CERT, userId, expireInSeconds);
+  
+  return userToken;
+}
+
+// Generate App Token for admin operations
+function generateAppToken(expireInSeconds = AGORA_TOKEN_EXPIRATION) {
+  const { AGORA_APP_ID: APP_ID, AGORA_APP_CERTIFICATE: APP_CERT } = validateAgoraConfig();
+  
+  // Use agora-token package for app token generation
+  const appToken = ChatTokenBuilder.buildAppToken(APP_ID, APP_CERT, expireInSeconds);
+  
+  return appToken;
+}
+
+// Register user with Agora Chat API
+async function registerUserWithAgoraChat(username, password = null) {
+  try {
+    const { AGORA_APP_ID, AGORA_APP_CERTIFICATE } = validateAgoraConfig();
+    
+    const AGORA_ORG_NAME = process.env.AGORA_ORG_NAME || '711381888';
+    const AGORA_APP_NAME = process.env.AGORA_APP_NAME || '1586836';
+    
+    // Generate app token for user creation (admin operations)
+    const adminToken = generateAppToken(3600);
+    
+    // Use Easemob API format as shown in the example
+    const agoraChatUrl = `https://a71.chat.agora.io/${AGORA_ORG_NAME}/${AGORA_APP_NAME}/users`;
+    
+    console.log('Registering user with Agora Chat:', {
+      url: agoraChatUrl,
+      username: username,
+      appId: AGORA_APP_ID,
+      orgName: AGORA_ORG_NAME,
+      appName: AGORA_APP_NAME
+    });
+    
+    const requestBody = {
+      username: username
+    };
+    
+    // Add password if provided
+    if (password) {
+      requestBody.password = password;
+    }
+    
+    const response = await axios.post(agoraChatUrl, requestBody, {
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${adminToken}`
+      },
+      timeout: 10000
+    });
+    
+    console.log('Agora Chat registration successful:', response.data);
+    
+    return {
+      success: true,
+      data: response.data
+    };
+  } catch (error) {
+    console.error('Agora Chat registration error:', {
+      status: error.response?.status,
+      data: error.response?.data,
+      message: error.message
+    });
+    
+    // Handle specific error cases
+    if (error.response?.status === 400 && error.response?.data?.error === 'duplicate_unique_property_exists') {
+      return {
+        success: true,
+        data: { message: 'User already exists', username: username },
+        alreadyExists: true
+      };
+    }
+    
+    return {
+      success: false,
+      error: error.response?.data || error.message,
+      status: error.response?.status
+    };
+  }
+}
 
 export const storeMessage = async (req, res) => {
     const { conversationId, receiverId, message, type } = req.body;
@@ -40,12 +196,12 @@ export const storeMessage = async (req, res) => {
         }
 
         // Enforce messaging: only fan can initiate to star; block others
-        if (!(sender.role === 'fan' && receiver.role === 'star')) {
-            return res.status(400).json({
-                success: false,
-                message: 'Only fans can initiate conversations with stars'
-            });
-        }
+        // if (!(sender.role === 'fan' && receiver.role === 'star')) {
+        //     return res.status(400).json({
+        //         success: false,
+        //         message: 'Only fans can initiate conversations with stars'
+        //     });
+        // }
 
         const participants = [String(authSenderId), String(receiverId)].sort();
 
@@ -98,12 +254,15 @@ export const storeMessage = async (req, res) => {
     }
 
     // Create message data object
+    // IMPORTANT: isRead should always be false for new messages
+    // Only the receiver can mark messages as read via markMessagesAsRead endpoint
     const messageData = {
         conversationId: actualConversationId,
         senderId: authSenderId,
         receiverId: effectiveReceiverId,
         message: message || '',
-        type: type || 'text'
+        type: type || 'text',
+        isRead: false // Always false when message is created - receiver must mark as read
     };
 
     // Handle image upload if file is provided
@@ -151,8 +310,8 @@ export const listMessages = async (req, res) => {
 
         const messages = await MessageModel.find({ conversationId })
             .sort({ createdAt: 1 })
-            .populate('senderId', 'name pseudo profilePic baroniId role')
-            .populate('receiverId', 'name pseudo profilePic baroniId role')
+            .populate('senderId', 'name pseudo profilePic baroniId role agoraKey')
+            .populate('receiverId', 'name pseudo profilePic baroniId role agoraKey')
             .lean();
 
         const authUserId = String(req.user && req.user._id ? req.user._id : '');
@@ -163,6 +322,8 @@ export const listMessages = async (req, res) => {
                 : String(sender);
             return {
                 ...msg,
+                senderId: msg.senderId ? sanitizeUserData(msg.senderId) : msg.senderId,
+                receiverId: msg.receiverId ? sanitizeUserData(msg.receiverId) : msg.receiverId,
                 isMine: senderIdString === authUserId
             };
         });
@@ -202,11 +363,97 @@ export const getUserConversations = async (req, res) => {
                     .select('name pseudo profilePic baroniId role')
                     .lean();
 
+                // Get unread message count for this conversation (messages where current user is receiver and isRead is false)
+                const unreadCount = await MessageModel.countDocuments({
+                    conversationId: conv._id,
+                    receiverId: userId,
+                    isRead: false
+                });
+
+                // Get unread message count for the other participant (receiver_unread_count)
+                // Count messages where the other participant is receiver and isRead is false
+                const receiverUnreadCount = otherParticipantId
+                    ? await MessageModel.countDocuments({
+                          conversationId: conv._id,
+                          receiverId: otherParticipantId,
+                          isRead: false
+                      })
+                    : 0;
+
+                // Get the last message in this conversation to check its read status
+                const lastMessage = await MessageModel.findOne({
+                    conversationId: conv._id
+                })
+                .sort({ createdAt: -1 })
+                .select('isRead receiverId senderId')
+                .lean();
+
+                // Determine if last message is read for current user
+                // Last message is considered "read" if:
+                // 1. Current user is the sender (they sent it, so it's "read" from their perspective)
+                // 2. OR current user is the receiver AND isRead is true
+                let lastMessageIsRead = true; // Default to true
+                if (lastMessage) {
+                    const lastMessageSenderId = String(lastMessage.senderId || '');
+                    const lastMessageReceiverId = String(lastMessage.receiverId || '');
+                    const currentUserIdStr = String(userId);
+
+                    if (lastMessageSenderId === currentUserIdStr) {
+                        // User sent this message - considered "read" (sender always sees their own messages as read)
+                        lastMessageIsRead = true;
+                    } else if (lastMessageReceiverId === currentUserIdStr) {
+                        // User received this message - check isRead status
+                        lastMessageIsRead = lastMessage.isRead === true;
+                    }
+                }
+
+                // Determine if there is any upcoming appointment or dedication between the two users
+                const now = new Date();
+
+                let isMessage = false;
+
+                if (otherParticipantId) {
+                    // Fetch relevant appointments and dedications between the two users
+                    const [appointments, dedication] = await Promise.all([
+                        Appointment.find({
+                            $or: [
+                                { fanId: userId, starId: otherParticipantId },
+                                { fanId: otherParticipantId, starId: userId }
+                            ],
+                            status: { $in: ['pending', 'approved', 'in_progress', 'rescheduled'] }
+                        }).select('utcStartTime date time').lean(),
+                        DedicationRequest.findOne({
+                            $or: [
+                                { fanId: userId, starId: otherParticipantId },
+                                { fanId: otherParticipantId, starId: userId }
+                            ],
+                            eventDate: { $gt: now },
+                            status: { $in: ['pending', 'approved'] }
+                        }).lean()
+                    ]);
+
+                    // Check any appointment in future using utcStartTime, fallback to parsed local date/time
+                    const hasUpcomingAppointment = (appointments || []).some(appt => {
+                        if (appt.utcStartTime) {
+                            const t = new Date(appt.utcStartTime);
+                            return !isNaN(t.getTime()) && t > now;
+                        }
+                        const parsed = parseLocalDateTime(appt.date, appt.time);
+                        return parsed && parsed > now;
+                    });
+
+                    isMessage = Boolean(hasUpcomingAppointment || dedication);
+                }
+
                 return {
                     _id: conv._id,
                     lastMessage: conv.lastMessage,
                     lastMessageAt: conv.lastMessageAt,
-                    otherParticipant: otherUser,
+                    lastMessageIsRead: lastMessageIsRead, // true if last message is read, false if unread
+                    otherParticipant: otherUser ? sanitizeUserData(otherUser) : otherUser,
+                    unreadCount: unreadCount, // Count of unread messages where current user is receiver
+                    receiver_unread_count: receiverUnreadCount, // Count of unread messages for the other participant
+                    is_message: isMessage,
                     createdAt: conv.createdAt,
                     updatedAt: conv.updatedAt
                 };
@@ -221,6 +468,338 @@ export const getUserConversations = async (req, res) => {
         res.status(500).json({
             success: false,
             message: 'Error fetching conversations',
+            error: error.message
+        });
+    }
+};
+
+// Generate token for an existing user (similar to the example)
+export const generateUserToken = async (req, res) => {
+    try {
+        const userId = String(req.user._id);
+        const { username } = req.body;
+        
+        // Validate username if provided, otherwise use user's pseudo/name
+        const user = await User.findById(userId);
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: 'User not found'
+            });
+        }
+        
+        const agoraUsername = username || getAgoraUsername(user);
+        
+        console.log('Username processing:', {
+            originalUsername: username,
+            userPseudo: user.pseudo,
+            userName: user.name,
+            userId: user._id.toString(),
+            finalUsername: agoraUsername
+        });
+        
+        // Validate username format
+        if (!validateAgoraUsername(agoraUsername)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Username cannot be empty or contain only invalid characters.',
+                debug: {
+                    originalUsername: username,
+                    processedUsername: agoraUsername,
+                    userPseudo: user.pseudo,
+                    userName: user.name
+                }
+            });
+        }
+        
+        // Generate token for the user
+        const token = generateChatToken(agoraUsername, AGORA_TOKEN_EXPIRATION);
+        
+        // Save chat token to user document
+        await User.findByIdAndUpdate(userId, {
+            chatToken: token
+        });
+        
+        res.json({
+            success: true,
+            message: 'Token generated successfully',
+            data: {
+                agoraUsername: agoraUsername,
+                chatToken: token,
+                uuid: user._id.toString() // Using user ID as UUID for consistency
+            }
+        });
+    } catch (error) {
+        console.error('Generate user token error:', error);
+        
+        if (error.message.includes('Agora App ID and Certificate are required')) {
+            return res.status(500).json({
+                success: false,
+                message: 'Agora configuration is missing',
+                error: 'Server configuration error'
+            });
+        }
+        
+        res.status(500).json({
+            success: false,
+            message: 'Error generating token',
+            error: error.message
+        });
+    }
+};
+
+// Helper function to register user for messaging (can be called internally)
+export async function registerUserForMessagingInternal(userId) {
+    try {
+        // Validate user exists
+        const user = await User.findById(userId);
+        if (!user) {
+            throw new Error('User not found');
+        }
+
+        // Validate user has required fields
+        if (!user.pseudo && !user.name) {
+            throw new Error('User must have a pseudo or name to register for messaging');
+        }
+
+        // Use user's pseudo or name as username for Agora Chat
+        const agoraUsername = getAgoraUsername(user);
+        
+        console.log('Registration username processing:', {
+            userPseudo: user.pseudo,
+            userName: user.name,
+            userId: user._id.toString(),
+            finalUsername: agoraUsername
+        });
+        
+        // Validate username format (Agora Chat requirements)
+        if (!validateAgoraUsername(agoraUsername)) {
+            throw new Error('Username cannot be empty or contain only invalid characters.');
+        }
+        
+        // Register user with Agora Chat API
+        const agoraRegistration = await registerUserWithAgoraChat(agoraUsername);
+        
+        // Check if registration was successful
+        if (!agoraRegistration.success) {
+            throw new Error(`Failed to register user with Agora Chat: ${agoraRegistration.error}`);
+        }
+        
+        // Generate Agora Chat Token for the user
+        const chatToken = generateChatToken(agoraUsername, AGORA_TOKEN_EXPIRATION);
+
+        // Save chat token to user document
+        await User.findByIdAndUpdate(userId, {
+            chatToken: chatToken
+        });
+
+        // Extract UUID from Agora registration response
+        const uuid = agoraRegistration.data?.entities?.[0]?.uuid || null;
+        
+        return {
+            success: true,
+            message: agoraRegistration.alreadyExists 
+                ? 'User already registered for messaging' 
+                : 'User registered for messaging successfully',
+            data: {
+                agoraUsername: agoraUsername,
+                chatToken: chatToken,
+                uuid: uuid
+            },
+            alreadyExists: agoraRegistration.alreadyExists || false
+        };
+    } catch (error) {
+        console.error('Register user for messaging error:', error);
+        throw error;
+    }
+}
+
+export const markMessagesAsRead = async (req, res) => {
+    try {
+        const { conversationId } = req.params;
+        const userId = req.user._id; // Keep as ObjectId for proper MongoDB comparison
+
+        // Validate conversation exists and user is a participant
+        const conversation = await ConversationModel.findById(conversationId).lean();
+        if (!conversation) {
+            return res.status(404).json({
+                success: false,
+                message: 'Conversation not found'
+            });
+        }
+
+        const participants = (conversation.participants || []).map(String);
+        if (!participants.includes(String(userId))) {
+            return res.status(403).json({
+                success: false,
+                message: 'Not allowed in this conversation'
+            });
+        }
+
+        // Mark ALL messages in this conversation as read for the current user
+        // IMPORTANT: Only mark messages where current user is the RECEIVER (not sender)
+        // Sender's own messages should never be marked as read automatically
+        // This ensures proper read tracking: only messages you received can be marked as read
+        const result = await MessageModel.updateMany(
+            {
+                conversationId: conversationId,
+                receiverId: userId, // Only messages where current user is the receiver
+                senderId: { $ne: userId } // Exclude messages where user is the sender (double safety)
+            },
+            {
+                $set: { isRead: true }
+            }
+        );
+
+        console.log(`[MarkMessagesAsRead] Marked ${result.modifiedCount} messages as read for conversation ${conversationId}`);
+        console.log(`[MarkMessagesAsRead] User ${userId} marked ${result.modifiedCount} received messages as read (sender messages excluded)`);
+
+        res.json({
+            success: true,
+            message: 'Messages marked as read successfully',
+            data: {
+                conversationId,
+                modifiedCount: result.modifiedCount,
+                matchedCount: result.matchedCount
+            }
+        });
+    } catch (error) {
+        console.error('[MarkMessagesAsRead] Error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error marking messages as read',
+            error: error.message
+        });
+    }
+};
+
+export const registerUserForMessaging = async (req, res) => {
+    try {
+        const userId = String(req.user._id);
+        
+        // Validate user exists
+        const user = await User.findById(userId);
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: 'User not found'
+            });
+        }
+
+        // Validate user has required fields
+        if (!user.pseudo && !user.name) {
+            return res.status(400).json({
+                success: false,
+                message: 'User must have a pseudo or name to register for messaging'
+            });
+        }
+
+        // Use user's pseudo or name as username for Agora Chat
+        const agoraUsername = getAgoraUsername(user);
+        
+        console.log('Registration username processing:', {
+            userPseudo: user.pseudo,
+            userName: user.name,
+            userId: user._id.toString(),
+            finalUsername: agoraUsername
+        });
+        
+        // Validate username format (Agora Chat requirements)
+        if (!validateAgoraUsername(agoraUsername)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Username cannot be empty or contain only invalid characters.',
+                debug: {
+                    processedUsername: agoraUsername,
+                    userPseudo: user.pseudo,
+                    userName: user.name
+                }
+            });
+        }
+        
+        // Register user with Agora Chat API
+        const agoraRegistration = await registerUserWithAgoraChat(agoraUsername);
+        
+        // Check if registration was successful
+        if (!agoraRegistration.success) {
+            return res.status(500).json({
+                success: false,
+                message: 'Failed to register user with Agora Chat',
+                error: agoraRegistration.error
+            });
+        }
+        
+        // Generate Agora Chat Token for the user
+        const chatToken = generateChatToken(agoraUsername, AGORA_TOKEN_EXPIRATION);
+
+        // Save chat token to user document
+        await User.findByIdAndUpdate(userId, {
+            chatToken: chatToken
+        });
+
+        // Extract UUID from Agora registration response
+        const uuid = agoraRegistration.data?.entities?.[0]?.uuid || null;
+        
+        res.json({
+            success: true,
+            message: agoraRegistration.alreadyExists 
+                ? 'User already registered for messaging' 
+                : 'User registered for messaging successfully',
+            data: {
+                agoraUsername: agoraUsername,
+                chatToken: chatToken,
+                uuid: uuid
+            }
+        });
+    } catch (error) {
+        console.error('Register user for messaging error:', error);
+        
+        // Handle specific error types
+        if (error.message.includes('Agora App ID and Certificate are required')) {
+            return res.status(500).json({
+                success: false,
+                message: 'Agora configuration is missing',
+                error: 'Server configuration error'
+            });
+        }
+        
+        res.status(500).json({
+            success: false,
+            message: 'Error registering user for messaging',
+            error: error.message
+        });
+    }
+};
+
+// Clear chat token for authenticated user
+export const clearChatToken = async (req, res) => {
+    try {
+        const userId = String(req.user._id);
+        
+        // Find the user
+        const user = await User.findById(userId);
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: 'User not found'
+            });
+        }
+        
+        // Clear the chat token by setting it to null
+        await User.findByIdAndUpdate(userId, {
+            $unset: { chatToken: 1 }
+        });
+        
+        res.json({
+            success: true,
+            message: 'Chat token cleared successfully'
+        });
+    } catch (error) {
+        console.error('Clear chat token error:', error);
+        
+        res.status(500).json({
+            success: false,
+            message: 'Error clearing chat token',
             error: error.message
         });
     }

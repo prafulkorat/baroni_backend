@@ -21,6 +21,19 @@ import notificationsRouter from './api/notifications.js';
 import ratingsRouter from './api/ratings.js';
 import analyticsRouter from './api/analytics.js';
 import configRouter from './api/config.js';
+import adminRouter from './api/admin.js';
+import adminDashboardRouter from './api/adminDashboard.js';
+import adminManagementRouter from './api/adminManagement.js';
+import adminRatingManagementRouter from './api/adminRatingManagement.js';
+import adminAppointmentManagementRouter from './api/adminAppointmentManagement.js';
+import adminCallLogsRouter from './api/adminCallLogs.js';
+import eventsRouter from './api/events.js';
+import adsRouter from './api/ads.js';
+import supportManagerRouter from './api/supportManager.js';
+import adminWalletRouter from './api/adminWallet.js';
+import adminCommissionRouter from './api/adminCommission.js';
+import adminRefundsRouter from './api/adminRefunds.js';
+import adminJackpotRouter from './api/adminJackpot.js';
 
 const router = express.Router();
 
@@ -46,6 +59,19 @@ router.use('/notifications', notificationsRouter);
 router.use('/ratings', ratingsRouter);
 router.use('/analytics', analyticsRouter);
 router.use('/config', configRouter);
+router.use('/admin', adminRouter);
+router.use('/admin/dashboard', adminDashboardRouter);
+router.use('/admin/management', adminManagementRouter);
+router.use('/admin/rating-management', adminRatingManagementRouter);
+router.use('/admin/appointments', adminAppointmentManagementRouter);
+router.use('/admin/call-logs', adminCallLogsRouter);
+router.use('/admin/wallet', adminWalletRouter);
+router.use('/admin/commissions', adminCommissionRouter);
+router.use('/admin/refunds', adminRefundsRouter);
+router.use('/admin/jackpot', adminJackpotRouter);
+router.use('/events', eventsRouter);
+router.use('/ads', adsRouter);
+router.use('/support-manager', supportManagerRouter);
 
 export default router;
 

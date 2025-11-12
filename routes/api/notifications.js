@@ -1,6 +1,7 @@
 import express from 'express';
 import { requireAuth } from '../../middlewares/auth.js';
-import { updateFcmToken } from '../../controllers/auth.js';
+import { updateFcmToken, updateApnsToken } from '../../controllers/auth.js';
+import { paginationQueryValidator } from '../../validators/commonValidators.js';
 import {
   getUserNotifications,
   deleteNotification,
@@ -8,7 +9,8 @@ import {
   sendNotificationToUser,
   sendNotificationToMultipleUsers,
   sendNotificationToLiveShowAttendees,
-  sendTestNotification
+  sendTestNotification,
+  debugUserNotificationSettings
 } from '../../controllers/notification.js';
 
 const router = express.Router();
@@ -18,11 +20,14 @@ router.use(requireAuth);
 // Update FCM token
 router.patch('/fcm-token', updateFcmToken);
 
+// Update APNs token
+router.patch('/apns-token', updateApnsToken);
+
 // Test notification (for development)
 router.post('/test', sendTestNotification);
 
 // Get user notifications with pagination and filtering
-router.get('/', getUserNotifications);
+router.get('/', paginationQueryValidator, getUserNotifications);
 
 // Get notification statistics
 router.get('/stats', getNotificationStats);
@@ -38,5 +43,8 @@ router.post('/send/bulk', sendNotificationToMultipleUsers);
 
 // Send notification to all attendees of a specific live show
 router.post('/send/live-show-attendees', sendNotificationToLiveShowAttendees);
+
+// Debug user notification settings (admin only)
+router.get('/debug/user/:userId', debugUserNotificationSettings);
 
 export default router;

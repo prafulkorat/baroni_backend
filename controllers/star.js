@@ -9,10 +9,15 @@ import LiveShowAttendance from "../models/LiveShowAttendance.js";
 import Appointment from "../models/Appointment.js";
 import DedicationRequest from "../models/DedicationRequest.js";
 import Transaction from "../models/Transaction.js";
-import { createTransaction, completeTransaction, createHybridTransaction } from "../services/transactionService.js";
-import { TRANSACTION_DESCRIPTIONS, TRANSACTION_TYPES } from "../utils/transactionConstants.js";
+import Conversation from "../models/Conversation.js";
+import { createTransaction, completeTransaction, createHybridTransaction, cancelTransaction } from "../services/transactionService.js";
+import { TRANSACTION_DESCRIPTIONS, TRANSACTION_TYPES, createTransactionDescription } from "../utils/transactionConstants.js";
 import { generateUniqueGoldBaroniId, generateUniqueBaroniId } from "../utils/baroniIdGenerator.js";
 import Review from "../models/Review.js";
+import { sanitizeUserData, sanitizeUserDataArray } from "../utils/userDataHelper.js";
+import NotificationHelper from "../utils/notificationHelper.js";
+import { createDefaultRating } from "../utils/defaultRatingHelper.js";
+import { createDefaultDailySlots } from "../utils/defaultAvailabilityHelper.js";
 
 /**
  * Get available baroni ID patterns for becoming a star
@@ -22,10 +27,10 @@ export const getBaroniIdPatterns = async (req, res) => {
     try {
         // Generate a standard baroni ID pattern (5-digit random)
         const standardId = await generateUniqueBaroniId();
-        
+
         // Generate a gold baroni ID pattern (5-digit from predefined list)
         const goldId = await generateUniqueGoldBaroniId();
-        
+
         return res.status(200).json({
             success: true,
             data: {
@@ -46,15 +51,16 @@ export const getBaroniIdPatterns = async (req, res) => {
 
 /**
  * Fan pays to become a Star (Standard or Gold)
- * Body: { plan: 'standard' | 'gold', amount: number, paymentMode: 'coin' | 'external', paymentDescription?, baroniId? }
+ * Body: { plan: 'standard' | 'gold', amount: number, contact: string, baroniId? }
  * - If plan is 'standard': use provided baroniId or keep existing baroniId
  * - If plan is 'gold': use provided baroniId or assign a unique GOLD patterned baroniId
+ * - Uses hybrid payment: coins first, then external payment if needed
  * - Transaction is created with receiver = admin (first admin user)
- * - On success, user role becomes 'star'
+ * - User only becomes star when payment is completed
  */
 export const becomeStar = async (req, res) => {
     try {
-        const { plan, amount, paymentMode = 'coin', paymentDescription, baroniId } = req.body;
+        const { plan, amount, contact, baroniId } = req.body;
 
         if (req.user.role !== 'fan') {
             return res.status(403).json({ success: false, message: 'Only fans can become stars' });
@@ -64,8 +70,25 @@ export const becomeStar = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Invalid plan. Use standard or gold' });
         }
 
+        // Validate contact number
+        if (!contact || typeof contact !== 'string' || !contact.trim()) {
+            return res.status(400).json({ success: false, message: 'Contact number is required' });
+        }
+
         // Check for pending commitments - fan must complete or cancel all before becoming star
         const userId = req.user._id;
+
+        // Allow users to make multiple payment attempts
+        // Don't cancel existing pending payments - fans can retry anytime
+        const existingStarPayment = await Transaction.findOne({
+            payerId: userId,
+            type: TRANSACTION_TYPES.BECOME_STAR_PAYMENT,
+            status: { $in: ['initiated', 'pending'] }
+        });
+
+        if (existingStarPayment) {
+            console.log(`[BecomeStar] User ${userId} already has a pending payment ${existingStarPayment._id}, creating new one anyway`);
+        }
         
         const [pendingDedications, pendingAppointments, pendingLiveShows] = await Promise.all([
             // Check for pending or approved dedication requests where user is the fan
@@ -73,13 +96,13 @@ export const becomeStar = async (req, res) => {
                 fanId: userId,
                 status: { $in: ['pending', 'approved'] }
             }),
-            
+
             // Check for pending or approved appointments where user is the fan
             Appointment.countDocuments({
                 fanId: userId,
                 status: { $in: ['pending', 'approved'] }
             }),
-            
+
             // Check for pending live show attendances where user is the fan
             LiveShowAttendance.countDocuments({
                 fanId: userId,
@@ -91,13 +114,13 @@ export const becomeStar = async (req, res) => {
 
         if (totalPendingCommitments > 0) {
             const commitmentDetails = [];
-            if (pendingDedications > 0) commitmentDetails.push(`${pendingDedications} dedication request(s)`);
-            if (pendingAppointments > 0) commitmentDetails.push(`${pendingAppointments} appointment(s)`);
-            if (pendingLiveShows > 0) commitmentDetails.push(`${pendingLiveShows} live show attendance(s)`);
+            if (pendingDedications > 0) commitmentDetails.push(`${pendingDedications} dedication request`);
+            if (pendingAppointments > 0) commitmentDetails.push(`${pendingAppointments} appointment`);
+            if (pendingLiveShows > 0) commitmentDetails.push(`${pendingLiveShows} live show attendance`);
 
             return res.status(400).json({
                 success: false,
-                message: `You have ${totalPendingCommitments} pending commitment(s) that must be completed or cancelled before becoming a star: ${commitmentDetails.join(', ')}. Please complete or cancel all your pending commitments first.`
+                message: `You have ${totalPendingCommitments} pending commitment that must be completed or cancelled before becoming a star: ${commitmentDetails.join(', ')}. Please complete or cancel all your pending commitments first.`
             });
         }
 
@@ -111,9 +134,9 @@ export const becomeStar = async (req, res) => {
             // Check if the provided baroniId already exists
             const existingUser = await User.findOne({ baroniId: String(baroniId) });
             if (existingUser) {
-                return res.status(400).json({ 
-                    success: false, 
-                    message: 'Baroni ID already exists, please try again' 
+                return res.status(400).json({
+                    success: false,
+                    message: 'Baroni ID already exists, please try again'
                 });
             }
         }
@@ -124,42 +147,38 @@ export const becomeStar = async (req, res) => {
             return res.status(500).json({ success: false, message: 'Admin account not configured' });
         }
 
-        // Create transaction from fan to admin
+        // Normalize contact number
+        const { normalizeContact } = await import('../utils/normalizeContact.js');
+        const normalizedPhone = normalizeContact(contact);
+        if (!normalizedPhone) {
+            return res.status(400).json({ success: false, message: 'Invalid contact number format' });
+        }
+
+        // Create hybrid transaction from fan to admin
+        let transactionResult;
         try {
-            if (paymentMode === 'external') {
-                // For external payments, use hybrid flow and require contact from payload
-                const { contact } = req.body || {};
-                const { normalizeContact } = await import('../utils/normalizeContact.js');
-                const normalizedPhone = normalizeContact(contact || '');
-                if (!normalizedPhone) {
-                    return res.status(400).json({ success: false, message: 'User phone number is required' });
-                }
-                await createHybridTransaction({
-                    type: TRANSACTION_TYPES.BECOME_STAR_PAYMENT,
-                    payerId: req.user._id,
-                    receiverId: adminUser._id,
-                    amount: numericAmount,
-                    description: TRANSACTION_DESCRIPTIONS[TRANSACTION_TYPES.BECOME_STAR_PAYMENT],
-                    userPhone: normalizedPhone,
-                    starName: undefined,
-                    metadata: { plan }
-                });
-            } else {
-                await createTransaction({
-                    type: TRANSACTION_TYPES.BECOME_STAR_PAYMENT,
-                    payerId: req.user._id,
-                    receiverId: adminUser._id,
-                    amount: numericAmount,
-                    description: paymentMode === 'external' && paymentDescription ? String(paymentDescription) : TRANSACTION_DESCRIPTIONS[TRANSACTION_TYPES.BECOME_STAR_PAYMENT],
-                    paymentMode,
-                    metadata: { plan }
-                });
-            }
+            console.log(`[BecomeStar] Creating transaction for user ${req.user._id} with amount ${numericAmount}`);
+            
+            transactionResult = await createHybridTransaction({
+                type: TRANSACTION_TYPES.BECOME_STAR_PAYMENT,
+                payerId: req.user._id,
+                receiverId: adminUser._id,
+                amount: numericAmount,
+                description: createTransactionDescription(TRANSACTION_TYPES.BECOME_STAR_PAYMENT, req.user.name || req.user.pseudo || '', 'Admin', req.user.role || 'fan', 'admin'),
+                userPhone: normalizedPhone,
+                starName: req.user.name || '',
+                metadata: { plan }
+            });
+            
+            console.log(`[BecomeStar] Transaction result:`, transactionResult);
         } catch (transactionError) {
+            console.error(`[BecomeStar] Transaction creation failed:`, transactionError);
             return res.status(400).json({ success: false, message: 'Transaction failed: ' + transactionError.message });
         }
 
         // Retrieve the transaction
+        console.log(`[BecomeStar] Retrieving transaction for user ${req.user._id}`);
+        
         const transaction = await Transaction.findOne({
             payerId: req.user._id,
             receiverId: adminUser._id,
@@ -167,19 +186,29 @@ export const becomeStar = async (req, res) => {
             status: { $in: ['pending', 'initiated'] }
         }).sort({ createdAt: -1 });
 
+        console.log(`[BecomeStar] Retrieved transaction:`, transaction ? {
+            id: transaction._id,
+            type: transaction.type,
+            status: transaction.status,
+            amount: transaction.amount,
+            paymentMode: transaction.paymentMode,
+            coinAmount: transaction.coinAmount,
+            externalAmount: transaction.externalAmount,
+            externalPaymentId: transaction.externalPaymentId
+        } : 'No transaction found');
+
         if (!transaction) {
+            console.error(`[BecomeStar] No transaction found for user ${req.user._id}`);
             return res.status(500).json({ success: false, message: 'Failed to retrieve transaction' });
         }
 
-        // Complete the transaction immediately only for coin mode
-        if (paymentMode !== 'external') {
-            await completeTransaction(transaction._id);
-        }
+        // Update user with payment status and baroniId (but don't change role yet)
+        let updates = { 
+            paymentStatus: transaction.status === 'initiated' ? 'initiated' : 'pending',
+            role: 'fan', // Keep as fan until payment is completed
+        };
 
-        // Handle baroniId assignment on becoming a star
-        let updates = { role: 'star' };
-
-        // Always assign a baroniId when promoting to star
+        // Assign baroniId based on plan
         if (String(plan) === 'gold') {
             // Assign gold Baroni ID from predefined list
             const newGoldId = await generateUniqueGoldBaroniId();
@@ -192,19 +221,58 @@ export const becomeStar = async (req, res) => {
 
         const updatedUser = await User.findByIdAndUpdate(req.user._id, { $set: updates }, { new: true });
 
+        // Complete the transaction immediately only for coin-only payments
+        if (transactionResult.paymentMode === 'coin') {
+            await completeTransaction(transaction._id);
+            // Update user role to star for coin-only payments and set default about text
+            const starUpdateResult = await User.findByIdAndUpdate(req.user._id, { 
+                $set: { 
+                    role: 'star', 
+                    paymentStatus: 'completed',
+                    about: "Coucou, c'est ta star 🌟 ! Je suis là pour te partager de la bonne humeur, de l'énergie et des dédicaces pleines d'amour."
+                } 
+            }, { new: true });
+
+            // Verify user was successfully updated to star before creating default resources
+            if (!starUpdateResult || starUpdateResult.role !== 'star') {
+                console.error(`[BecomeStar] Failed to update user ${req.user._id} to star role. Skipping default resources creation.`);
+            } else {
+                // Create default 5 rating for the new star
+                await createDefaultRating(req.user._id);
+
+                // Create default daily slots for the new star (5 slots from 21:00-21:50, 10 min each)
+                await createDefaultDailySlots(req.user._id);
+
+                // Send star promotion notification for coin-only payments
+                await sendStarPromotionNotification(req.user._id);
+            }
+        }
+
         const responseBody = {
             success: true,
-            message: 'You are now a Baroni Star',
+            message: transactionResult.paymentMode === 'coin' 
+                ? 'You are now a Baroni Star' 
+                : 'Payment initiated. Complete the external payment to become a Baroni Star',
             data: {
                 user: {
                     id: updatedUser._id,
                     baroniId: updatedUser.baroniId,
-                    role: updatedUser.role
+                    role: updatedUser.role,
+                    paymentStatus: updatedUser.paymentStatus
                 },
                 transactionId: transaction._id,
-                plan
+                plan,
+                paymentMode: transactionResult.paymentMode,
+                coinAmount: transactionResult.coinAmount,
+                externalAmount: transactionResult.externalAmount
             }
         };
+
+        // Add external payment message if hybrid payment
+        if (transactionResult.paymentMode === 'hybrid' && transactionResult.externalPaymentMessage) {
+            responseBody.data.externalPaymentMessage = transactionResult.externalPaymentMessage;
+        }
+
         return res.status(200).json(responseBody);
     } catch (err) {
         return res.status(500).json({ success: false, message: err.message });
@@ -214,95 +282,342 @@ export const becomeStar = async (req, res) => {
 export const getAllStars = async (req, res) => {
     try {
         const { q, country, category } = req.query;
+        console.log('getAllStars called with params:', { q, country, category });
+        
+        // Debug: Check total stars in database
+        const totalStars = await User.countDocuments({ role: "star", isDeleted: { $ne: true } });
+        console.log('Total stars in database:', totalStars);
+        
+        // Debug: Check stars by country if country filter is applied
+        if (country && country.trim()) {
+            const starsByCountry = await User.find({ 
+                role: "star", 
+                isDeleted: { $ne: true },
+                country: { $exists: true, $ne: null, $ne: '' }
+            }).select('country name pseudo').limit(10);
+            console.log('Sample stars by country:', starsByCountry.map(s => ({ name: s.name, pseudo: s.pseudo, country: s.country })));
+        }
         const filter = {
             role: "star",
-            hidden: { $ne: true }, // Exclude hidden stars from general search
-            // Only include stars that have filled up their details
-            $and: [
-                { name: { $exists: true, $ne: null } },
-                { name: { $ne: '' } },
-                { pseudo: { $exists: true, $ne: null } },
-                { pseudo: { $ne: '' } },
-                { about: { $exists: true, $ne: null } },
-                { about: { $ne: '' } },
-                { location: { $exists: true, $ne: null } },
-                { location: { $ne: '' } },
-                { profession: { $exists: true, $ne: null } }
-            ]
+            hidden: { $ne: true }, // Always exclude hidden stars from name/pseudo search
+            isDeleted: { $ne: true }, // Exclude deleted users from search
+            // Basic requirements - only check for essential fields
+            name: { $exists: true, $ne: null, $ne: '' },
+            pseudo: { $exists: true, $ne: null, $ne: '' }
         };
-        
-        // Apply country filter with case-insensitive matching
+
+        // Apply country filter with normalization for common variations
         if (country && country.trim()) {
-            filter.country = { $regex: new RegExp(`^${country.trim()}$`, 'i') };
+            const countryVariations = {
+                'india': ['India', 'भारत', 'Bharat', 'IN', 'IND'],
+                'bharat': ['India', 'भारत', 'Bharat', 'IN', 'IND'],
+                'भारत': ['India', 'भारत', 'Bharat', 'IN', 'IND'],
+                'usa': ['USA', 'United States', 'America', 'US'],
+                'united states': ['USA', 'United States', 'America', 'US'],
+                'america': ['USA', 'United States', 'America', 'US'],
+                'uk': ['UK', 'United Kingdom', 'Britain', 'England'],
+                'united kingdom': ['UK', 'United Kingdom', 'Britain', 'England'],
+                'canada': ['Canada', 'CA'],
+                'australia': ['Australia', 'AU'],
+                'france': ['France', 'FR'],
+                'germany': ['Germany', 'DE'],
+                'japan': ['Japan', 'JP'],
+                'china': ['China', 'CN'],
+                'brazil': ['Brazil', 'BR']
+            };
+            
+            const normalizedCountry = country.trim().toLowerCase();
+            const variations = countryVariations[normalizedCountry];
+            
+            if (variations) {
+                console.log(`Normalizing country "${country.trim()}" to variations:`, variations);
+                filter.country = { $in: variations };
+            } else {
+                console.log(`Using exact country match for: ${country.trim()}`);
+                filter.country = { $regex: new RegExp(`^${country.trim()}$`, 'i') };
+            }
         }
-        
+
         // Apply category filter
         if (category && category.trim()) {
-            filter.profession = category.trim();
+            console.log('Processing category filter for:', category.trim());
+            // Find the category by name to get its ObjectId
+            const Category = (await import('../models/Category.js')).default;
+            
+            // Debug: List all available categories
+            const allCategories = await Category.find({}).select('name _id');
+            console.log('All available categories:', allCategories.map(c => `${c.name} (${c._id})`));
+            
+            // Try exact match first, then fuzzy match
+            let categoryDoc = await Category.findOne({ 
+                name: { $regex: new RegExp(`^${category.trim()}$`, 'i') } 
+            });
+            
+            // If not found, try common variations
+            if (!categoryDoc) {
+                const categoryVariations = {
+                    'singer': 'Musicians',
+                    'singers': 'Musicians',
+                    'music': 'Musicians',
+                    'musician': 'Musicians',
+                    'actor': 'Actors',
+                    'actress': 'Actors',
+                    'artist': 'Artists',
+                    'comedian': 'Comedians',
+                    'comedy': 'Comedians',
+                    'influencer': 'Influencer',
+                    'tv host': 'TV Hosts',
+                    'host': 'TV Hosts'
+                };
+                
+                const normalizedCategory = category.trim().toLowerCase();
+                const mappedCategory = categoryVariations[normalizedCategory];
+                
+                if (mappedCategory) {
+                    console.log(`Mapping "${category.trim()}" to "${mappedCategory}"`);
+                    categoryDoc = await Category.findOne({ 
+                        name: { $regex: new RegExp(`^${mappedCategory}$`, 'i') } 
+                    });
+                }
+            }
+            
+            console.log('Category lookup result:', categoryDoc ? `Found: ${categoryDoc.name} (${categoryDoc._id})` : 'Not found');
+            
+            if (categoryDoc && categoryDoc._id) {
+                filter.profession = categoryDoc._id;
+                console.log('Set filter.profession to ObjectId:', categoryDoc._id);
+            } else {
+                // If category not found, return empty results
+                console.log('Category not found, returning 404');
+                return res.status(404).json({
+                    success: false,
+                    message: `Category "${category.trim()}" not found. Available categories: ${allCategories.map(c => c.name).join(', ')}`,
+                });
+            }
         }
         if (q && q.trim()) {
             const regex = new RegExp(q.trim(), "i");
             const searchQuery = [{ name: regex }, { pseudo: regex }];
-            
+
             // Debug logging
             console.log('Search query:', { q: q.trim(), isNumeric: /^\d+$/.test(q.trim()) });
-            
+
             // Check if the search query looks like a baroniId (numeric)
             if (/^\d+$/.test(q.trim())) {
                 // Debug: Show all baroniIds in database
                 const allBaroniIds = await User.find({ role: "star" }).select('baroniId');
                 console.log('All baroniIds in database:', allBaroniIds.map(u => u.baroniId).filter(id => id));
-                
+
                 // For baroniId search, also include hidden stars and don't require complete profile
                 const baroniIdFilter = {
                     role: "star",
-                    baroniId: q.trim()
+                    baroniId: q.trim(),
+                    isDeleted: { $ne: true } // Exclude deleted users from baroniId search
                 };
-                
-                // Apply country filter with case-insensitive matching
+
+                // Apply country filter with normalization for common variations
                 if (country && country.trim()) {
-                    baroniIdFilter.country = { $regex: new RegExp(`^${country.trim()}$`, 'i') };
+                    const countryVariations = {
+                        'india': ['India', 'भारत', 'Bharat', 'IN', 'IND'],
+                        'bharat': ['India', 'भारत', 'Bharat', 'IN', 'IND'],
+                        'भारत': ['India', 'भारत', 'Bharat', 'IN', 'IND'],
+                        'usa': ['USA', 'United States', 'America', 'US'],
+                        'united states': ['USA', 'United States', 'America', 'US'],
+                        'america': ['USA', 'United States', 'America', 'US'],
+                        'uk': ['UK', 'United Kingdom', 'Britain', 'England'],
+                        'united kingdom': ['UK', 'United Kingdom', 'Britain', 'England'],
+                        'canada': ['Canada', 'CA'],
+                        'australia': ['Australia', 'AU'],
+                        'france': ['France', 'FR'],
+                        'germany': ['Germany', 'DE'],
+                        'japan': ['Japan', 'JP'],
+                        'china': ['China', 'CN'],
+                        'brazil': ['Brazil', 'BR']
+                    };
+                    
+                    const normalizedCountry = country.trim().toLowerCase();
+                    const variations = countryVariations[normalizedCountry];
+                    
+                    if (variations) {
+                        console.log(`Normalizing country "${country.trim()}" to variations for baroniId:`, variations);
+                        baroniIdFilter.country = { $in: variations };
+                    } else {
+                        console.log(`Using exact country match for baroniId: ${country.trim()}`);
+                        baroniIdFilter.country = { $regex: new RegExp(`^${country.trim()}$`, 'i') };
+                    }
                 }
-                
+
                 // Apply category filter
                 if (category && category.trim()) {
-                    baroniIdFilter.profession = category.trim();
+                    console.log('Processing category filter for baroniId search:', category.trim());
+                    // Find the category by name to get its ObjectId
+                    const Category = (await import('../models/Category.js')).default;
+                    
+                    // Debug: List all available categories
+                    const allCategories = await Category.find({}).select('name _id');
+                    console.log('All available categories for baroniId:', allCategories.map(c => `${c.name} (${c._id})`));
+                    
+                    // Try exact match first, then fuzzy match
+                    let categoryDoc = await Category.findOne({ 
+                        name: { $regex: new RegExp(`^${category.trim()}$`, 'i') } 
+                    });
+                    
+                    // If not found, try common variations
+                    if (!categoryDoc) {
+                        const categoryVariations = {
+                            'singer': 'Musicians',
+                            'singers': 'Musicians',
+                            'music': 'Musicians',
+                            'musician': 'Musicians',
+                            'actor': 'Actors',
+                            'actress': 'Actors',
+                            'artist': 'Artists',
+                            'comedian': 'Comedians',
+                            'comedy': 'Comedians',
+                            'influencer': 'Influencer',
+                            'tv host': 'TV Hosts',
+                            'host': 'TV Hosts'
+                        };
+                        
+                        const normalizedCategory = category.trim().toLowerCase();
+                        const mappedCategory = categoryVariations[normalizedCategory];
+                        
+                        if (mappedCategory) {
+                            console.log(`Mapping "${category.trim()}" to "${mappedCategory}" for baroniId`);
+                            categoryDoc = await Category.findOne({ 
+                                name: { $regex: new RegExp(`^${mappedCategory}$`, 'i') } 
+                            });
+                        }
+                    }
+                    
+                    console.log('Category lookup result for baroniId:', categoryDoc ? `Found: ${categoryDoc.name} (${categoryDoc._id})` : 'Not found');
+                    
+                    if (categoryDoc && categoryDoc._id) {
+                        baroniIdFilter.profession = categoryDoc._id;
+                        console.log('Set baroniIdFilter.profession to ObjectId:', categoryDoc._id);
+                    } else {
+                        // If category not found, return empty results
+                        console.log('Category not found in baroniId search, returning 404');
+                        return res.status(404).json({
+                            success: false,
+                            message: `Category "${category.trim()}" not found. Available categories: ${allCategories.map(c => c.name).join(', ')}`,
+                        });
+                    }
                 }
-                
+
                 // Debug logging for baroniId filter
                 console.log('BaroniId filter:', JSON.stringify(baroniIdFilter, null, 2));
-                
+
                 let stars = await User.find(baroniIdFilter)
                     .populate('profession', 'name image')
                     .select("-password -passwordResetToken -passwordResetExpires");
-                
+
                 // Debug logging for results
                 console.log('BaroniId search results:', { count: stars.length, baroniIds: stars.map(s => s.baroniId) });
-                
+
                 // If no results found, try a more flexible search
                 if (stars.length === 0) {
                     console.log('No results with exact baroniId match, trying flexible search...');
                     const flexibleFilter = {
                         role: "star",
+                        isDeleted: { $ne: true }, // Exclude deleted users from flexible search
                         $or: [
                             { baroniId: q.trim() },
                             { baroniId: { $regex: new RegExp(q.trim(), 'i') } }
                         ]
                     };
-                    
+
+                    // Apply country filter to flexible search with normalization
+                    if (country && country.trim()) {
+                        const countryVariations = {
+                            'india': ['India', 'भारत', 'Bharat', 'IN', 'IND'],
+                            'bharat': ['India', 'भारत', 'Bharat', 'IN', 'IND'],
+                            'भारत': ['India', 'भारत', 'Bharat', 'IN', 'IND'],
+                            'usa': ['USA', 'United States', 'America', 'US'],
+                            'united states': ['USA', 'United States', 'America', 'US'],
+                            'america': ['USA', 'United States', 'America', 'US'],
+                            'uk': ['UK', 'United Kingdom', 'Britain', 'England'],
+                            'united kingdom': ['UK', 'United Kingdom', 'Britain', 'England'],
+                            'canada': ['Canada', 'CA'],
+                            'australia': ['Australia', 'AU'],
+                            'france': ['France', 'FR'],
+                            'germany': ['Germany', 'DE'],
+                            'japan': ['Japan', 'JP'],
+                            'china': ['China', 'CN'],
+                            'brazil': ['Brazil', 'BR']
+                        };
+                        
+                        const normalizedCountry = country.trim().toLowerCase();
+                        const variations = countryVariations[normalizedCountry];
+                        
+                        if (variations) {
+                            console.log(`Normalizing country "${country.trim()}" to variations for flexible search:`, variations);
+                            flexibleFilter.country = { $in: variations };
+                        } else {
+                            console.log(`Using exact country match for flexible search: ${country.trim()}`);
+                            flexibleFilter.country = { $regex: new RegExp(`^${country.trim()}$`, 'i') };
+                        }
+                    }
+
+                    // Apply category filter to flexible search
+                    if (category && category.trim()) {
+                        console.log('Applying category filter to flexible search:', category.trim());
+                        const Category = (await import('../models/Category.js')).default;
+                        
+                        // Try exact match first, then fuzzy match
+                        let categoryDoc = await Category.findOne({ 
+                            name: { $regex: new RegExp(`^${category.trim()}$`, 'i') } 
+                        });
+                        
+                        // If not found, try common variations
+                        if (!categoryDoc) {
+                            const categoryVariations = {
+                                'singer': 'Musicians',
+                                'singers': 'Musicians',
+                                'music': 'Musicians',
+                                'musician': 'Musicians',
+                                'actor': 'Actors',
+                                'actress': 'Actors',
+                                'artist': 'Artists',
+                                'comedian': 'Comedians',
+                                'comedy': 'Comedians',
+                                'influencer': 'Influencer',
+                                'tv host': 'TV Hosts',
+                                'host': 'TV Hosts'
+                            };
+                            
+                            const normalizedCategory = category.trim().toLowerCase();
+                            const mappedCategory = categoryVariations[normalizedCategory];
+                            
+                            if (mappedCategory) {
+                                console.log(`Mapping "${category.trim()}" to "${mappedCategory}" for flexible search`);
+                                categoryDoc = await Category.findOne({ 
+                                    name: { $regex: new RegExp(`^${mappedCategory}$`, 'i') } 
+                                });
+                            }
+                        }
+                        
+                        if (categoryDoc && categoryDoc._id) {
+                            flexibleFilter.profession = categoryDoc._id;
+                            console.log('Set flexibleFilter.profession to ObjectId:', categoryDoc._id);
+                        } else {
+                            console.log('Category not found in flexible search, skipping category filter');
+                        }
+                    }
+
                     const flexibleStars = await User.find(flexibleFilter)
                         .populate('profession', 'name image')
                         .select("-password -passwordResetToken -passwordResetExpires");
-                    
+
                     console.log('Flexible search results:', { count: flexibleStars.length, baroniIds: flexibleStars.map(s => s.baroniId) });
-                    
+
                     if (flexibleStars.length > 0) {
                         stars = flexibleStars;
                     }
                 }
-                
+
                 // Check if user is authenticated to add favorite/liked status
-                let starsData = stars.map(star => star.toObject());
+                let starsData = sanitizeUserDataArray(stars);
 
                 if (req.user) {
                     // Check if each star is in user's favorites
@@ -323,24 +638,126 @@ export const getAllStars = async (req, res) => {
                     data: starsData,
                 });
             }
-            
+
             filter.$or = searchQuery;
         }
 
-        const stars = await User.find(filter)
+        let stars = await User.find(filter)
             .populate('profession', 'name image')
             .select("-password -passwordResetToken -passwordResetExpires");
 
-        // if no stars found
+        console.log('Initial query results:', stars.length);
+
+        // if no stars found with current filters, try a more relaxed search
+        // BUT only if there's no search query - if there's a search query and no matches, return empty
+        if ((!stars || stars.length === 0) && (!q || !q.trim())) {
+            console.log('No stars found with current filters, trying relaxed search...');
+            
+            // Create a more relaxed filter - only essential requirements
+            const relaxedFilter = {
+                role: "star",
+                hidden: { $ne: true }, // Always exclude hidden stars from name/pseudo search
+                isDeleted: { $ne: true }
+            };
+
+            // Apply only country filter if specified with normalization
+            if (country && country.trim()) {
+                const countryVariations = {
+                    'india': ['India', 'भारत', 'Bharat', 'IN', 'IND'],
+                    'bharat': ['India', 'भारत', 'Bharat', 'IN', 'IND'],
+                    'भारत': ['India', 'भारत', 'Bharat', 'IN', 'IND'],
+                    'usa': ['USA', 'United States', 'America', 'US'],
+                    'united states': ['USA', 'United States', 'America', 'US'],
+                    'america': ['USA', 'United States', 'America', 'US'],
+                    'uk': ['UK', 'United Kingdom', 'Britain', 'England'],
+                    'united kingdom': ['UK', 'United Kingdom', 'Britain', 'England'],
+                    'canada': ['Canada', 'CA'],
+                    'australia': ['Australia', 'AU'],
+                    'france': ['France', 'FR'],
+                    'germany': ['Germany', 'DE'],
+                    'japan': ['Japan', 'JP'],
+                    'china': ['China', 'CN'],
+                    'brazil': ['Brazil', 'BR']
+                };
+                
+                const normalizedCountry = country.trim().toLowerCase();
+                const variations = countryVariations[normalizedCountry];
+                
+                if (variations) {
+                    console.log(`Normalizing country "${country.trim()}" to variations for relaxed search:`, variations);
+                    relaxedFilter.country = { $in: variations };
+                } else {
+                    console.log(`Using exact country match for relaxed search: ${country.trim()}`);
+                    relaxedFilter.country = { $regex: new RegExp(`^${country.trim()}$`, 'i') };
+                }
+            }
+
+            // Apply only category filter if specified
+            if (category && category.trim()) {
+                console.log('Applying category filter to relaxed search:', category.trim());
+                const Category = (await import('../models/Category.js')).default;
+                
+                // Try exact match first, then fuzzy match
+                let categoryDoc = await Category.findOne({ 
+                    name: { $regex: new RegExp(`^${category.trim()}$`, 'i') } 
+                });
+                
+                // If not found, try common variations
+                if (!categoryDoc) {
+                    const categoryVariations = {
+                        'singer': 'Musicians',
+                        'singers': 'Musicians',
+                        'music': 'Musicians',
+                        'musician': 'Musicians',
+                        'actor': 'Actors',
+                        'actress': 'Actors',
+                        'artist': 'Artists',
+                        'comedian': 'Comedians',
+                        'comedy': 'Comedians',
+                        'influencer': 'Influencer',
+                        'tv host': 'TV Hosts',
+                        'host': 'TV Hosts'
+                    };
+                    
+                    const normalizedCategory = category.trim().toLowerCase();
+                    const mappedCategory = categoryVariations[normalizedCategory];
+                    
+                    if (mappedCategory) {
+                        console.log(`Mapping "${category.trim()}" to "${mappedCategory}" for relaxed search`);
+                        categoryDoc = await Category.findOne({ 
+                            name: { $regex: new RegExp(`^${mappedCategory}$`, 'i') } 
+                        });
+                    }
+                }
+                
+                if (categoryDoc && categoryDoc._id) {
+                    relaxedFilter.profession = categoryDoc._id;
+                    console.log('Set relaxedFilter.profession to ObjectId:', categoryDoc._id);
+                } else {
+                    console.log('Category not found in relaxed search, skipping category filter');
+                }
+            }
+
+            stars = await User.find(relaxedFilter)
+                .populate('profession', 'name image')
+                .select("-password -passwordResetToken -passwordResetExpires");
+
+            console.log('Relaxed search results:', stars.length);
+        }
+
+        // if still no stars found, return empty result but don't error
         if (!stars || stars.length === 0) {
-            return res.status(404).json({
-                success: false,
-                message: "No stars found",
+            console.log('No stars found even with relaxed search');
+            return res.status(200).json({
+                success: true,
+                count: 0,
+                data: [],
+                message: "No stars found matching the criteria"
             });
         }
 
         // Check if user is authenticated to add favorite/liked status
-        let starsData = stars.map(star => star.toObject());
+        let starsData = sanitizeUserDataArray(stars);
 
         if (req.user) {
             // Check if each star is in user's favorites
@@ -400,7 +817,7 @@ export const getStarById = async (req, res) => {
         await User.findByIdAndUpdate(id, { $inc: { profileImpressions: 1 } });
 
         // Check if user is authenticated to add favorite/liked status
-        let starData = star.toObject();
+        let starData = sanitizeUserData(star);
 
         if (req.user) {
             // Check if the star is in user's favorites
@@ -408,11 +825,12 @@ export const getStarById = async (req, res) => {
 
             // Additional fan-specific checks
             if (req.user.role === 'fan') {
-                const [hasActiveAppointment, hasActiveDedication] = await Promise.all([
-                    Appointment.exists({ starId: id, fanId: req.user._id, status: { $in: ['pending', 'approved'] } }),
-                    DedicationRequest.exists({ starId: id, fanId: req.user._id, status: { $in: ['pending', 'approved'] } })
+                const [hasApprovedAppointment, hasApprovedDedication] = await Promise.all([
+                    Appointment.exists({ starId: id, fanId: req.user._id, status: 'approved' }),
+                    DedicationRequest.exists({ starId: id, fanId: req.user._id, status: 'approved' })
                 ]);
-                starData.isMessage = Boolean(hasActiveAppointment || hasActiveDedication);
+                
+                starData.isMessage = Boolean(hasApprovedAppointment || hasApprovedDedication);
             } else {
                 starData.isMessage = false;
             }
@@ -422,6 +840,66 @@ export const getStarById = async (req, res) => {
             starData.isMessage = false;
         }
 
+        // Check if star has available time slots and update availableForBookings accordingly
+        const hasAvailableTimeSlots = await Availability.findOne({
+            userId: id,
+            'timeSlots.status': 'available'
+        });
+
+        // Update availableForBookings logic based on time slot availability
+        if (starData.availableForBookings === true) {
+            // If availableForBookings is true, check if there are available time slots
+            starData.availableForBookings = hasAvailableTimeSlots ? true : false;
+        } else {
+            // If availableForBookings is false, keep it false
+            starData.availableForBookings = false;
+        }
+
+        // ---- Conversation fetch ----
+        let conversation = null;
+        if (req.user) {
+            conversation = await Conversation.findOne({
+                participants: { $all: [id, req.user._id] }
+            }).populate("participants", "name profilePic role");
+        }
+
+        // Get star's country for timezone-aware date calculation
+        const starCountry = star.country || null;
+        
+        // Import timezone helper dynamically
+        const { getCountryTimezoneOffset } = await import('../utils/timezoneHelper.js');
+
+        // Helper function to get current date in star's country timezone (YYYY-MM-DD format)
+        function getCurrentDateString() {
+            // Get timezone offset for star's country (defaults to UTC if no country)
+            const offsetHours = getCountryTimezoneOffset(starCountry);
+            const offsetMs = offsetHours * 60 * 60 * 1000;
+            
+            // Get current UTC time
+            const now = new Date();
+            
+            // Convert to star's local time
+            const localTime = new Date(now.getTime() + offsetMs);
+            
+            // Format as YYYY-MM-DD
+            const year = localTime.getUTCFullYear();
+            const month = String(localTime.getUTCMonth() + 1).padStart(2, '0');
+            const day = String(localTime.getUTCDate()).padStart(2, '0');
+
+            return `${year}-${month}-${day}`;
+        }
+
+        // Helper function to get current time in star's country timezone as Date object
+        function getCurrentLocalTime() {
+            const offsetHours = getCountryTimezoneOffset(starCountry);
+            const offsetMs = offsetHours * 60 * 60 * 1000;
+            const now = new Date();
+            const localTime = new Date(now.getTime() + offsetMs);
+            
+            console.log(`Current local time for star country "${starCountry}" (offset: ${offsetHours}h): ${localTime.toISOString()}`);
+            return localTime;
+        }
+
         // fetch related data including upcoming live shows
         const [dedications, services, dedicationSamples, availability, upcomingShows] = await Promise.all([
             Dedication.find({ userId: id }),
@@ -429,7 +907,7 @@ export const getStarById = async (req, res) => {
             DedicationSample.find({ userId: id }),
             Availability.find({
                 userId: id,
-                date: { $gte: new Date().toISOString().split('T')[0] } // Only current and future availabilities (YYYY-MM-DD format)
+                date: { $gte: getCurrentDateString() } // Only current and future availabilities (YYYY-MM-DD format)
             }).sort({ date: 1 }),
             LiveShow.find({
                 starId: id,
@@ -450,9 +928,12 @@ export const getStarById = async (req, res) => {
         starData.averageRating = avg;
         starData.totalReviews = count;
 
-        // fetch latest 5 reviews for this star
-        const latestReviews = await Review.find({ starId: id })
-            .populate('reviewerId', 'name pseudo profilePic')
+        // fetch latest 5 reviews for this star (only visible ones)
+        const latestReviews = await Review.find({ 
+            starId: id,
+            isVisible: true // Only show visible reviews to users
+        })
+            .populate('reviewerId', 'name pseudo profilePic agoraKey')
             .sort({ createdAt: -1 })
             .limit(5);
 
@@ -476,16 +957,130 @@ export const getStarById = async (req, res) => {
             return showData;
         });
 
+        // Helper function to parse time slot and convert to IST Date object for comparison
+        function parseTimeSlotToISTDate(dateStr, slot) {
+            if (!slot || typeof slot !== 'string' || !dateStr) return null;
+
+            const parts = slot.split(' - ');
+            if (parts.length !== 2) return null;
+
+            const startTime = parts[0].trim();
+            let hour, minute;
+
+            // Parse time logic
+            const h24Match = startTime.match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
+            if (h24Match) {
+                hour = parseInt(h24Match[1], 10);
+                minute = parseInt(h24Match[2], 10);
+            } else {
+                const ampmMatch = startTime.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)/i);
+                if (!ampmMatch) return null;
+
+                hour = parseInt(ampmMatch[1], 10);
+                minute = parseInt(ampmMatch[2], 10);
+                const ampm = ampmMatch[3].toUpperCase();
+
+                if (ampm === 'PM' && hour !== 12) hour += 12;
+                if (ampm === 'AM' && hour === 12) hour = 0;
+            }
+
+            // Create date object treating the slot as IST time
+            const [year, month, day] = dateStr.split('-').map(v => parseInt(v, 10));
+            const slotDate = new Date(year, month - 1, day, hour, minute, 0, 0);
+
+            // Convert to equivalent UTC time for comparison (subtract IST offset)
+            const istOffset = 5.5 * 60 * 60 * 1000;
+            const equivalentUTCTime = new Date(slotDate.getTime() + istOffset);
+
+            console.log(`Parsed time slot: ${slot} on ${dateStr} -> IST time: ${slotDate.toISOString()} -> Equivalent UTC: ${equivalentUTCTime.toISOString()}`);
+
+            return equivalentUTCTime;
+        }
+
+        // Merge availabilities by date (combine daily and weekly slots for same date)
+        const mergedByDate = new Map();
+        
+        availability.forEach(item => {
+            const doc = typeof item.toObject === 'function' ? item.toObject() : item;
+            const dateKey = doc.date;
+            
+            if (!mergedByDate.has(dateKey)) {
+                // First availability for this date - use it as base
+                mergedByDate.set(dateKey, {
+                    _id: doc._id,
+                    userId: doc.userId,
+                    date: doc.date,
+                    isWeekly: doc.isWeekly || false,
+                    isDaily: doc.isDaily || false,
+                    timeSlots: [...(doc.timeSlots || [])],
+                    createdAt: doc.createdAt,
+                    updatedAt: doc.updatedAt
+                });
+            } else {
+                // Merge slots from this availability into existing one
+                const merged = mergedByDate.get(dateKey);
+                const existingSlotsMap = new Map();
+                
+                // Create map of existing slots
+                merged.timeSlots.forEach(slot => {
+                    existingSlotsMap.set(slot.slot, slot);
+                });
+                
+                // Add new slots that don't already exist
+                doc.timeSlots.forEach(slot => {
+                    if (!existingSlotsMap.has(slot.slot)) {
+                        merged.timeSlots.push(slot);
+                    }
+                });
+                
+                // Update mode flags - if either is weekly/daily, mark accordingly
+                if (doc.isWeekly) merged.isWeekly = true;
+                if (doc.isDaily) merged.isDaily = true;
+            }
+        });
+
+        // Convert map to array
+        const mergedAvailability = Array.from(mergedByDate.values());
+
         // Filter out unavailable (booked) time slots from availability and sort by nearest
-        const filteredAvailability = Array.isArray(availability)
-            ? availability
-                .map((doc) => {
-                    const item = typeof doc.toObject === 'function' ? doc.toObject() : doc;
+        const filteredAvailability = Array.isArray(mergedAvailability)
+            ? mergedAvailability
+                .map((item) => {
                     const timeSlots = Array.isArray(item.timeSlots)
                         ? item.timeSlots
-                            .filter((s) => s && s.status === 'available')
+                            .filter((s) => {
+                                if (!s || s.status !== 'available') return false;
+
+                                // Use UTC time for comparison to work correctly across all timezones
+                                const currentUTCTime = new Date();
+                                const today = getCurrentDateString();
+
+                                console.log(`Checking time slot: ${s.slot} on ${item.date}, today: ${today}, current UTC: ${currentUTCTime.toISOString()}`);
+
+                                if (item.date === today) {
+                                    // Use utcStartTime if available (preferred), otherwise fallback to parsing
+                                    let slotStartTime = null;
+                                    
+                                    if (s.utcStartTime) {
+                                        // Use stored UTC time
+                                        slotStartTime = new Date(s.utcStartTime);
+                                    } else {
+                                        // Fallback: parse and convert (for backward compatibility with old slots)
+                                        slotStartTime = parseTimeSlotToISTDate(item.date, s.slot);
+                                    }
+                                    
+                                    if (slotStartTime && slotStartTime <= currentUTCTime) {
+                                        console.log(`Filtering out passed time slot: ${s.slot} on ${item.date} (UTC: ${slotStartTime.toISOString()})`);
+                                        return false;
+                                    }
+                                }
+                                return true;
+                            })
                             .sort((a, b) => {
-                                // Sort time slots by time within each day
+                                // Sort by UTC start time if available, otherwise by slot string
+                                if (a.utcStartTime && b.utcStartTime) {
+                                    return new Date(a.utcStartTime) - new Date(b.utcStartTime);
+                                }
                                 const timeA = parseTimeSlot(a.slot);
                                 const timeB = parseTimeSlot(b.slot);
                                 return timeA - timeB;
@@ -495,7 +1090,6 @@ export const getStarById = async (req, res) => {
                 })
                 .filter((item) => Array.isArray(item.timeSlots) && item.timeSlots.length > 0)
                 .sort((a, b) => {
-                    // Sort by date (nearest first)
                     return new Date(a.date) - new Date(b.date);
                 })
             : [];
@@ -503,20 +1097,31 @@ export const getStarById = async (req, res) => {
         // Helper function to parse time slot and convert to minutes for sorting
         function parseTimeSlot(slot) {
             if (!slot || typeof slot !== 'string') return 0;
-            
-            // Extract start time from slot (format: "HH:MM AM/PM - HH:MM AM/PM")
-            const timeMatch = slot.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)/i);
-            if (timeMatch) {
-                let hour = parseInt(timeMatch[1], 10);
-                const minute = parseInt(timeMatch[2], 10);
-                const ampm = timeMatch[3].toUpperCase();
-                
-                // Convert to 24-hour format
+
+            const parts = slot.split(' - ');
+            if (parts.length !== 2) return 0;
+
+            const startTime = parts[0].trim();
+
+            const h24Match = startTime.match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
+            if (h24Match) {
+                const hour = parseInt(h24Match[1], 10);
+                const minute = parseInt(h24Match[2], 10);
+                return hour * 60 + minute;
+            }
+
+            const ampmMatch = startTime.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)/i);
+            if (ampmMatch) {
+                let hour = parseInt(ampmMatch[1], 10);
+                const minute = parseInt(ampmMatch[2], 10);
+                const ampm = ampmMatch[3].toUpperCase();
+
                 if (ampm === 'PM' && hour !== 12) hour += 12;
                 if (ampm === 'AM' && hour === 12) hour = 0;
-                
-                return hour * 60 + minute; // Convert to minutes for easy comparison
+
+                return hour * 60 + minute;
             }
+
             return 0;
         }
 
@@ -524,6 +1129,7 @@ export const getStarById = async (req, res) => {
             success: true,
             data: {
                 star: starData,
+                conversation,
                 allservices,
                 dedicationSamples,
                 availability: filteredAvailability,
@@ -532,12 +1138,7 @@ export const getStarById = async (req, res) => {
                     id: r._id,
                     rating: r.rating,
                     comment: r.comment,
-                    reviewer: r.reviewerId ? {
-                        id: r.reviewerId._id,
-                        name: r.reviewerId.name,
-                        pseudo: r.reviewerId.pseudo,
-                        profilePic: r.reviewerId.profilePic,
-                    } : null,
+                    reviewer: r.reviewerId ? sanitizeUserData(r.reviewerId) : null,
                     reviewType: r.reviewType,
                     createdAt: r.createdAt,
                 }))
@@ -549,5 +1150,53 @@ export const getStarById = async (req, res) => {
             message: "Server error while fetching star details",
             error: error.message,
         });
+    }
+};
+
+/**
+ * Send star promotion notification to the new star
+ * @param {string} userId - User ID of the new star
+ */
+const sendStarPromotionNotification = async (userId) => {
+    try {
+        // Import notification service
+        const notificationService = (await import('../services/notificationService.js')).default;
+        
+        // Get user details
+        const user = await User.findById(userId);
+        if (!user) {
+            console.error('User not found for star promotion notification');
+            return;
+        }
+
+        const userName = user.name || user.pseudo || 'Star';
+        
+        // Prepare notification data
+        const notificationData = {
+            title: 'Congratulations! You are now a Baroni Star 🌟',
+            body: `Welcome to the stars, ${userName}! You can now receive bookings and create content for your fans.`,
+            type: 'star_promotion'
+        };
+
+        const data = {
+            type: 'star_promotion',
+            userId: user._id.toString(),
+            userName,
+            navigateTo: 'profile',
+            eventType: 'STAR_PROMOTION_COMPLETED',
+            isMessage: false
+        };
+
+        const options = {
+            // No relatedEntity needed for star promotion notifications
+        };
+
+        // Send notification to the new star
+        await notificationService.sendToUser(user._id.toString(), notificationData, data, options);
+        
+        console.log(`Star promotion notification sent to user ${user._id}`);
+    } catch (error) {
+        console.error('Error sending star promotion notification:', error);
+        // Don't throw error to avoid breaking the star promotion flow
     }
 };

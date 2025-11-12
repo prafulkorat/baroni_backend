@@ -31,14 +31,8 @@ export const upsertOAuthUser = async (provider, profile) => {
   }
 
   const pseudoBase = (email?.split('@')[0] || name?.replace(/\s+/g, '').toLowerCase() || `user_${providerId}`).slice(0, 20);
-  let pseudo = pseudoBase;
-  let counter = 0;
-  // ensure unique pseudo
-  // eslint-disable-next-line no-await-in-loop
-  while (await User.exists({ pseudo })) {
-    counter += 1;
-    pseudo = `${pseudoBase}${counter}`.slice(0, 25);
-  }
+  const pseudo = pseudoBase;
+  // Pseudo (nickname) is no longer enforced to be unique
 
   const newUser = await User.create({
     email,

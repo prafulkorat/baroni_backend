@@ -27,7 +27,10 @@ const notificationSchema = new mongoose.Schema(
         'live_show', 
         'dedication', 
         'message', 
-        'general'
+        'general',
+        'star_promotion',
+        'voip',
+        'push'
       ], 
       required: true,
       index: true 

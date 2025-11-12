@@ -1,10 +1,64 @@
 import admin from 'firebase-admin';
+import apn from 'apn';
 import User  from '../models/User.js';
 import Notification from '../models/Notification.js';
+import fs from 'fs';
+import path from 'path';
+import dotenv from 'dotenv';
+
+// Load environment variables
+dotenv.config();
 
 // Initialize Firebase Admin SDK
 let firebaseApp;
 let isFirebaseInitialized = false;
+let apnsProvider = null;
+
+// Helper function to get the correct APNs topic
+function getApnsTopic(isVoip = false) {
+  if (isVoip) {
+    // VoIP notifications should use .voip topic
+    return process.env.APNS_VOIP_BUNDLE_ID || (process.env.APNS_BUNDLE_ID ? `${process.env.APNS_BUNDLE_ID}.voip` : undefined);
+  } else {
+    // Regular push notifications use the main bundle ID
+    return process.env.APNS_BUNDLE_ID;
+  }
+}
+
+
+// Helper function to get APNs private key from environment variables
+function getApnsPrivateKey() {
+  // Priority: APNS_PRIVATE_KEY → APNS_PRIVATE_KEY_BASE64 → APNS_PRIVATE_KEY_FILE
+  let key = process.env.APNS_PRIVATE_KEY || process.env.APNS_PRIVATE_KEY_BASE64 || '';
+
+  // If provided via BASE64 var, attempt decoding
+  if (process.env.APNS_PRIVATE_KEY_BASE64) {
+    try {
+      const decoded = Buffer.from(process.env.APNS_PRIVATE_KEY_BASE64, 'base64').toString('utf8');
+      if (decoded && decoded.includes('-----BEGIN')) key = decoded;
+    } catch (_e) {}
+  }
+
+  // If provided via file path, read the file
+  if (process.env.APNS_PRIVATE_KEY_FILE) {
+    try {
+      const filePath = path.resolve(process.env.APNS_PRIVATE_KEY_FILE);
+      if (fs.existsSync(filePath)) {
+        let fromFile = fs.readFileSync(filePath, 'utf8');
+        fromFile = fromFile.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+        if (!/\n$/.test(fromFile)) fromFile += '\n';
+        key = fromFile;
+      }
+    } catch (_e) {}
+  }
+
+  // Strip surrounding quotes if present
+  if (key && typeof key === 'string') {
+    key = key.replace(/^["']|["']$/g, '').trim();
+  }
+
+  return key || null;
+}
 
 try {
   firebaseApp = admin.app();
@@ -34,6 +88,233 @@ try {
 class NotificationService {
   constructor() {
     this.messaging = isFirebaseInitialized ? admin.messaging() : null;
+    this.apnsProviders = new Map(); // Cache providers for different environments
+    // Initialize APNs using environment variables only
+    const hasTokenCreds = !!(
+      process.env.APNS_KEY_ID &&
+      process.env.APNS_TEAM_ID &&
+      process.env.APNS_BUNDLE_ID &&
+      (process.env.APNS_PRIVATE_KEY || process.env.APNS_PRIVATE_KEY_BASE64 || process.env.APNS_PRIVATE_KEY_FILE)
+    );
+
+    if (hasTokenCreds) {
+      try {
+        let normalizedKey = getApnsPrivateKey();
+        if (!normalizedKey || !normalizedKey.includes('-----BEGIN') || !normalizedKey.includes('PRIVATE KEY')) {
+          throw new Error('APNS_PRIVATE_KEY is not a valid .p8 Auth Key (PEM with BEGIN/END PRIVATE KEY).');
+        }
+        if (!/\n$/.test(normalizedKey)) normalizedKey += '\n';
+        apnsProvider = new apn.Provider({
+          token: {
+            key: normalizedKey,
+            keyId: process.env.APNS_KEY_ID,
+            teamId: process.env.APNS_TEAM_ID
+          },
+          production: process.env.NODE_ENV === 'production' // Default initialization, will be overridden per user
+        });
+        console.log('APNs initialized using token-based auth (.p8 key) from environment variables');
+      } catch (e) {
+        console.warn('Failed to initialize APNs provider (token):', e.message);
+        const preview = (process.env.APNS_PRIVATE_KEY || process.env.APNS_PRIVATE_KEY_BASE64 || process.env.APNS_PRIVATE_KEY_FILE || '').toString().slice(0, 40);
+        console.warn('APNs token env presence:', {
+          hasKeyId: !!process.env.APNS_KEY_ID,
+          hasTeamId: !!process.env.APNS_TEAM_ID,
+          hasBundleId: !!process.env.APNS_BUNDLE_ID,
+          hasPrivateKey: !!(process.env.APNS_PRIVATE_KEY || process.env.APNS_PRIVATE_KEY_BASE64 || process.env.APNS_PRIVATE_KEY_FILE),
+          privateKeyPreview: preview
+        });
+      }
+    } else {
+      console.warn('APNs credentials not provided. iOS APNs notifications will be disabled.');
+    }
+  }
+
+  /**
+   * Get APNs provider based on user's isDev setting
+   * @param {boolean} isDev - User's development mode setting
+   * @returns {apn.Provider|null} APNs provider or null if not available
+   */
+  getApnsProvider(isDev = false) {
+    if (!apnsProvider) return null;
+    
+    const cacheKey = isDev ? 'sandbox' : 'production';
+    
+    if (!this.apnsProviders.has(cacheKey)) {
+      try {
+        let normalizedKey = getApnsPrivateKey();
+        if (!normalizedKey || !normalizedKey.includes('-----BEGIN') || !normalizedKey.includes('PRIVATE KEY')) {
+          throw new Error('APNS_PRIVATE_KEY is not a valid .p8 Auth Key (PEM with BEGIN/END PRIVATE KEY).');
+        }
+        if (!/\n$/.test(normalizedKey)) normalizedKey += '\n';
+        
+        const provider = new apn.Provider({
+          token: {
+            key: normalizedKey,
+            keyId: process.env.APNS_KEY_ID,
+            teamId: process.env.APNS_TEAM_ID
+          },
+          production: !isDev // If isDev is true, use sandbox (production: false)
+        });
+        
+        this.apnsProviders.set(cacheKey, provider);
+        console.log(`APNs provider initialized for ${cacheKey} mode (production: ${!isDev})`);
+      } catch (e) {
+        console.warn(`Failed to initialize APNs provider for ${cacheKey}:`, e.message);
+        return null;
+      }
+    }
+    
+    return this.apnsProviders.get(cacheKey);
+  }
+
+  /**
+   * Send APNs notifications to multiple tokens
+   * @param {apn.Provider} provider - APNs provider
+   * @param {Array} tokens - Array of APNs tokens
+   * @param {Object} notificationData - Notification data
+   * @param {Object} data - Additional data payload
+   * @param {Object} options - Additional options
+   * @param {boolean} isDev - Whether using dev mode
+   * @returns {Object} Result with successCount, failureCount, and failedTokens
+   */
+  async sendApnsToTokens(provider, tokens, notificationData, data, options, isDev) {
+    const note = new apn.Notification();
+    const isVoip = (
+      options.apnsVoip ||
+      data.pushType === 'voip' ||
+      notificationData.pushType === 'voip' ||
+      (typeof notificationData.type === 'string' && notificationData.type.toLowerCase() === 'voip')
+    );
+    
+    const voipBundle = process.env.APNS_VOIP_BUNDLE_ID || (process.env.APNS_BUNDLE_ID ? `${process.env.APNS_BUNDLE_ID}.voip` : undefined);
+    note.topic = isVoip && voipBundle ? voipBundle : process.env.APNS_BUNDLE_ID;
+    
+    if (isVoip) {
+      note.pushType = 'voip';
+      note.contentAvailable = 1;
+      note.expiry = Math.floor(Date.now() / 1000) + 3600;
+    } else {
+      note.alert = {
+        title: notificationData.title,
+        body: notificationData.body
+      };
+      note.sound = 'default';
+      note.badge = 1;
+    }
+    
+    if (isVoip) {
+      note.payload = {
+        extra: {
+          ...data,
+          ...(options.customPayload ? { customPayload: options.customPayload } : {}),
+          clickAction: 'FLUTTER_NOTIFICATION_CLICK'
+        }
+      };
+    } else {
+      note.payload = { ...data, ...(options.customPayload ? { customPayload: options.customPayload } : {}) };
+    }
+
+    const chunks = [];
+    const chunkSize = 100;
+    for (let i = 0; i < tokens.length; i += chunkSize) {
+      chunks.push(tokens.slice(i, i + chunkSize));
+    }
+    
+    let successCount = 0;
+    let failureCount = 0;
+    const failedTokens = [];
+    
+    for (const chunk of chunks) {
+      const resp = await provider.send(note, chunk);
+      successCount += resp.sent.length;
+      failureCount += resp.failed.length;
+      failedTokens.push(...resp.failed.map(f => f.device));
+      
+      if (resp.sent && resp.sent.length > 0) {
+        const firstSent = resp.sent[0];
+        console.log(`[APNs ${isDev ? 'sandbox' : 'production'}] success payload/response (sendToMultipleUsers chunk)`, {
+          topic: note.topic,
+          alert: note.alert,
+          payload: note.payload,
+          response: firstSent && firstSent.response ? firstSent.response : null,
+          sentCount: resp.sent.length
+        });
+      }
+    }
+    
+    console.log(`[APNs ${isDev ? 'sandbox' : 'production'}] sendToMultipleUsers`, {
+      isVoip,
+      topic: note.topic,
+      title: notificationData.title,
+      successCount,
+      failureCount
+    });
+    
+    return { successCount, failureCount, failedTokens };
+  }
+
+  /**
+   * Send VoIP notifications to multiple tokens
+   * @param {apn.Provider} provider - APNs provider
+   * @param {Array} tokens - Array of VoIP tokens
+   * @param {Object} notificationData - Notification data
+   * @param {Object} data - Additional data payload
+   * @param {Object} options - Additional options
+   * @param {boolean} isDev - Whether using dev mode
+   * @returns {Object} Result with successCount, failureCount, and failedTokens
+   */
+  async sendVoipToTokens(provider, tokens, notificationData, data, options, isDev) {
+    const voipNote = new apn.Notification();
+    voipNote.topic = process.env.APNS_VOIP_BUNDLE_ID || process.env.APNS_BUNDLE_ID;
+    voipNote.pushType = 'voip';
+    voipNote.contentAvailable = 1;
+    voipNote.expiry = Math.floor(Date.now() / 1000) + 3600;
+
+    // VoIP notifications don't support alert, sound, or badge
+    voipNote.payload = {
+      extra: {
+        ...data,
+        ...(options.customPayload ? { customPayload: options.customPayload } : {}),
+        clickAction: 'FLUTTER_NOTIFICATION_CLICK',
+        pushType: 'VoIP'
+      }
+    };
+
+    const voipChunks = [];
+    const voipChunkSize = 100;
+    for (let i = 0; i < tokens.length; i += voipChunkSize) {
+      voipChunks.push(tokens.slice(i, i + voipChunkSize));
+    }
+    
+    let successCount = 0;
+    let failureCount = 0;
+    const failedTokens = [];
+    
+    for (const chunk of voipChunks) {
+      const resp = await provider.send(voipNote, chunk);
+      successCount += resp.sent.length;
+      failureCount += resp.failed.length;
+      failedTokens.push(...resp.failed.map(f => f.device));
+      
+      if (resp.sent && resp.sent.length > 0) {
+        const firstSent = resp.sent[0];
+        console.log(`[VoIP ${isDev ? 'sandbox' : 'production'}] success payload/response (sendToMultipleUsers chunk)`, {
+          topic: voipNote.topic,
+          payload: voipNote.payload,
+          response: firstSent && firstSent.response ? firstSent.response : null,
+          sentCount: resp.sent.length
+        });
+      }
+    }
+    
+    console.log(`[VoIP ${isDev ? 'sandbox' : 'production'}] sendToMultipleUsers`, {
+      topic: voipNote.topic,
+      title: notificationData.title,
+      successCount,
+      failureCount
+    });
+    
+    return { successCount, failureCount, failedTokens };
   }
 
   /**
@@ -44,14 +325,40 @@ class NotificationService {
    * @param {Object} options - Additional options for notification storage
    */
   async sendToUser(userId, notificationData, data = {}, options = {}) {
+    console.log(`[NOTIFICATION START] Starting notification for user ${userId}:`, {
+      title: notificationData.title,
+      body: notificationData.body,
+      type: notificationData.type,
+      dataKeys: Object.keys(data),
+      optionsKeys: Object.keys(options)
+    });
+
+    // Fetch user name to include in notification data
+    let userName = 'User';
+    try {
+      const user = await User.findById(userId).select('name pseudo');
+      userName = user?.name || user?.pseudo || userName;
+    } catch (_e) {}
+
+    // Add user name to notification data
+    const enrichedData = {
+      ...data,
+      userName
+    };
+
     // Create notification record in database first
+    // For reject type, use 'general' type in database (since 'reject' is not in enum)
+    const dbNotificationType = (notificationData.type && notificationData.type.toLowerCase() === 'reject') 
+      ? 'general' 
+      : (notificationData.type || 'general');
+    
     const notificationRecord = new Notification({
       user: userId,
       title: notificationData.title,
       body: notificationData.body,
-      type: notificationData.type || 'general',
-      data: data,
-      customPayload: options.customPayload,
+      type: dbNotificationType,
+      data: enrichedData,
+      customPayload: options.customPayload ? JSON.stringify(options.customPayload) : undefined,
       expiresAt: options.expiresAt,
       relatedEntity: options.relatedEntity,
       deliveryStatus: 'pending'
@@ -61,7 +368,7 @@ class NotificationService {
       await notificationRecord.save();
     } catch (dbError) {
       console.error(`Error saving notification to database for user ${userId}:`, dbError);
-      // Continue with FCM sending even if DB save fails
+      // Continue with sending even if DB save fails
     }
 
     if (!isFirebaseInitialized || !this.messaging) {
@@ -80,84 +387,670 @@ class NotificationService {
 
     try {
       const user = await User.findById(userId);
-      if (!user || !user.fcmToken) {
-        console.log(`No FCM token found for user ${userId}`);
+      console.log(`[USER DETAILS] User ${userId} details:`, {
+        _id: user?._id,
+        name: user?.name,
+        pseudo: user?.pseudo,
+        deviceType: user?.deviceType,
+        isDev: user?.isDev,
+        hasFcmToken: !!user?.fcmToken,
+        hasApnsToken: !!user?.apnsToken,
+        hasVoipToken: !!user?.voipToken,
+        fcmTokenLength: user?.fcmToken ? user.fcmToken.length : 0,
+        fcmTokenPreview: user?.fcmToken ? user.fcmToken.substring(0, 20) + '...' : 'null',
+        appNotification: user?.appNotification
+      });
+
+      if (!user || (!user.fcmToken && !user.apnsToken && !user.voipToken)) {
+        console.log(`No push token found for user ${userId}`);
         // Update notification status to failed
         try {
           await Notification.findByIdAndUpdate(notificationRecord._id, {
             deliveryStatus: 'failed',
-            failureReason: 'No FCM token found'
+            failureReason: 'No push token found'
           });
         } catch (updateError) {
           console.error('Error updating notification status:', updateError);
         }
-        return { success: false, message: 'No FCM token found' };
+        return { success: false, message: 'No push token found' };
       }
 
-      const message = {
-        token: user.fcmToken,
-        notification: {
-          title: notificationData.title,
-          body: notificationData.body,
-        },
-        data: {
-          ...data,
-          ...(options.customPayload ? { customPayload: options.customPayload } : {}),
-          clickAction: 'FLUTTER_NOTIFICATION_CLICK',
-          sound: 'default',
-        },
-        android: {
-          notification: {
-            sound: 'default',
-            channelId: 'default',
-            priority: 'high',
-          },
-        },
-        apns: {
-          payload: {
+      // Check if user has notifications disabled
+      if (user.appNotification === false) {
+        console.log(`User ${userId} has app notifications disabled (appNotification: false)`);
+        // Update notification status to failed
+        try {
+          await Notification.findByIdAndUpdate(notificationRecord._id, {
+            deliveryStatus: 'failed',
+            failureReason: 'User has notifications disabled'
+          });
+        } catch (updateError) {
+          console.error('Error updating notification status:', updateError);
+        }
+        return { success: false, message: 'User has notifications disabled' };
+      }
+
+      // Determine which token to use based on deviceType
+      const isIOS = user.deviceType === 'ios';
+      const isAndroid = user.deviceType === 'android';
+      
+      console.log(`[NOTIFICATION] Device type check for user ${userId}:`, {
+        deviceType: user.deviceType,
+        isIOS,
+        isAndroid,
+        hasApnsToken: !!user.apnsToken,
+        hasFcmToken: !!user.fcmToken,
+        hasVoipToken: !!user.voipToken
+      });
+      
+      // Use device-specific token based on deviceType
+      let deliverySucceeded = false;
+      let fcmResponse = null;
+      let apnsResponse = null;
+
+      // For iOS devices, prioritize APNs tokens
+      // Check if this is a reject notification - reject should NOT be treated as VoIP call
+      const isRejectType = (
+        (typeof notificationData.type === 'string' && notificationData.type.toLowerCase() === 'reject') ||
+        (typeof data.type === 'string' && data.type.toLowerCase() === 'reject')
+      );
+      
+      // Check if this is an appointment rejection (for iOS, we need to send special payload)
+      const isAppointmentReject = data.isAppointmentReject === true || data.isAppointmentReject === 'true';
+      
+      // For iOS: If type is "reject" OR it's an appointment rejection, send the reject payload
+      const shouldSendRejectPayloadForIOS = isIOS && (isRejectType || isAppointmentReject);
+      
+      const isVoipExplicit = !isRejectType && !isAppointmentReject && (
+        options.apnsVoip === true ||
+        (typeof data.pushType === 'string' && data.pushType.toLowerCase() === 'voip') ||
+        (typeof notificationData.pushType === 'string' && notificationData.pushType.toLowerCase() === 'voip') ||
+        (typeof notificationData.type === 'string' && notificationData.type.toLowerCase() === 'voip')
+      );
+      if (isIOS && user.apnsToken) {
+        console.log(`[APNs] Starting iOS notification for user ${userId}`);
+        const userApnsProvider = this.getApnsProvider(user.isDev);
+        if (userApnsProvider) {
+          console.log(`[APNs] Provider found for user ${userId}, isDev: ${user.isDev}`);
+          const note = new apn.Notification();
+          const isVoip = isVoipExplicit;
+        
+        // Check if this is a reject call notification (for cutting/rejecting calls on iOS)
+        // BUT: If type is "reject" or appointment reject, don't treat it as call rejection - it's just a normal reject notification
+        const isRejectCall = !isRejectType && !isAppointmentReject && (data.isRejectCall === true || data.isRejectCall === 'true');
+
+        const voipBundle = process.env.APNS_VOIP_BUNDLE_ID || (process.env.APNS_BUNDLE_ID ? `${process.env.APNS_BUNDLE_ID}.voip` : undefined);
+        
+        if (isRejectCall) {
+          // Special payload for rejecting/cutting calls on iOS
+          // Send silent notification with content-available and status: decline
+          // Use VoIP bundle for call rejection notifications
+          note.topic = voipBundle || process.env.APNS_BUNDLE_ID;
+          note.contentAvailable = 1;
+          note.pushType = 'voip'; // Use VoIP push type for call rejection
+          note.expiry = Math.floor(Date.now() / 1000) + 3600;
+          // No alert, sound, or badge for call rejection
+          note.payload = {
             aps: {
-              sound: 'default',
-              badge: 1,
+              "content-available": 1
+            },
+            status: "decline"
+          };
+          console.log(`[APNs] Sending call rejection notification to iOS user ${userId} with payload:`, note.payload);
+        } else if (isRejectType || isAppointmentReject) {
+          // For reject type OR appointment rejection on iOS: Send silent background notification
+          // iOS 13+ requires explicit push_type: "background" for background notifications
+          // This is a background notification that should wake up the app without user interaction
+          // When type is "reject" or appointment is rejected, send this exact payload structure
+          note.topic = process.env.APNS_BUNDLE_ID;
+          
+          // CRITICAL: Set push type to "background" for background notifications (iOS 13+)
+          // This tells iOS that this is a background notification, not a user-facing alert
+          note.pushType = 'background';
+          
+          // CRITICAL: For background notifications, set contentAvailable to true
+          // The APNs library automatically converts this to "content-available": 1 in the aps dictionary
+          // This wakes up the app in the background
+          // IMPORTANT: Use true (boolean) instead of 1 for node-apn library
+          note.contentAvailable = true;
+          
+          // Set priority to 5 for background notifications (not 10)
+          // Priority 5 is correct for background notifications per Apple documentation
+          // Priority 10 is for alert notifications, not background
+          note.priority = 5;
+          
+          // No alert, sound, or badge for silent background notification
+          // These properties should NOT be set for background notifications
+          // Setting them would convert this to a user-facing notification
+          
+          // Build payload with explicit aps and custom fields
+          // CRITICAL: For background notifications, we need to explicitly set both:
+          // 1. aps object with content-available: 1
+          // 2. Custom fields (status: "decline")
+          // This matches the exact payload structure required: {"aps":{"content-available":1},"status":"decline"}
+          // IMPORTANT: Set payload.aps AFTER setting note.contentAvailable to ensure proper merge
+          // The library will merge note.contentAvailable into payload.aps, but we explicitly set it to be sure
+          const customPayload = {
+            status: "decline"
+          };
+          
+          // Merge with existing payload if any, then add aps
+          note.payload = {
+            ...note.payload,
+            ...customPayload,
+            aps: {
+              "content-available": 1
+            }
+          };
+          
+          console.log(`[APNs] Sending iOS reject notification (background type) to user ${userId}`);
+          console.log(`[APNs] Reject Type: ${isRejectType}, Appointment Reject: ${isAppointmentReject}`);
+          console.log(`[APNs] iOS Background Notification Configuration:`);
+          console.log(`[APNs]   - pushType: background (iOS 13+ requirement)`);
+          console.log(`[APNs]   - contentAvailable: true (wakes app in background)`);
+          console.log(`[APNs]   - priority: 5 (correct priority for background notifications)`);
+          console.log(`[APNs]   - No alert/sound/badge (silent background notification)`);
+          console.log(`[APNs] Note configuration:`, {
+            topic: note.topic,
+            pushType: note.pushType,
+            contentAvailable: note.contentAvailable,
+            contentAvailableType: typeof note.contentAvailable,
+            priority: note.priority,
+            sound: note.sound,
+            alert: note.alert,
+            badge: note.badge
+          });
+          console.log(`[APNs] Full payload (with explicit aps and custom fields):`, JSON.stringify(note.payload, null, 2));
+        } else {
+          note.topic = isVoip && voipBundle ? voipBundle : process.env.APNS_BUNDLE_ID;
+          if (isVoip) {
+            note.pushType = 'voip';
+            note.contentAvailable = 1;
+            note.expiry = Math.floor(Date.now() / 1000) + 3600;
+            // VoIP notifications don't support alert, sound, or badge
+          } else {
+            // Regular push notifications
+            note.alert = {
+              title: notificationData.title,
+              body: notificationData.body
+            };
+            note.sound = 'default';
+            note.badge = 1;
+          }
+        }
+        // Match Flutter's expected payload shape for VoIP pushes
+        // For reject type or appointment reject, payload is already set above, so skip here
+        if (!isRejectType && !isAppointmentReject) {
+          if (isVoip && !isRejectCall) {
+            note.payload = {
+              extra: {
+                ...data,
+                ...(options.customPayload ? { customPayload: options.customPayload } : {}),
+                clickAction: 'FLUTTER_NOTIFICATION_CLICK'
+              }
+            };
+          } else if (!isRejectCall) {
+            note.payload = { ...data, ...(options.customPayload ? { customPayload: options.customPayload } : {}) };
+          }
+        }
+
+        console.log(`[APNs] ===== iOS NOTIFICATION DETAILS =====`);
+        console.log(`[APNs] User ID: ${userId}`);
+        console.log(`[APNs] Device Type: ${user.isDev ? 'sandbox' : 'production'}`);
+        console.log(`[APNs] Token: ${user.apnsToken ? user.apnsToken.substring(0, 20) + '...' : 'null'}`);
+        console.log(`[APNs] Notification Type: ${notificationData.type || 'general'}`);
+        console.log(`[APNs] Is Reject Type: ${isRejectType}`);
+        console.log(`[APNs] Is Appointment Reject: ${isAppointmentReject}`);
+        console.log(`[APNs] Should Send Reject Payload: ${shouldSendRejectPayloadForIOS}`);
+        console.log(`[APNs] Is VoIP: ${isVoip}`);
+        console.log(`[APNs] Topic: ${note.topic}`);
+        console.log(`[APNs] Content Available (direct): ${note.contentAvailable} (type: ${typeof note.contentAvailable})`);
+        console.log(`[APNs] Content Available (via aps): ${note.aps ? note.aps['content-available'] : 'aps not set'}`);
+        console.log(`[APNs] Priority: ${note.priority}`);
+        console.log(`[APNs] Sound: ${note.sound !== undefined ? note.sound : 'not set'}`);
+        console.log(`[APNs] Push Type: ${note.pushType || 'none'}`);
+        console.log(`[APNs] Alert:`, note.alert !== undefined ? note.alert : 'not set (silent)');
+        console.log(`[APNs] Badge: ${note.badge !== undefined ? note.badge : 'not set'}`);
+        console.log(`[APNs] Payload (custom fields):`, JSON.stringify(note.payload, null, 2));
+        console.log(`[APNs] APS Object (auto-generated):`, note.aps ? JSON.stringify(note.aps, null, 2) : 'not set');
+        // Log the compiled notification structure (final JSON that will be sent)
+        if (note.compiled) {
+          console.log(`[APNs] Compiled Notification (final JSON):`, JSON.stringify(note.compiled, null, 2));
+        }
+        console.log(`[APNs] Full Note Object Keys:`, Object.keys(note));
+        console.log(`[APNs] ====================================`);
+        
+        try {
+          // For background notifications, ensure proper headers are set
+          // The APNs library should handle this automatically with pushType: 'background'
+          apnsResponse = await userApnsProvider.send(note, user.apnsToken);
+          console.log(`[APNs] ===== SEND RESPONSE =====`);
+          console.log(`[APNs] Full Response:`, JSON.stringify(apnsResponse, null, 2));
+          console.log(`[APNs] Sent Count: ${(apnsResponse && apnsResponse.sent && apnsResponse.sent.length) || 0}`);
+          console.log(`[APNs] Failed Count: ${(apnsResponse && apnsResponse.failed && apnsResponse.failed.length) || 0}`);
+          
+          // Log the final notification structure that was sent
+          if (isRejectType || isAppointmentReject) {
+            // Try to get the compiled notification to see the final structure
+            let compiledPayload = null;
+            try {
+              // The compiled property might be available after sending
+              if (note.compiled) {
+                compiledPayload = note.compiled;
+              } else {
+                // Try to access the internal structure
+                compiledPayload = JSON.parse(JSON.stringify({
+                  aps: note.aps,
+                  ...note.payload
+                }));
+              }
+            } catch (e) {
+              compiledPayload = { error: 'Could not compile payload', message: e.message };
+            }
+            
+            console.log(`[APNs] Final notification structure for iOS background detection:`, {
+              pushType: note.pushType,
+              priority: note.priority,
+              contentAvailable: note.contentAvailable,
+              payload: note.payload,
+              aps: note.aps,
+              compiledPayload: compiledPayload,
+              isRejectType,
+              isAppointmentReject
+            });
+          }
+          
+          if (apnsResponse && apnsResponse.sent && apnsResponse.sent.length > 0) {
+            console.log(`[APNs] ✓ Notification sent successfully to iOS device`);
+            apnsResponse.sent.forEach((sent, index) => {
+              console.log(`[APNs] Sent [${index}]:`, {
+                device: sent.device ? sent.device.substring(0, 20) + '...' : 'null',
+                response: sent.response || 'no response'
+              });
+            });
+          }
+          
+          if (apnsResponse && apnsResponse.failed && apnsResponse.failed.length > 0) {
+            console.error(`[APNs] ✗ Notification failed for iOS device`);
+            apnsResponse.failed.forEach((failed, index) => {
+              console.error(`[APNs] Failed [${index}]:`, {
+                device: failed.device ? failed.device.substring(0, 20) + '...' : 'null',
+                status: failed.status,
+                response: failed.response || 'no response',
+                error: failed.error || 'no error'
+              });
+            });
+          }
+          console.log(`[APNs] =========================`);
+        } catch (sendError) {
+          console.error(`[APNs] ✗ Error sending notification to iOS:`, sendError);
+          throw sendError;
+        }
+        
+        deliverySucceeded = apnsResponse && apnsResponse.sent && apnsResponse.sent.length > 0;
+        if (!deliverySucceeded) {
+          const reasons = (apnsResponse && apnsResponse.failed || []).map(f => ({ device: f.device, status: f.status, reason: f.response && f.response.reason, error: f.error && f.error.message }));
+          console.warn('APNs delivery failed, falling back to FCM if available', reasons);
+
+          // Log APNs token errors (but don't remove tokens)
+          if (apnsResponse && apnsResponse.failed && apnsResponse.failed.length > 0) {
+            const failedTokens = apnsResponse.failed.map(f => f.device);
+            if (failedTokens.length > 0) {
+              console.log(`APNs delivery failed for ${failedTokens.length} tokens, but keeping them for retry`);
+              // Note: We're not removing APNs tokens on failure as they might be valid
+              // and the failure could be temporary (network, server issues, etc.)
+            }
+          }
+        }
+        if (deliverySucceeded) {
+          const firstSent = apnsResponse.sent && apnsResponse.sent[0];
+          console.log('[APNs] success payload/response (sendToUser)', {
+            userId,
+            topic: note.topic,
+            alert: note.alert,
+            payload: note.payload,
+            response: firstSent && firstSent.response ? firstSent.response : null
+          });
+        }
+        }
+      }
+
+      // Handle VoIP token separately ONLY when explicitly requested
+      if (!deliverySucceeded && user.voipToken && isVoipExplicit) {
+        const userApnsProvider = this.getApnsProvider(user.isDev);
+        if (userApnsProvider) {
+        const voipTopic = getApnsTopic(true);
+        if (!voipTopic) {
+          console.warn('[VoIP] No VoIP topic configured, skipping VoIP notification');
+        } else {
+          const voipNote = new apn.Notification();
+          voipNote.topic = voipTopic;
+          voipNote.pushType = 'voip';
+          voipNote.contentAvailable = 1;
+          voipNote.expiry = Math.floor(Date.now() / 1000) + 3600;
+
+          // VoIP notifications don't support alert, sound, or badge
+          voipNote.payload = {
+            extra: {
+              ...data,
+              ...(options.customPayload ? { customPayload: options.customPayload } : {}),
+              clickAction: 'FLUTTER_NOTIFICATION_CLICK',
+              pushType: 'VoIP'
+            }
+          };
+
+          console.log(`Using ${user.isDev ? 'sandbox' : 'production'} APNs for VoIP user ${userId}`)
+          const voipResponse = await userApnsProvider.send(voipNote, user.voipToken);
+          console.log('[VoIP] sendToUser', {
+            userId,
+            topic: voipNote.topic,
+            title: notificationData.title,
+            sent: (voipResponse && voipResponse.sent && voipResponse.sent.length) || 0,
+            failed: (voipResponse && voipResponse.failed && voipResponse.failed.length) || 0
+          });
+
+          if (voipResponse && voipResponse.sent && voipResponse.sent.length > 0) {
+            deliverySucceeded = true;
+          }
+          if (voipResponse && voipResponse.failed && voipResponse.failed.length > 0) {
+            console.log('[VoIP] failed tokens:', voipResponse.failed);
+            // Log VoIP token errors (but don't remove tokens)
+            const failedTokens = voipResponse.failed.map(f => f.device);
+            if (failedTokens.length > 0) {
+              console.log(`VoIP delivery failed for ${failedTokens.length} tokens, but keeping them for retry`);
+              // Note: We're not removing VoIP tokens on failure as they might be valid
+              // and the failure could be temporary (network, server issues, etc.)
+            }
+          }
+        }
+        }
+      }
+
+      // For Android devices or fallback, use FCM
+      console.log(`[NOTIFICATION DEBUG] Android notification check for user ${userId}:`, {
+        isAndroid,
+        isIOS,
+        hasFcmToken: !!user.fcmToken,
+        hasMessaging: !!this.messaging,
+        deliverySucceeded,
+        deviceType: user.deviceType,
+        fcmTokenLength: user.fcmToken ? user.fcmToken.length : 0
+      });
+
+      if (!deliverySucceeded && (isAndroid || !isIOS) && user.fcmToken && this.messaging) {
+        // For Android VoIP calls, send only data payload (no notification parameter)
+        // This allows the app to handle the call silently without showing a notification banner
+        // BUT: For appointment reject or reject type, we don't want VoIP call notification, only normal notification
+        const isAppointmentReject = data.isAppointmentReject === true || data.isAppointmentReject === 'true';
+        const isRejectType = (
+          (typeof notificationData.type === 'string' && notificationData.type.toLowerCase() === 'reject') ||
+          (typeof data.type === 'string' && data.type.toLowerCase() === 'reject')
+        );
+        const isVoipForAndroid = isVoipExplicit && isAndroid && !isAppointmentReject && !isRejectType;
+        
+        // For reject type, send ONLY silent data-only payload (no notification title/body, no VoIP)
+        if (isRejectType) {
+          console.log(`[FCM] Reject type notification - sending SILENT data-only payload (NO notification, NO VoIP, NO body)`);
+        } else if ((isAppointmentReject || isRejectType) && isAndroid) {
+          console.log(`[FCM] Reject notification for Android (type: ${notificationData.type || data.type}) - sending normal notification (NOT VoIP call notification)`);
+        }
+        
+        // For reject type notifications, exclude ALL call-related data to prevent showing incoming call UI
+        // This includes fields that might trigger call UI on client side
+        const callRelatedFields = [
+          'agoraid', 'channelid', 'agorakey', 'callid', 'calltype', 'iscall', 'pushtype', 'voip',
+          'name', 'image', 'screen', 'callername', 'callerid', 'callername', 'callerimage',
+          'videocall', 'videocallid', 'callstatus', 'callaction', 'incomingcall'
+        ];
+        const filteredData = isRejectType 
+          ? Object.fromEntries(
+              Object.entries(data).filter(([key]) => !callRelatedFields.includes(key.toLowerCase()))
+            )
+          : data;
+        
+        console.log(`[FCM] Data filtering for reject type:`, {
+          isRejectType,
+          originalDataKeys: Object.keys(data),
+          filteredDataKeys: Object.keys(filteredData),
+          removedKeys: Object.keys(data).filter(key => callRelatedFields.includes(key.toLowerCase()))
+        });
+        
+        // Build data payload
+        const dataPayload = {
+          // Convert all data values to strings for Firebase FCM compatibility
+          ...Object.fromEntries(
+            Object.entries(filteredData).map(([key, value]) => [
+              key, 
+              typeof value === 'string' ? value : JSON.stringify(value)
+            ])
+          ),
+          ...(options.customPayload ? { customPayload: JSON.stringify(options.customPayload) } : {}),
+          clickAction: 'FLUTTER_NOTIFICATION_CLICK',
+          // For reject type, don't add sound
+          ...(isRejectType ? {} : { sound: 'default' }),
+          // Add notification type for Android handling
+          notificationType: notificationData.type || 'general',
+          // Add timestamp for Android
+          timestamp: Date.now().toString(),
+          // Explicitly mark as reject to prevent call UI on client side
+          // Add multiple flags to ensure client doesn't show call UI
+          ...(isRejectType ? { 
+            isReject: 'true', 
+            shouldNotShowCall: 'true', 
+            type: 'reject',
+            isCallNotification: 'false',
+            showCallUI: 'false',
+            isVideoCall: 'false',
+            isIncomingCall: 'false'
+          } : {}),
+        };
+        
+        // Build message - for reject type, send ONLY data payload (no notification, no VoIP)
+        // For VoIP on Android, exclude notification parameter
+        const message = {
+          token: user.fcmToken,
+          // For reject type: NO notification parameter (silent data-only)
+          // For VoIP: NO notification parameter (data-only for call handling)
+          // Otherwise: Include notification with title and body
+          ...(isRejectType || isVoipForAndroid ? {} : {
+            notification: {
+              title: notificationData.title,
+              body: notificationData.body,
+            }
+          }),
+          data: dataPayload,
+          android: {
+            // For reject type: NO notification parameter (silent data-only)
+            // For VoIP: NO notification parameter (data-only for call handling)
+            // Otherwise: Include notification with sound, icon, etc.
+            ...(isRejectType || isVoipForAndroid ? {} : {
+              notification: {
+                sound: 'default',
+                channelId: 'baroni_notifications', // Use a specific channel instead of 'default'
+                priority: 'high',
+                visibility: 'public',
+                // Add icon and color for better Android display
+                icon: 'ic_notification',
+                color: '#FF6B6B', // Baroni brand color
+                // Add click action
+                clickAction: 'FLUTTER_NOTIFICATION_CLICK',
+                // Add tag for notification grouping
+                tag: notificationData.type || 'general',
+                // Add local notification for better reliability
+                localOnly: false,
+                // Add default vibration pattern
+                defaultVibrateTimings: true,
+                // Add light settings
+                lightSettings: {
+                  color: '#FF6B6B', // Baroni brand color in hex format
+                  lightOnDurationMillis: 100, // 0.1 seconds in milliseconds
+                  lightOffDurationMillis: 100 // 0.1 seconds in milliseconds
+                }
+              }
+            }),
+            // Add Android-specific data
+            data: {
+              // Convert all data values to strings for Firebase FCM compatibility
+              // For reject type, use filtered data (without call-related fields)
+              ...Object.fromEntries(
+                Object.entries(filteredData).map(([key, value]) => [
+                  key, 
+                  typeof value === 'string' ? value : JSON.stringify(value)
+                ])
+              ),
+              ...(options.customPayload ? { customPayload: JSON.stringify(options.customPayload) } : {}),
+              clickAction: 'FLUTTER_NOTIFICATION_CLICK',
+              notificationType: notificationData.type || 'general',
+              timestamp: Date.now().toString(),
+              // Explicitly mark as reject to prevent call UI on client side
+              // Add multiple flags to ensure client doesn't show call UI
+              ...(isRejectType ? { 
+                isReject: 'true', 
+                shouldNotShowCall: 'true',
+                isCallNotification: 'false',
+                showCallUI: 'false',
+                isVideoCall: 'false',
+                isIncomingCall: 'false'
+              } : {}),
+            },
+            // Add Android priority
+            priority: 'high',
+            // Add TTL for Android
+            ttl: 3600, // 1 hour
+          },
+          apns: {
+            payload: {
+              aps: {
+                sound: 'default',
+                badge: 1,
+              },
             },
           },
-        },
-      };
-
-      const response = await this.messaging.send(message);
-      console.log(`Notification sent to user ${userId}:`, response);
-      
-      // Update notification status to sent
-      try {
-        await Notification.findByIdAndUpdate(notificationRecord._id, {
-          deliveryStatus: 'sent',
-          fcmMessageId: response
+        };
+        
+        console.log(`[FCM DEBUG] Complete message structure for user ${userId}:`, JSON.stringify(message, null, 2));
+        
+        console.log(`[FCM] Sending ${isRejectType ? 'REJECT (silent data-only)' : isVoipForAndroid ? 'VoIP (data-only)' : 'notification'} to Android user ${userId}`, {
+          isRejectType,
+          isVoip: isVoipForAndroid,
+          title: isRejectType || isVoipForAndroid ? 'N/A (data-only)' : notificationData.title,
+          body: isRejectType || isVoipForAndroid ? 'N/A (data-only)' : notificationData.body,
+          channelId: isVoipForAndroid ? 'N/A (data-only)' : 'baroni_notifications',
+          priority: 'high',
+          fcmTokenPreview: user.fcmToken ? user.fcmToken.substring(0, 20) + '...' : 'null',
+          userDetails: {
+            name: user.name,
+            pseudo: user.pseudo,
+            deviceType: user.deviceType,
+            isDev: user.isDev,
+            appNotification: user.appNotification,
+            hasFcmToken: !!user.fcmToken,
+            fcmTokenLength: user.fcmToken ? user.fcmToken.length : 0
+          }
         });
+        
+        try {
+          fcmResponse = await this.messaging.send(message);
+          deliverySucceeded = !!fcmResponse;
+          
+          console.log(`[FCM SUCCESS] Android notification sent successfully to user ${userId}`, {
+            messageId: fcmResponse,
+            success: deliverySucceeded,
+            fcmTokenPreview: user.fcmToken ? user.fcmToken.substring(0, 20) + '...' : 'null'
+          });
+        } catch (fcmError) {
+          console.error(`[FCM ERROR] Failed to send notification to Android user ${userId}:`, {
+            error: fcmError.message,
+            code: fcmError.code,
+            fcmTokenPreview: user.fcmToken ? user.fcmToken.substring(0, 20) + '...' : 'null',
+            deviceType: user.deviceType,
+            isDev: user.isDev
+          });
+          deliverySucceeded = false;
+        }
+      }
+
+      // Check if we have the right provider for the device type
+      if (!deliverySucceeded) {
+        console.log(`[NOTIFICATION FAILURE] Analyzing failure for user ${userId}:`, {
+          isAndroid,
+          isIOS,
+          deviceType: user.deviceType,
+          hasFcmToken: !!user.fcmToken,
+          hasApnsToken: !!user.apnsToken,
+          hasVoipToken: !!user.voipToken,
+          hasMessaging: !!this.messaging,
+          hasApnsProvider: !!this.getApnsProvider(user.isDev),
+          isDev: user.isDev
+        });
+
+        let failureReason = 'All push delivery attempts failed';
+        
+        if (isIOS && !this.getApnsProvider(user.isDev)) {
+          failureReason = `iOS device but APNs not configured for ${user.isDev ? 'sandbox' : 'production'} mode`;
+        } else if (isAndroid && !this.messaging) {
+          failureReason = 'Android device but FCM not configured';
+        } else if (!isIOS && !isAndroid && !user.deviceType) {
+          failureReason = 'Device type not specified and no valid tokens';
+        } else if (isAndroid && !user.fcmToken) {
+          failureReason = 'Android device but no FCM token found';
+        } else if (isAndroid && user.fcmToken && this.messaging) {
+          failureReason = 'Android device with FCM token and messaging service, but delivery failed';
+        }
+
+        console.log(`[NOTIFICATION FAILURE] Final failure reason for user ${userId}:`, failureReason);
+        
+        try {
+          await Notification.findByIdAndUpdate(notificationRecord._id, {
+            deliveryStatus: 'failed',
+            failureReason: failureReason
+          });
+        } catch (updateError) {
+          console.error('Error updating notification status:', updateError);
+        }
+        
+        // Log the error but don't throw it to prevent breaking the application
+        console.error(`[NotificationService] Failed to send notification to user ${userId}:`, failureReason);
+        return { success: false, message: failureReason, notificationId: notificationRecord._id };
+      }
+
+
+      console.log(`Notification sent to user ${userId}`);
+
+      try {
+        const update = { deliveryStatus: 'sent' };
+        if (fcmResponse) update.fcmMessageId = fcmResponse;
+        await Notification.findByIdAndUpdate(notificationRecord._id, update);
       } catch (updateError) {
         console.error('Error updating notification status:', updateError);
       }
-      
-      return { success: true, messageId: response, notificationId: notificationRecord._id };
-    } catch (error) {
-      console.error(`Error sending notification to user ${userId}:`, error);
 
-      // Update notification status to failed
+      return { success: true, messageId: fcmResponse || (apnsResponse && apnsResponse.sent && apnsResponse.sent[0] && apnsResponse.sent[0].response) || null, notificationId: notificationRecord._id };
+    } catch (error) {
+      // Log the error but don't throw it to prevent breaking the application
+      console.error(`[NotificationService] Error sending notification to user ${userId}:`, error);
+
       try {
         await Notification.findByIdAndUpdate(notificationRecord._id, {
           deliveryStatus: 'failed',
-          failureReason: error.message
+          failureReason: error.message || 'Unknown error occurred'
         });
       } catch (updateError) {
         console.error('Error updating notification status:', updateError);
       }
 
-      // If token is invalid, remove it from user
+      // Log specific token errors but don't remove tokens
       if (error.code === 'messaging/invalid-registration-token' ||
           error.code === 'messaging/registration-token-not-registered') {
-        await User.findByIdAndUpdate(userId, { $unset: { fcmToken: 1 } });
-        console.log(`Removed invalid FCM token for user ${userId}`);
+        console.log(`FCM token failed for user ${userId}: ${error.code} - keeping token for retry`);
       }
 
-      return { success: false, error: error.message, notificationId: notificationRecord._id };
+      // Log APNs token errors but don't remove tokens
+      if (error.code === 'BadDeviceToken' || error.code === 'Unregistered') {
+        console.log(`APNs token failed for user ${userId}: ${error.code} - keeping token for retry`);
+      }
+
+      return { success: false, error: error.message || 'Unknown error occurred', notificationId: notificationRecord._id };
     }
   }
 
@@ -169,43 +1062,105 @@ class NotificationService {
    * @param {Object} options - Additional options for notification storage
    */
   async sendToMultipleUsers(userIds, notificationData, data = {}, options = {}) {
-    // Fetch users who have valid FCM tokens and build token list
+    // Check if this is a VoIP notification
+    const isVoipExplicit = (
+      options.apnsVoip === true ||
+      (typeof data.pushType === 'string' && data.pushType.toLowerCase() === 'voip') ||
+      (typeof notificationData.pushType === 'string' && notificationData.pushType.toLowerCase() === 'voip') ||
+      (typeof notificationData.type === 'string' && notificationData.type.toLowerCase() === 'voip')
+    );
+    
+    console.log(`[MULTICAST START] Starting multicast notification for ${userIds.length} users:`, {
+      title: notificationData.title,
+      body: notificationData.body,
+      type: notificationData.type,
+      isVoip: isVoipExplicit,
+      userIds: userIds.map(id => id.toString()),
+      dataKeys: Object.keys(data),
+      optionsKeys: Object.keys(options)
+    });
+
+    // Fetch users who have any valid push tokens
     let usersWithTokens = [];
     try {
-      usersWithTokens = await User.find({ _id: { $in: userIds }, fcmToken: { $exists: true, $ne: null } });
+      usersWithTokens = await User.find({
+        _id: { $in: userIds },
+        $or: [
+          { fcmToken: { $exists: true, $ne: null } },
+          { apnsToken: { $exists: true, $ne: null } },
+          { voipToken: { $exists: true, $ne: null } }
+        ]
+      });
     } catch (_e) {
       usersWithTokens = [];
     }
 
     const validUserIds = usersWithTokens.map(user => user._id);
-    const tokens = usersWithTokens.map(user => user.fcmToken);
+    
+    console.log(`[MULTICAST USERS] Found ${usersWithTokens.length} users with tokens out of ${userIds.length} requested`);
+    
+    // Separate tokens by device type
+    const iosUsers = usersWithTokens.filter(u => u.deviceType === 'ios');
+    const androidUsers = usersWithTokens.filter(u => u.deviceType === 'android');
+    const unknownDeviceUsers = usersWithTokens.filter(u => !u.deviceType);
+    
+    console.log(`[MULTICAST SEPARATION] Device type breakdown:`, {
+      iosUsers: iosUsers.length,
+      androidUsers: androidUsers.length,
+      unknownDeviceUsers: unknownDeviceUsers.length,
+      totalUsersWithTokens: usersWithTokens.length
+    });
+    
+    const fcmTokens = [...androidUsers, ...unknownDeviceUsers].filter(u => !!u.fcmToken).map(u => u.fcmToken);
+    const apnsTokens = iosUsers.filter(u => !!u.apnsToken).map(u => u.apnsToken);
+    const voipTokens = iosUsers.filter(u => !!u.voipToken).map(u => u.voipToken);
+
+    console.log(`[MULTICAST TOKENS] Token counts:`, {
+      fcmTokens: fcmTokens.length,
+      apnsTokens: apnsTokens.length,
+      voipTokens: voipTokens.length
+    });
 
     // Create notification records ONLY for users who have tokens
     let notificationRecords = [];
     if (validUserIds.length > 0) {
-      notificationRecords = validUserIds.map((uid) => new Notification({
-        user: uid,
-        title: notificationData.title,
-        body: notificationData.body,
-        type: notificationData.type || 'general',
-        data: data,
-        customPayload: options.customPayload,
-        expiresAt: options.expiresAt,
-        relatedEntity: options.relatedEntity,
-        deliveryStatus: 'pending'
-      }));
+      // Fetch user names for all users
+      const userNames = {};
+      try {
+        const users = await User.find({ _id: { $in: validUserIds } }).select('name pseudo');
+        users.forEach(user => {
+          userNames[user._id.toString()] = user.name || user.pseudo || 'User';
+        });
+      } catch (_e) {}
+
+      notificationRecords = validUserIds.map((uid) => {
+        const enrichedData = {
+          ...data,
+          userName: userNames[uid.toString()] || 'User'
+        };
+        
+        return new Notification({
+          user: uid,
+          title: notificationData.title,
+          body: notificationData.body,
+          type: notificationData.type || 'general',
+          data: enrichedData,
+          customPayload: options.customPayload ? JSON.stringify(options.customPayload) : undefined,
+          expiresAt: options.expiresAt,
+          relatedEntity: options.relatedEntity,
+          deliveryStatus: 'pending'
+        });
+      });
 
       try {
         await Notification.insertMany(notificationRecords);
       } catch (dbError) {
         console.error('Error saving notifications to database:', dbError);
-        // Continue with FCM sending even if DB save fails
       }
     }
 
-    if (!isFirebaseInitialized || !this.messaging) {
-      console.log('Firebase not initialized. Multicast notification not sent.');
-      // Update created notification statuses to failed
+    if ((!isFirebaseInitialized || !this.messaging) && (!apnsProvider || (apnsTokens.length === 0 && voipTokens.length === 0))) {
+      console.log('No push providers initialized. Multicast notification not sent.');
       try {
         if (notificationRecords.length > 0) {
           const notificationIds = notificationRecords.map(n => n._id);
@@ -213,19 +1168,18 @@ class NotificationService {
             { _id: { $in: notificationIds } },
             {
               deliveryStatus: 'failed',
-              failureReason: 'Firebase not initialized'
+              failureReason: (!apnsProvider ? 'APNs not configured' : 'Firebase not initialized')
             }
           );
         }
       } catch (updateError) {
         console.error('Error updating notification statuses:', updateError);
       }
-      return { success: false, message: 'Firebase not initialized' };
+      return { success: false, message: (!apnsProvider ? 'APNs not configured' : 'Firebase not initialized') };
     }
 
     try {
-      if (tokens.length === 0) {
-        // No valid tokens. If any notifications were created, mark them failed
+      if (fcmTokens.length === 0 && apnsTokens.length === 0 && voipTokens.length === 0) {
         try {
           if (notificationRecords.length > 0) {
             const notificationIds = notificationRecords.map(n => n._id);
@@ -233,95 +1187,385 @@ class NotificationService {
               { _id: { $in: notificationIds } },
               {
                 deliveryStatus: 'failed',
-                failureReason: 'No valid FCM tokens found'
+                failureReason: 'No valid push tokens found'
               }
             );
           }
         } catch (updateError) {
           console.error('Error updating notification statuses:', updateError);
         }
-        return { success: false, message: 'No valid FCM tokens found' };
+        return { success: false, message: 'No valid push tokens found' };
       }
 
-      const message = {
-        notification: {
-          title: notificationData.title,
-          body: notificationData.body,
-        },
-        data: {
-          ...data,
-          ...(options.customPayload ? { customPayload: options.customPayload } : {}),
+      let fcmResponse = { successCount: 0, failureCount: 0, responses: [] };
+      if (isFirebaseInitialized && this.messaging && fcmTokens.length > 0) {
+        // For Android VoIP calls, send only data payload (no notification parameter)
+        // This allows the app to handle the call silently without showing a notification banner
+        const isVoipForAndroid = isVoipExplicit && androidUsers.length > 0;
+        
+        // Build data payload
+        const dataPayload = {
+          // Convert all data values to strings for Firebase FCM compatibility
+          ...Object.fromEntries(
+            Object.entries(data).map(([key, value]) => [
+              key, 
+              typeof value === 'string' ? value : JSON.stringify(value)
+            ])
+          ),
+          ...(options.customPayload ? { customPayload: JSON.stringify(options.customPayload) } : {}),
           clickAction: 'FLUTTER_NOTIFICATION_CLICK',
           sound: 'default',
-        },
-        android: {
-          notification: {
-            sound: 'default',
-            channelId: 'default',
+          // Add notification type for Android handling
+          notificationType: notificationData.type || 'general',
+          // Add timestamp for Android
+          timestamp: Date.now().toString(),
+        };
+        
+        // Build message - for VoIP on Android, exclude notification parameter
+        const fcmMessage = {
+          ...(isVoipForAndroid ? {} : {
+            notification: {
+              title: notificationData.title,
+              body: notificationData.body,
+            }
+          }),
+          data: dataPayload,
+          android: {
+            ...(isVoipForAndroid ? {} : {
+              notification: {
+                sound: 'default',
+                channelId: 'baroni_notifications', // Use a specific channel instead of 'default'
+                priority: 'high',
+                visibility: 'public',
+                // Add icon and color for better Android display
+                icon: 'ic_notification',
+                color: '#FF6B6B', // Baroni brand color
+                // Add click action
+                clickAction: 'FLUTTER_NOTIFICATION_CLICK',
+                // Add tag for notification grouping
+                tag: notificationData.type || 'general',
+                // Add local notification for better reliability
+                localOnly: false,
+                // Add default vibration pattern
+                defaultVibrateTimings: true,
+                // Add light settings
+                lightSettings: {
+                  color: '#FF6B6B', // Baroni brand color in hex format
+                  lightOnDurationMillis: 100, // 0.1 seconds in milliseconds
+                  lightOffDurationMillis: 100 // 0.1 seconds in milliseconds
+                }
+              }
+            }),
+            // Add Android-specific data
+            data: {
+              // Convert all data values to strings for Firebase FCM compatibility
+              ...Object.fromEntries(
+                Object.entries(data).map(([key, value]) => [
+                  key, 
+                  typeof value === 'string' ? value : JSON.stringify(value)
+                ])
+              ),
+              ...(options.customPayload ? { customPayload: JSON.stringify(options.customPayload) } : {}),
+              clickAction: 'FLUTTER_NOTIFICATION_CLICK',
+              notificationType: notificationData.type || 'general',
+              timestamp: Date.now().toString(),
+            },
+            // Add Android priority
             priority: 'high',
+            // Add TTL for Android
+            ttl: 3600, // 1 hour
           },
-        },
-        apns: {
-          payload: {
-            aps: {
-              sound: 'default',
-              badge: 1,
+          apns: {
+            payload: {
+              aps: {
+                sound: 'default',
+                badge: 1,
+              },
             },
           },
-        },
-        tokens: tokens,
+          tokens: fcmTokens,
+        };
+        
+        console.log(`[FCM MULTICAST] Sending ${isVoipForAndroid ? 'VoIP (data-only)' : 'notification'} to ${fcmTokens.length} Android users`, {
+          isVoip: isVoipForAndroid,
+          title: isVoipForAndroid ? 'N/A (data-only)' : notificationData.title,
+          body: isVoipForAndroid ? 'N/A (data-only)' : notificationData.body,
+          channelId: isVoipForAndroid ? 'N/A (data-only)' : 'baroni_notifications',
+          priority: 'high',
+          tokenCount: fcmTokens.length,
+          fcmTokensPreview: fcmTokens.slice(0, 3).map(token => token.substring(0, 20) + '...')
+        });
+        
+        console.log(`[FCM MULTICAST DEBUG] Complete multicast message structure:`, JSON.stringify(fcmMessage, null, 2));
+        
+        try {
+          fcmResponse = await this.messaging.sendMulticast(fcmMessage);
+          
+          console.log(`[FCM MULTICAST SUCCESS] Multicast notification results`, {
+            successCount: fcmResponse.successCount,
+            failureCount: fcmResponse.failureCount,
+            totalTokens: fcmTokens.length,
+            responses: fcmResponse.responses ? fcmResponse.responses.length : 0
+          });
+        } catch (fcmMulticastError) {
+          console.error(`[FCM MULTICAST ERROR] Failed to send multicast notification:`, {
+            error: fcmMulticastError.message,
+            code: fcmMulticastError.code,
+            tokenCount: fcmTokens.length
+          });
+          fcmResponse = { successCount: 0, failureCount: fcmTokens.length, responses: [] };
+        }
+      }
+
+      let apnsSuccessCount = 0;
+      let apnsFailureCount = 0;
+      const apnsFailedTokens = [];
+      
+      // Group iOS users by their isDev setting
+      const iosDevUsers = iosUsers.filter(u => u.isDev === true);
+      const iosProdUsers = iosUsers.filter(u => u.isDev === false);
+      
+      // Handle dev iOS users
+      if (iosDevUsers.length > 0) {
+        const devApnsProvider = this.getApnsProvider(true);
+        if (devApnsProvider) {
+          const devApnsTokens = iosDevUsers.filter(u => !!u.apnsToken).map(u => u.apnsToken);
+          if (devApnsTokens.length > 0) {
+            const result = await this.sendApnsToTokens(devApnsProvider, devApnsTokens, notificationData, data, options, true);
+            apnsSuccessCount += result.successCount;
+            apnsFailureCount += result.failureCount;
+            apnsFailedTokens.push(...result.failedTokens);
+          }
+        }
+      }
+      
+      // Handle production iOS users
+      if (iosProdUsers.length > 0) {
+        const prodApnsProvider = this.getApnsProvider(false);
+        if (prodApnsProvider) {
+          const prodApnsTokens = iosProdUsers.filter(u => !!u.apnsToken).map(u => u.apnsToken);
+          if (prodApnsTokens.length > 0) {
+            const result = await this.sendApnsToTokens(prodApnsProvider, prodApnsTokens, notificationData, data, options, false);
+            apnsSuccessCount += result.successCount;
+            apnsFailureCount += result.failureCount;
+            apnsFailedTokens.push(...result.failedTokens);
+          }
+        }
+      }
+      
+      // Legacy fallback for backward compatibility
+      if (apnsProvider && apnsTokens.length > 0) {
+        const note = new apn.Notification();
+        const isVoip = (
+          options.apnsVoip ||
+          data.pushType === 'voip' ||
+          notificationData.pushType === 'voip' ||
+          (typeof notificationData.type === 'string' && notificationData.type.toLowerCase() === 'voip')
+        );
+        const voipBundle = process.env.APNS_VOIP_BUNDLE_ID || (process.env.APNS_BUNDLE_ID ? `${process.env.APNS_BUNDLE_ID}.voip` : undefined);
+        note.topic = isVoip && voipBundle ? voipBundle : process.env.APNS_BUNDLE_ID;
+        if (isVoip) {
+          note.pushType = 'voip';
+          note.contentAvailable = 1;
+          note.expiry = Math.floor(Date.now() / 1000) + 3600;
+          // VoIP notifications don't support alert, sound, or badge
+        } else {
+          // Regular push notifications
+          note.alert = {
+            title: notificationData.title,
+            body: notificationData.body
+          };
+          note.sound = 'default';
+          note.badge = 1;
+        }
+        // Match Flutter's expected payload shape for VoIP pushes
+        if (isVoip) {
+          note.payload = {
+            extra: {
+              ...data,
+              ...(options.customPayload ? { customPayload: options.customPayload } : {}),
+              clickAction: 'FLUTTER_NOTIFICATION_CLICK'
+            }
+          };
+        } else {
+          note.payload = { ...data, ...(options.customPayload ? { customPayload: options.customPayload } : {}) };
+        }
+
+        const chunks = [];
+        const chunkSize = 100; // reasonable APNs batch size
+        for (let i = 0; i < apnsTokens.length; i += chunkSize) {
+          chunks.push(apnsTokens.slice(i, i + chunkSize));
+        }
+        for (const chunk of chunks) {
+          const resp = await apnsProvider.send(note, chunk);
+          apnsSuccessCount += resp.sent.length;
+          apnsFailureCount += resp.failed.length;
+          apnsFailedTokens.push(...resp.failed.map(f => f.device));
+          if (resp.sent && resp.sent.length > 0) {
+            const firstSent = resp.sent[0];
+            console.log('[APNs] success payload/response (sendToMultipleUsers chunk)', {
+              topic: note.topic,
+              alert: note.alert,
+              payload: note.payload,
+              response: firstSent && firstSent.response ? firstSent.response : null,
+              sentCount: resp.sent.length
+            });
+          }
+        }
+        console.log('[APNs] sendToMultipleUsers', {
+          isVoip,
+          topic: note.topic,
+          title: notificationData.title,
+          successCount: apnsSuccessCount,
+          failureCount: apnsFailureCount
+        });
+      } else if (!apnsProvider && apnsTokens.length > 0) {
+        apnsFailureCount = apnsTokens.length;
+        apnsFailedTokens.push(...apnsTokens);
+      }
+
+      // Handle VoIP tokens separately
+      let voipSuccessCount = 0;
+      let voipFailureCount = 0;
+      const voipFailedTokens = [];
+      
+      // Group VoIP users by their isDev setting
+      const voipDevUsers = iosUsers.filter(u => u.isDev === true && !!u.voipToken);
+      const voipProdUsers = iosUsers.filter(u => u.isDev === false && !!u.voipToken);
+      
+      // Handle dev VoIP users
+      if (voipDevUsers.length > 0) {
+        const devApnsProvider = this.getApnsProvider(true);
+        if (devApnsProvider) {
+          const devVoipTokens = voipDevUsers.map(u => u.voipToken);
+          const result = await this.sendVoipToTokens(devApnsProvider, devVoipTokens, notificationData, data, options, true);
+          voipSuccessCount += result.successCount;
+          voipFailureCount += result.failureCount;
+          voipFailedTokens.push(...result.failedTokens);
+        }
+      }
+      
+      // Handle production VoIP users
+      if (voipProdUsers.length > 0) {
+        const prodApnsProvider = this.getApnsProvider(false);
+        if (prodApnsProvider) {
+          const prodVoipTokens = voipProdUsers.map(u => u.voipToken);
+          const result = await this.sendVoipToTokens(prodApnsProvider, prodVoipTokens, notificationData, data, options, false);
+          voipSuccessCount += result.successCount;
+          voipFailureCount += result.failureCount;
+          voipFailedTokens.push(...result.failedTokens);
+        }
+      }
+      
+      // Legacy fallback for backward compatibility
+      if (apnsProvider && voipTokens.length > 0) {
+        const voipNote = new apn.Notification();
+        voipNote.topic = process.env.APNS_VOIP_BUNDLE_ID || process.env.APNS_BUNDLE_ID;
+        voipNote.pushType = 'voip';
+        voipNote.contentAvailable = 1;
+        voipNote.expiry = Math.floor(Date.now() / 1000) + 3600;
+
+        // VoIP notifications don't support alert, sound, or badge
+        voipNote.payload = {
+          extra: {
+            // Convert all data values to strings for Firebase FCM compatibility
+            ...Object.fromEntries(
+              Object.entries(data).map(([key, value]) => [
+                key, 
+                typeof value === 'string' ? value : JSON.stringify(value)
+              ])
+            ),
+            ...(options.customPayload ? { customPayload: JSON.stringify(options.customPayload) } : {}),
+            clickAction: 'FLUTTER_NOTIFICATION_CLICK',
+            pushType: 'VoIP'
+          }
+        };
+
+        const voipChunks = [];
+        const voipChunkSize = 100; // reasonable APNs batch size
+        for (let i = 0; i < voipTokens.length; i += voipChunkSize) {
+          voipChunks.push(voipTokens.slice(i, i + voipChunkSize));
+        }
+        for (const chunk of voipChunks) {
+          const resp = await apnsProvider.send(voipNote, chunk);
+          voipSuccessCount += resp.sent.length;
+          voipFailureCount += resp.failed.length;
+          voipFailedTokens.push(...resp.failed.map(f => f.device));
+          if (resp.sent && resp.sent.length > 0) {
+            const firstSent = resp.sent[0];
+            console.log('[VoIP] success payload/response (sendToMultipleUsers chunk)', {
+              topic: voipNote.topic,
+              payload: voipNote.payload,
+              response: firstSent && firstSent.response ? firstSent.response : null,
+              sentCount: resp.sent.length
+            });
+          }
+        }
+        console.log('[VoIP] sendToMultipleUsers', {
+          topic: voipNote.topic,
+          title: notificationData.title,
+          successCount: voipSuccessCount,
+          failureCount: voipFailureCount
+        });
+      } else if (!apnsProvider && voipTokens.length > 0) {
+        voipFailureCount = voipTokens.length;
+        voipFailedTokens.push(...voipTokens);
+      }
+
+      const response = {
+        successCount: fcmResponse.successCount + apnsSuccessCount + voipSuccessCount,
+        failureCount: fcmResponse.failureCount + apnsFailureCount + voipFailureCount,
+        responses: fcmResponse.responses
       };
 
-      const response = await this.messaging.sendMulticast(message);
-      console.log(`Multicast notification sent:`, response);
-
-      // Update notification statuses based on delivery results
       try {
-        const successfulTokens = [];
-        const failedTokens = [];
-        
-        response.responses.forEach((resp, idx) => {
-          if (resp.success) {
-            successfulTokens.push(tokens[idx]);
-          } else {
-            failedTokens.push(tokens[idx]);
-          }
+        const successfulFcmTokens = [];
+        const failedFcmTokens = [];
+        (fcmResponse.responses || []).forEach((resp, idx) => {
+          if (resp.success) successfulFcmTokens.push(fcmTokens[idx]);
+          else failedFcmTokens.push(fcmTokens[idx]);
         });
 
-        // Update successful notifications
-        if (successfulTokens.length > 0) {
+        if (successfulFcmTokens.length > 0) {
           const successfulUserIds = usersWithTokens
-            .filter(user => successfulTokens.includes(user.fcmToken))
+            .filter(user => successfulFcmTokens.includes(user.fcmToken))
             .map(user => user._id);
-          
+
           await Notification.updateMany(
             { user: { $in: successfulUserIds }, deliveryStatus: 'pending' },
             { deliveryStatus: 'sent' }
           );
         }
 
-        // Update failed notifications
+        const failedTokens = [...failedFcmTokens, ...apnsFailedTokens, ...voipFailedTokens];
         if (failedTokens.length > 0) {
           const failedUserIds = usersWithTokens
-            .filter(user => failedTokens.includes(user.fcmToken))
+            .filter(user => failedTokens.includes(user.fcmToken) || failedTokens.includes(user.apnsToken) || failedTokens.includes(user.voipToken))
             .map(user => user._id);
-          
+
           await Notification.updateMany(
             { user: { $in: failedUserIds }, deliveryStatus: 'pending' },
-            { 
+            {
               deliveryStatus: 'failed',
-              failureReason: 'FCM delivery failed'
+              failureReason: 'Push delivery failed'
             }
           );
         }
 
-        // Remove invalid tokens
-        if (failedTokens.length > 0) {
-          await User.updateMany(
-            { fcmToken: { $in: failedTokens } },
-            { $unset: { fcmToken: 1 } }
-          );
-          console.log(`Removed ${failedTokens.length} invalid FCM tokens`);
+        if (failedFcmTokens.length > 0) {
+          console.log(`FCM delivery failed for ${failedFcmTokens.length} tokens, but keeping them for retry`);
+          // Note: We're not removing FCM tokens on failure as they might be valid
+          // and the failure could be temporary (network, server issues, etc.)
+        }
+        if (apnsFailedTokens.length > 0) {
+          console.log(`APNs delivery failed for ${apnsFailedTokens.length} tokens, but keeping them for retry`);
+          // Note: We're not removing APNs tokens on failure as they might be valid
+          // and the failure could be temporary (network, server issues, etc.)
+        }
+        if (voipFailedTokens.length > 0) {
+          console.log(`VoIP delivery failed for ${voipFailedTokens.length} tokens, but keeping them for retry`);
+          // Note: We're not removing VoIP tokens on failure as they might be valid
+          // and the failure could be temporary (network, server issues, etc.)
         }
       } catch (updateError) {
         console.error('Error updating notification statuses:', updateError);
@@ -334,8 +1578,7 @@ class NotificationService {
       };
     } catch (error) {
       console.error('Error sending multicast notification:', error);
-      
-      // Update all notification statuses to failed
+
       try {
         const notificationIds = notificationRecords.map(n => n._id);
         await Notification.updateMany(
@@ -348,7 +1591,7 @@ class NotificationService {
       } catch (updateError) {
         console.error('Error updating notification statuses:', updateError);
       }
-      
+
       return { success: false, error: error.message };
     }
   }
@@ -376,13 +1619,51 @@ class NotificationService {
           ...data,
           clickAction: 'FLUTTER_NOTIFICATION_CLICK',
           sound: 'default',
+          // Add notification type for Android handling
+          notificationType: notificationData.type || 'general',
+          // Add timestamp for Android
+          timestamp: Date.now().toString(),
         },
         android: {
           notification: {
             sound: 'default',
-            channelId: 'default',
+            channelId: 'baroni_notifications', // Use a specific channel instead of 'default'
             priority: 'high',
+            visibility: 'public',
+            // Add icon and color for better Android display
+            icon: 'ic_notification',
+            color: '#FF6B6B', // Baroni brand color
+            // Add click action
+            clickAction: 'FLUTTER_NOTIFICATION_CLICK',
+            // Add tag for notification grouping
+            tag: notificationData.type || 'general',
+            // Add local notification for better reliability
+            localOnly: false,
+            // Add default vibration pattern
+            defaultVibrateTimings: true,
+            // Add light settings
+            lightSettings: {
+              color: {
+                red: 1.0,
+                green: 0.42,
+                blue: 0.42,
+                alpha: 1.0
+              },
+              lightOnDurationMillis: 100, // 0.1 seconds in milliseconds
+              lightOffDurationMillis: 100 // 0.1 seconds in milliseconds
+            }
           },
+          // Add Android-specific data
+          data: {
+            ...data,
+            clickAction: 'FLUTTER_NOTIFICATION_CLICK',
+            notificationType: notificationData.type || 'general',
+            timestamp: Date.now().toString(),
+          },
+          // Add Android priority
+          priority: 'high',
+          // Add TTL for Android
+          ttl: 3600, // 1 hour
         },
         apns: {
           payload: {
@@ -470,7 +1751,7 @@ class NotificationService {
         body: notificationData.body,
         type: notificationData.type || 'general',
         data: data,
-        customPayload: options.customPayload,
+        customPayload: options.customPayload ? JSON.stringify(options.customPayload) : undefined,
         expiresAt: options.expiresAt,
         relatedEntity: options.relatedEntity,
         deliveryStatus: 'pending'
@@ -506,6 +1787,11 @@ class NotificationService {
       APPOINTMENT_CANCELLED: {
         title: 'Appointment Cancelled',
         body: 'An appointment has been cancelled.',
+        type: 'appointment'
+      },
+      APPOINTMENT_RESCHEDULED: {
+        title: 'Appointment Rescheduled',
+        body: 'An appointment has been rescheduled.',
         type: 'appointment'
       },
       APPOINTMENT_REMINDER: {
@@ -576,6 +1862,11 @@ class NotificationService {
         body: 'You have a new dedication request.',
         type: 'dedication'
       },
+      DEDICATION_REQUEST_CREATED: {
+        title: 'New Dedication Request',
+        body: 'You have a new dedication request.',
+        type: 'dedication'
+      },
       DEDICATION_ACCEPTED: {
         title: 'Dedication Request Accepted',
         body: 'Your dedication request was accepted!',
@@ -586,12 +1877,36 @@ class NotificationService {
         body: 'Your dedication request was rejected.',
         type: 'dedication'
       },
+      DEDICATION_CANCELLED: {
+        title: 'Dedication Cancelled',
+        body: 'A dedication request has been cancelled.',
+        type: 'dedication'
+      },
+      DEDICATION_VIDEO_UPLOADED: {
+        title: 'Dedication Video Uploaded',
+        body: 'Your dedication video has been uploaded.',
+        type: 'dedication'
+      },
 
       // Message notifications
       NEW_MESSAGE: {
         title: 'New Message',
         body: 'You have received a new message.',
         type: 'message'
+      },
+
+      // Star promotion notifications
+      STAR_PROMOTION_COMPLETED: {
+        title: 'Congratulations! You are now a Baroni Star 🌟',
+        body: 'Welcome to the stars! You can now receive bookings and create content for your fans.',
+        type: 'star_promotion'
+      },
+
+      // Live show notifications
+      LIVE_SHOW_CREATED_SUCCESS: {
+        title: 'Your Live Show event has been set successfully',
+        body: 'Your live show has been created and is now open for fans to join!',
+        type: 'live_show'
       },
 
       // General notifications

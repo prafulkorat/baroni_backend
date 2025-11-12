@@ -14,6 +14,11 @@ import {
     getSoftDeletedUsers,
     toggleAvailableForBookings,
     updateFcmToken,
+    updateApnsToken,
+    updateVoipToken,
+    updateDeviceType,
+    updateIsDev, sendOtpController, verifyOtpController,
+    logout,
 } from '../../controllers/auth.js';
 import { registerValidator, loginValidator, completeProfileValidator, checkUserValidator } from '../../validators/authValidators.js';
 import { requireAuth, requireRole } from '../../middlewares/auth.js';
@@ -24,10 +29,13 @@ const router = express.Router();
 
 router.post('/register', registerValidator, register);
 router.post('/login', loginValidator, login);
+router.post('/logout', requireAuth, logout);
 router.post('/refresh', refresh);
 router.post('/check-user', checkUserValidator, checkUser);
 router.post('/forgot-password', forgotPassword);
 router.post('/reset-password', resetPassword);
+router.post('/sent-otp', sendOtpController);
+router.post('/verify-otp',verifyOtpController)
 
 // OTP verification removed
 router.post(
@@ -47,6 +55,10 @@ router.delete('/users/:userId', requireAuth, requireRole('admin'), permanentlyDe
 
 router.patch('/toggle-availability', requireAuth, toggleAvailableForBookings);
 router.patch('/fcm-token', requireAuth, updateFcmToken);
+router.patch('/apns-token', requireAuth, updateApnsToken);
+router.patch('/voip-token', requireAuth, updateVoipToken);
+router.patch('/device-type', requireAuth, updateDeviceType);
+router.patch('/is-dev', requireAuth, updateIsDev);
 
 router.get('/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
 router.get(

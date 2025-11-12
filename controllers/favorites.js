@@ -1,4 +1,5 @@
 import { validationResult } from 'express-validator';
+import { getFirstValidationError } from '../utils/validationHelper.js';
 import User from '../models/User.js';
 import mongoose from 'mongoose';
 
@@ -12,11 +13,19 @@ export const addToFavorites = async (req, res) => {
 
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      return res.status(400).json({ success: false, errors: errors.array() });
+      const errorMessage = getFirstValidationError(errors);
+      return res.status(400).json({ success: false, message: errorMessage || 'Validation failed' });
     }
 
-    const { starId } = req.body;
+    let { starId, baroniId, starBaroniId } = req.body;
     const fanId = req.user._id;
+
+    // Resolve by Baroni ID if provided
+    if (!starId && (baroniId || starBaroniId)) {
+      const star = await User.findOne({ baroniId: baroniId || starBaroniId, role: 'star' }).select('_id');
+      if (!star) return res.status(404).json({ success: false, message: 'Star not found' });
+      starId = star._id;
+    }
 
     if (!mongoose.Types.ObjectId.isValid(starId)) {
       return res.status(400).json({ success: false, message: 'Invalid star ID' });
@@ -43,7 +52,10 @@ export const addToFavorites = async (req, res) => {
     return res.json({
       success: true,
       message: 'Star added to favorites',
-      data: { starId, added: true }
+      data: {
+        starId, 
+        added: true
+      }
     });
   } catch (err) {
     console.error('Error in addToFavorites:', err);
@@ -61,11 +73,19 @@ export const removeFromFavorites = async (req, res) => {
 
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      return res.status(400).json({ success: false, errors: errors.array() });
+      const errorMessage = getFirstValidationError(errors);
+      return res.status(400).json({ success: false, message: errorMessage || 'Validation failed' });
     }
 
-    const { starId } = req.body;
+    let { starId, baroniId, starBaroniId } = req.body;
     const fanId = req.user._id;
+
+    // Resolve by Baroni ID if provided
+    if (!starId && (baroniId || starBaroniId)) {
+      const star = await User.findOne({ baroniId: baroniId || starBaroniId, role: 'star' }).select('_id');
+      if (!star) return res.status(404).json({ success: false, message: 'Star not found' });
+      starId = star._id;
+    }
 
     // Validate starId
     if (!mongoose.Types.ObjectId.isValid(starId)) {
@@ -88,7 +108,10 @@ export const removeFromFavorites = async (req, res) => {
     return res.json({
       success: true,
       message: 'Star removed from favorites',
-      data: { starId, removed: true }
+      data: {
+        starId, 
+        removed: true
+      }
     });
   } catch (err) {
     console.error('Error in removeFromFavorites:', err);
@@ -106,11 +129,19 @@ export const toggleFavorite = async (req, res) => {
 
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      return res.status(400).json({ success: false, errors: errors.array() });
+      const errorMessage = getFirstValidationError(errors);
+      return res.status(400).json({ success: false, message: errorMessage || 'Validation failed' });
     }
 
-    const { starId } = req.body;
+    let { starId, baroniId, starBaroniId } = req.body;
     const fanId = req.user._id;
+
+    // Resolve by Baroni ID if provided
+    if (!starId && (baroniId || starBaroniId)) {
+      const star = await User.findOne({ baroniId: baroniId || starBaroniId, role: 'star' }).select('_id');
+      if (!star) return res.status(404).json({ success: false, message: 'Star not found' });
+      starId = star._id;
+    }
 
     // Validate starId
     if (!mongoose.Types.ObjectId.isValid(starId)) {
@@ -138,7 +169,11 @@ export const toggleFavorite = async (req, res) => {
       return res.json({
         success: true,
         message: 'Star removed from favorites',
-        data: { starId, isFavorite: false, action: 'removed' }
+        data: {
+          starId, 
+          isFavorite: false, 
+          action: 'removed'
+        }
       });
     } else {
       // Add to favorites
@@ -148,7 +183,11 @@ export const toggleFavorite = async (req, res) => {
       return res.json({
         success: true,
         message: 'Star added to favorites',
-        data: { starId, isFavorite: true, action: 'added' }
+        data: {
+          starId, 
+          isFavorite: true, 
+          action: 'added'
+        }
       });
     }
   } catch (err) {
@@ -185,8 +224,11 @@ export const getFavorites = async (req, res) => {
 
     return res.json({
       success: true,
-      data: validFavorites,
-      count: validFavorites.length
+      message: 'Favorites retrieved successfully',
+      data: {
+        favorites: validFavorites,
+        count: validFavorites.length
+      }
     });
   } catch (err) {
     console.error('Error in getFavorites:', err);

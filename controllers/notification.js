@@ -4,26 +4,108 @@ import LiveShow from '../models/LiveShow.js';
 import notificationService from '../services/notificationService.js';
 
 /**
+ * Debug user notification settings
+ */
+export const debugUserNotificationSettings = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        message: 'User ID is required'
+      });
+    }
+
+    // Import NotificationHelper
+    const NotificationHelper = (await import('../utils/notificationHelper.js')).default;
+    
+    // Validate user notification settings
+    const validation = await NotificationHelper.validateUserNotificationSettings(userId);
+    
+    // Get user details
+    const User = (await import('../models/User.js')).default;
+    const user = await User.findById(userId).select('name pseudo deviceType fcmToken apnsToken voipToken appNotification isDev role');
+    
+    // Get recent notifications for this user
+    const Notification = (await import('../models/Notification.js')).default;
+    const recentNotifications = await Notification.find({ user: userId })
+      .sort({ sentAt: -1 })
+      .limit(5)
+      .select('title body type deliveryStatus failureReason sentAt');
+
+    res.json({
+      success: true,
+      message: 'User notification settings debug info',
+      data: {
+        userId,
+        validation,
+        userDetails: user ? {
+          name: user.name,
+          pseudo: user.pseudo,
+          role: user.role,
+          deviceType: user.deviceType,
+          isDev: user.isDev,
+          appNotification: user.appNotification,
+          hasFcmToken: !!user.fcmToken,
+          hasApnsToken: !!user.apnsToken,
+          hasVoipToken: !!user.voipToken,
+          fcmTokenLength: user.fcmToken ? user.fcmToken.length : 0,
+          fcmTokenPreview: user.fcmToken ? user.fcmToken.substring(0, 20) + '...' : null
+        } : null,
+        recentNotifications
+      }
+    });
+  } catch (error) {
+    console.error('Error debugging user notification settings:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error debugging notification settings',
+      error: error.message
+    });
+  }
+};
+
+/**
  * Get notifications for the authenticated user
  */
 export const getUserNotifications = async (req, res) => {
   try {
     const userId = req.user._id;
-    const { type = null } = req.query;
+    const { type = null, page = 1, limit = 10 } = req.query;
 
+    // Validate pagination parameters
+    const pageNum = parseInt(page, 10) || 1;
+    const limitNum = parseInt(limit, 10) || 10;
+    
+    // Ensure limit is within reasonable bounds
+    const maxLimit = 100;
+    const finalLimit = Math.min(limitNum, maxLimit);
+    
     // Validate type filter
-    const allowedTypes = ['appointment', 'payment', 'rating', 'live_show', 'dedication', 'message', 'general'];
+    const allowedTypes = ['appointment', 'payment', 'rating', 'live_show', 'dedication', 'message', 'general', 'star_promotion', 'voip', 'push'];
     const typeFilter = type && allowedTypes.includes(type) ? type : null;
 
-    const query = { user: userId };
-    if (typeFilter) {
+    // Exclude VoIP and chat/message notifications from the list view
+    const query = { user: userId, type: { $nin: ['voip', 'message'] } };
+    // If an allowed non-chat type filter is provided, apply it; chat stays hidden
+    if (typeFilter && typeFilter !== 'message' && typeFilter !== 'voip') {
       query.type = typeFilter;
     }
 
-    // Get all notifications sorted by sentAt (latest first)
+    // Calculate skip for pagination
+    const skip = (pageNum - 1) * finalLimit;
+
+    // Get total count for pagination info
+    const totalCount = await Notification.countDocuments(query);
+    const totalPages = Math.ceil(totalCount / finalLimit);
+
+    // Get notifications with pagination, sorted by sentAt (latest first)
     const notifications = await Notification.find(query)
       .sort({ sentAt: -1 })
-      .populate('user', 'name pseudo profilePic')
+      .populate('user', 'name pseudo profilePic agoraKey')
+      .skip(skip)
+      .limit(finalLimit)
       .lean();
 
     // Add timeAgo to each notification
@@ -34,8 +116,17 @@ export const getUserNotifications = async (req, res) => {
 
     res.json({
       success: true,
+      message: 'Notifications retrieved successfully',
       data: {
-        notifications: notificationsWithTimeAgo
+        notifications: notificationsWithTimeAgo,
+        pagination: {
+          currentPage: pageNum,
+          totalPages: totalPages,
+          totalNotifications: totalCount,
+          hasNextPage: pageNum < totalPages,
+          hasPrevPage: pageNum > 1,
+          limit: finalLimit
+        }
       }
     });
   } catch (error) {
@@ -88,7 +179,7 @@ export const getNotificationStats = async (req, res) => {
     const userId = req.user._id;
 
     const stats = await Notification.aggregate([
-      { $match: { user: userId } },
+      { $match: { user: userId, type: { $nin: ['voip', 'message'] } } },
       {
         $group: {
           _id: null,
@@ -150,7 +241,10 @@ export const getNotificationStats = async (req, res) => {
 
     res.json({
       success: true,
-      data: result
+      message: 'Notification statistics retrieved successfully',
+      data: {
+        ...result
+      }
     });
   } catch (error) {
     console.error('Error fetching notification stats:', error);
@@ -176,10 +270,24 @@ export const sendTestNotification = async (req, res) => {
       });
     }
 
+    // Only allow VOIP notifications from frontend users, not from backend
+    const normalizedType = typeof type === 'string' ? type.toLowerCase() : type;
+    const enrichedData = { ...data };
+    
+    // Check if this is a frontend request (client-side) by checking if the sender is the current user
+    const isFromFrontend = req.user && String(req.user._id) === String(userId);
+    
+    if (normalizedType === 'voip' && isFromFrontend) {
+      enrichedData.pushType = 'VoIP';
+    } else if (normalizedType === 'voip' && !isFromFrontend) {
+      // If VOIP is requested from backend, convert to normal notification
+      normalizedType = 'normal';
+    }
+
     const result = await notificationService.sendToUser(
       userId,
-      { title, body, type },
-      data,
+      { title, body, type: normalizedType },
+      enrichedData,
       { customPayload }
     );
 
@@ -187,7 +295,10 @@ export const sendTestNotification = async (req, res) => {
       return res.json({
         success: true,
         message: 'Test notification sent successfully',
-        data: { notificationId: result.notificationId, messageId: result.messageId }
+        data: {
+          notificationId: result.notificationId, 
+          messageId: result.messageId
+        }
       });
     }
 
@@ -212,15 +323,29 @@ export const sendNotificationToUser = async (req, res) => {
       return res.status(400).json({ success: false, message: 'userId, title, and body are required' });
     }
 
+    // Normalize VoIP type to pushType for APNs
+    const normalizedType = typeof type === 'string' ? type.toLowerCase() : type;
+    const enrichedData = { ...data };
+    if (normalizedType === 'VoIP') {
+      enrichedData.pushType = 'VoIP';
+    }
+
     const result = await notificationService.sendToUser(
       userId,
-      { title, body, type },
-      data,
+      { title, body, type: normalizedType },
+      enrichedData,
       { customPayload, expiresAt, relatedEntity }
     );
 
     if (result.success) {
-      return res.json({ success: true, data: { notificationId: result.notificationId, messageId: result.messageId } });
+      return res.json({ 
+        success: true, 
+        message: 'Notification sent successfully',
+        data: { 
+          notificationId: result.notificationId, 
+          messageId: result.messageId 
+        } 
+      });
     }
 
     return res.status(400).json({ success: false, message: result.message || result.error || 'Failed to send notification' });
@@ -249,7 +374,14 @@ export const sendNotificationToMultipleUsers = async (req, res) => {
     );
 
     if (result.success) {
-      return res.json({ success: true, data: { successCount: result.successCount, failureCount: result.failureCount } });
+      return res.json({ 
+        success: true, 
+        message: 'Notifications sent successfully',
+        data: { 
+          successCount: result.successCount, 
+          failureCount: result.failureCount 
+        } 
+      });
     }
 
     return res.status(400).json({ success: false, message: result.message || result.error || 'Failed to send notifications' });
@@ -275,7 +407,7 @@ export const sendNotificationToLiveShowAttendees = async (req, res) => {
 
     // First, verify that the live show exists and get its details
     const liveShow = await LiveShow.findById(liveShowId)
-      .populate('starId', 'name pseudo profilePic')
+      .populate({ path: 'starId', select: '-password -passwordResetToken -passwordResetExpires' })
       .lean();
 
     if (!liveShow) {
@@ -295,7 +427,11 @@ export const sendNotificationToLiveShowAttendees = async (req, res) => {
       return res.json({
         success: true,
         message: 'No attendees found for this live show',
-        data: { successCount: 0, failureCount: 0, totalAttendees: 0 }
+        data: {
+          successCount: 0, 
+          failureCount: 0, 
+          totalAttendees: 0
+        }
       });
     }
 
@@ -348,6 +484,7 @@ export const sendNotificationToLiveShowAttendees = async (req, res) => {
       description: liveShow.description,
       thumbnail: liveShow.thumbnail,
       starId: liveShow.starId,
+      starBaroniId: liveShow.starId && liveShow.starId.baroniId ? liveShow.starId.baroniId : undefined,
       createdAt: liveShow.createdAt,
       updatedAt: liveShow.updatedAt
     };

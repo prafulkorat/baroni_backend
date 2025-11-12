@@ -1,0 +1,532 @@
+{
+  "info": {
+    "name": "Baroni Admin Dashboard APIs",
+    "description": "Complete collection for testing admin dashboard APIs",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:4000",
+      "type": "string"
+    },
+    {
+      "key": "admin_token",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Admin Authentication",
+      "item": [
+        {
+          "name": "Admin Sign In",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"admin@baroni.com\",\n  \"password\": \"admin123\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/admin/signin",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "signin"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    const response = pm.response.json();",
+                  "    if (response.success && response.data.tokens.accessToken) {",
+                  "        pm.environment.set('admin_token', response.data.tokens.accessToken);",
+                  "        console.log('Admin token set successfully');",
+                  "    }",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Admin Forgot Password",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"admin@baroni.com\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/admin/forgot-password",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "forgot-password"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Dashboard APIs",
+      "item": [
+        {
+          "name": "Dashboard Summary",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/dashboard/summary?period=current_month",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "dashboard", "summary"],
+              "query": [
+                {
+                  "key": "period",
+                  "value": "current_month"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Revenue Insights",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/dashboard/revenue?period=current_month",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "dashboard", "revenue"],
+              "query": [
+                {
+                  "key": "period",
+                  "value": "current_month"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Active Users by Country",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/dashboard/active-users-by-country?period=current_month&limit=10",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "dashboard", "active-users-by-country"],
+              "query": [
+                {
+                  "key": "period",
+                  "value": "current_month"
+                },
+                {
+                  "key": "limit",
+                  "value": "10"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Cost Evaluation",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/dashboard/cost-evaluation?period=current_month",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "dashboard", "cost-evaluation"],
+              "query": [
+                {
+                  "key": "period",
+                  "value": "current_month"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Service Insights - Video Call",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/dashboard/service-insights/video-call?period=current_month",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "dashboard", "service-insights", "video-call"],
+              "query": [
+                {
+                  "key": "period",
+                  "value": "current_month"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Service Insights - Live Show",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/dashboard/service-insights/live-show?period=current_month",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "dashboard", "service-insights", "live-show"],
+              "query": [
+                {
+                  "key": "period",
+                  "value": "current_month"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Service Insights - Dedication",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/dashboard/service-insights/dedication?period=current_month",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "dashboard", "service-insights", "dedication"],
+              "query": [
+                {
+                  "key": "period",
+                  "value": "current_month"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Top Stars",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/dashboard/top-stars?period=current_month&limit=50&sortBy=revenue",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "dashboard", "top-stars"],
+              "query": [
+                {
+                  "key": "period",
+                  "value": "current_month"
+                },
+                {
+                  "key": "limit",
+                  "value": "50"
+                },
+                {
+                  "key": "sortBy",
+                  "value": "revenue"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Complete Dashboard",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/dashboard/complete?period=current_month",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "dashboard", "complete"],
+              "query": [
+                {
+                  "key": "period",
+                  "value": "current_month"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Service Revenue Breakdown",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/dashboard/service-revenue-breakdown?period=current_month",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "dashboard", "service-revenue-breakdown"],
+              "query": [
+                {
+                  "key": "period",
+                  "value": "current_month"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Device Change Stats",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/dashboard/device-change-stats?period=current_month",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "dashboard", "device-change-stats"],
+              "query": [
+                {
+                  "key": "period",
+                  "value": "current_month"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Reported Users Details",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/dashboard/reported-users-details?status=pending&limit=20&page=1",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "dashboard", "reported-users-details"],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "pending"
+                },
+                {
+                  "key": "limit",
+                  "value": "20"
+                },
+                {
+                  "key": "page",
+                  "value": "1"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Event Management",
+      "item": [
+        {
+          "name": "Create Event",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"New Year Promotion\",\n  \"description\": \"Special promotion for New Year\",\n  \"type\": \"promotion\",\n  \"startDate\": \"2024-01-01T00:00:00.000Z\",\n  \"endDate\": \"2024-01-31T23:59:59.000Z\",\n  \"targetAudience\": \"all\",\n  \"priority\": \"high\",\n  \"budget\": 1000,\n  \"image\": \"https://example.com/image.jpg\",\n  \"link\": \"https://baroni.com/promotion\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/events",
+              "host": ["{{base_url}}"],
+              "path": ["api", "events"]
+            }
+          }
+        },
+        {
+          "name": "Get Events",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/events?status=active&type=promotion&limit=10&page=1",
+              "host": ["{{base_url}}"],
+              "path": ["api", "events"],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "active"
+                },
+                {
+                  "key": "type",
+                  "value": "promotion"
+                },
+                {
+                  "key": "limit",
+                  "value": "10"
+                },
+                {
+                  "key": "page",
+                  "value": "1"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update Event Status",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"active\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/events/EVENT_ID_HERE/status",
+              "host": ["{{base_url}}"],
+              "path": ["api", "events", "EVENT_ID_HERE", "status"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Error Testing",
+      "item": [
+        {
+          "name": "Unauthorized Access",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/admin/dashboard/summary",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "dashboard", "summary"]
+            }
+          }
+        },
+        {
+          "name": "Invalid Period",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/dashboard/summary?period=invalid_period",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "dashboard", "summary"],
+              "query": [
+                {
+                  "key": "period",
+                  "value": "invalid_period"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Invalid Service Type",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/dashboard/service-insights/invalid-service",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "dashboard", "service-insights", "invalid-service"]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,33 +1,43 @@
 import { validationResult } from 'express-validator';
+import { getFirstValidationError } from '../utils/validationHelper.js';
 import Review from '../models/Review.js';
 import User from '../models/User.js';
 import Appointment from '../models/Appointment.js';
 import DedicationRequest from '../models/DedicationRequest.js';
 import LiveShow from '../models/LiveShow.js';
 import mongoose from 'mongoose';
+import { sanitizeUserData } from '../utils/userDataHelper.js';
+import NotificationHelper from '../utils/notificationHelper.js';
 
 // Helper function to calculate and update star's average rating
 const updateStarRating = async (starId) => {
   try {
+    // Calculate average using ALL reviews (both visible and hidden)
     const reviews = await Review.find({ 
       starId
     });
+    
+    console.log(`Updating rating for star ${starId}, found ${reviews.length} reviews`);
     
     if (reviews.length === 0) {
       await User.findByIdAndUpdate(starId, {
         averageRating: 0,
         totalReviews: 0
       });
+      console.log(`Updated star ${starId} with 0 rating and 0 reviews`);
       return;
     }
 
     const totalRating = reviews.reduce((sum, review) => sum + review.rating, 0);
     const averageRating = totalRating / reviews.length;
     
-    await User.findByIdAndUpdate(starId, {
+    const updatedUser = await User.findByIdAndUpdate(starId, {
       averageRating: Math.round(averageRating * 10) / 10, // Round to 1 decimal place
       totalReviews: reviews.length
-    });
+    }, { new: true });
+    
+    console.log(`Updated star ${starId} with average rating: ${Math.round(averageRating * 10) / 10} and total reviews: ${reviews.length}`);
+    console.log(`Updated user data:`, { averageRating: updatedUser?.averageRating, totalReviews: updatedUser?.totalReviews });
   } catch (error) {
     console.error('Error updating star rating:', error);
   }
@@ -42,24 +52,53 @@ export const submitAppointmentReview = async (req, res) => {
     }
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      return res.status(400).json({ success: false, errors: errors.array() });
+      const errorMessage = getFirstValidationError(errors);
+      return res.status(400).json({ success: false, message: errorMessage || 'Validation failed' });
     }
 
     const { appointmentId, rating, comment } = req.body;
 
-    // Validate appointment exists and is completed
-    const appointment = await Appointment.findOne({
-      _id: appointmentId,
-      fanId: req.user._id,
-      status: 'completed'
-    });
+    console.log(`[Rating] Submitting review for appointment ${appointmentId} by user ${req.user._id}`);
 
-    if (!appointment) {
+    // First, check if appointment exists at all
+    const appointmentExists = await Appointment.findById(appointmentId);
+    console.log(`[Rating] Appointment exists:`, appointmentExists ? {
+      id: appointmentExists._id,
+      fanId: appointmentExists.fanId,
+      starId: appointmentExists.starId,
+      status: appointmentExists.status,
+      paymentStatus: appointmentExists.paymentStatus
+    } : 'No appointment found');
+
+    if (!appointmentExists) {
       return res.status(404).json({ 
         success: false, 
-        message: 'Completed appointment not found' 
+        message: 'Appointment not found' 
       });
     }
+
+    // Check if appointment is completed
+    if (appointmentExists.status !== 'completed') {
+      return res.status(400).json({ 
+        success: false, 
+        message: `Appointment is not completed. Current status: ${appointmentExists.status}` 
+      });
+    }
+
+    // Check if user is the fan who booked this appointment
+    if (appointmentExists.fanId.toString() !== req.user._id.toString()) {
+      console.log(`[Rating] User mismatch:`, {
+        appointmentFanId: appointmentExists.fanId.toString(),
+        currentUserId: req.user._id.toString(),
+        match: appointmentExists.fanId.toString() === req.user._id.toString()
+      });
+      return res.status(403).json({ 
+        success: false, 
+        message: 'You can only review appointments you booked' 
+      });
+    }
+
+    const appointment = appointmentExists;
 
     // Check if review already exists
     const existingReview = await Review.findOne({
@@ -81,29 +120,40 @@ export const submitAppointmentReview = async (req, res) => {
       rating,
       comment: comment?.trim(),
       appointmentId: appointmentId,
-      reviewType: 'appointment'
+      reviewType: 'appointment',
+      isVisible: true, // User-submitted reviews are visible by default
+      isDefaultRating: false
     });
 
     // Update star's average rating
     await updateStarRating(appointment.starId);
 
+    // Send notification to star about new rating
+    try {
+      await NotificationHelper.sendRatingNotification('NEW_RATING', review, { currentUserId: req.user._id });
+    } catch (notificationError) {
+      console.error('Error sending rating notification:', notificationError);
+    }
+
     // Populate reviewer info for response
-    await review.populate('reviewerId', 'name pseudo profilePic');
+    await review.populate('reviewerId', 'name pseudo profilePic agoraKey');
 
     return res.status(201).json({
       success: true,
       message: 'Review submitted successfully',
       data: {
-        id: review._id,
-        rating: review.rating,
-        comment: review.comment,
-        reviewer: {
-          id: review.reviewerId._id,
-          name: review.reviewerId.name,
-          pseudo: review.reviewerId.pseudo,
-          profilePic: review.reviewerId.profilePic
-        },
-        createdAt: review.createdAt
+        review: {
+          id: review._id,
+          rating: review.rating,
+          comment: review.comment,
+          reviewer: {
+            id: review.reviewerId._id,
+            name: review.reviewerId.name,
+            pseudo: review.reviewerId.pseudo,
+            profilePic: review.reviewerId.profilePic
+          },
+          createdAt: review.createdAt
+        }
       }
     });
   } catch (err) {
@@ -120,7 +170,8 @@ export const submitDedicationReview = async (req, res) => {
     }
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      return res.status(400).json({ success: false, errors: errors.array() });
+      const errorMessage = getFirstValidationError(errors);
+      return res.status(400).json({ success: false, message: errorMessage || 'Validation failed' });
     }
 
     const { dedicationRequestId, rating, comment } = req.body;
@@ -159,29 +210,40 @@ export const submitDedicationReview = async (req, res) => {
       rating,
       comment: comment?.trim(),
       dedicationRequestId: dedicationRequestId,
-      reviewType: 'dedication'
+      reviewType: 'dedication',
+      isVisible: true, // User-submitted reviews are visible by default
+      isDefaultRating: false
     });
 
     // Update star's average rating
     await updateStarRating(dedicationRequest.starId);
 
+    // Send notification to star about new rating
+    try {
+      await NotificationHelper.sendRatingNotification('NEW_RATING', review, { currentUserId: req.user._id });
+    } catch (notificationError) {
+      console.error('Error sending rating notification:', notificationError);
+    }
+
     // Populate reviewer info for response
-    await review.populate('reviewerId', 'name pseudo profilePic');
+    await review.populate('reviewerId', 'name pseudo profilePic agoraKey');
 
     return res.status(201).json({
       success: true,
       message: 'Review submitted successfully',
       data: {
-        id: review._id,
-        rating: review.rating,
-        comment: review.comment,
-        reviewer: {
-          id: review.reviewerId._id,
-          name: review.reviewerId.name,
-          pseudo: review.reviewerId.pseudo,
-          profilePic: review.reviewerId.profilePic
-        },
-        createdAt: review.createdAt
+        review: {
+          id: review._id,
+          rating: review.rating,
+          comment: review.comment,
+          reviewer: {
+            id: review.reviewerId._id,
+            name: review.reviewerId.name,
+            pseudo: review.reviewerId.pseudo,
+            profilePic: review.reviewerId.profilePic
+          },
+          createdAt: review.createdAt
+        }
       }
     });
   } catch (err) {
@@ -194,7 +256,8 @@ export const submitLiveShowReview = async (req, res) => {
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      return res.status(400).json({ success: false, errors: errors.array() });
+      const errorMessage = getFirstValidationError(errors);
+      return res.status(400).json({ success: false, message: errorMessage || 'Validation failed' });
     }
 
     const { liveShowId, rating, comment } = req.body;
@@ -233,29 +296,40 @@ export const submitLiveShowReview = async (req, res) => {
       rating,
       comment: comment?.trim(),
       liveShowId: liveShowId,
-      reviewType: 'live_show'
+      reviewType: 'live_show',
+      isVisible: true, // User-submitted reviews are visible by default
+      isDefaultRating: false
     });
 
     // Update star's average rating
     await updateStarRating(liveShow.starId);
 
+    // Send notification to star about new rating
+    try {
+      await NotificationHelper.sendRatingNotification('NEW_RATING', review, { currentUserId: req.user._id });
+    } catch (notificationError) {
+      console.error('Error sending rating notification:', notificationError);
+    }
+
     // Populate reviewer info for response
-    await review.populate('reviewerId', 'name pseudo profilePic');
+    await review.populate('reviewerId', 'name pseudo profilePic agoraKey');
 
     return res.status(201).json({
       success: true,
       message: 'Review submitted successfully',
       data: {
-        id: review._id,
-        rating: review.rating,
-        comment: review.comment,
-        reviewer: {
-          id: review.reviewerId._id,
-          name: review.reviewerId.name,
-          pseudo: review.reviewerId.pseudo,
-          profilePic: review.reviewerId.profilePic
-        },
-        createdAt: review.createdAt
+        review: {
+          id: review._id,
+          rating: review.rating,
+          comment: review.comment,
+          reviewer: {
+            id: review.reviewerId._id,
+            name: review.reviewerId.name,
+            pseudo: review.reviewerId.pseudo,
+            profilePic: review.reviewerId.profilePic
+          },
+          createdAt: review.createdAt
+        }
       }
     });
   } catch (err) {
@@ -275,33 +349,33 @@ export const getStarReviews = async (req, res) => {
       });
     }
 
+    // Get only visible reviews for the list
     const reviews = await Review.find({ 
-      starId
+      starId,
+      isVisible: true // Only show visible reviews to users
     })
-    .populate('reviewerId', 'name pseudo profilePic')
+    .populate('reviewerId', 'name pseudo profilePic agoraKey')
     .sort({ createdAt: -1 });
 
+    // Get star's actual rating data (includes all reviews for calculation)
     const star = await User.findById(starId).select('averageRating totalReviews');
 
     return res.json({
       success: true,
+      message: 'Star reviews retrieved successfully',
       data: {
         reviews: reviews.map(review => ({
           id: review._id,
           rating: review.rating,
           comment: review.comment,
-          reviewer: {
-            id: review.reviewerId._id,
-            name: review.reviewerId.name,
-            pseudo: review.reviewerId.pseudo,
-            profilePic: review.reviewerId.profilePic
-          },
+          reviewer: review.reviewerId ? sanitizeUserData(review.reviewerId) : null,
           reviewType: review.reviewType,
           createdAt: review.createdAt
         })),
         star: {
           averageRating: star?.averageRating || 0,
-          totalReviews: reviews.length
+          totalReviews: star?.totalReviews || 0, // Use actual total from database (includes hidden reviews)
+          visibleReviews: reviews.length // Add count of visible reviews
         }
       }
     });
@@ -313,17 +387,19 @@ export const getStarReviews = async (req, res) => {
 // Get user's submitted reviews
 export const getMyReviews = async (req, res) => {
   try {
-    // If the requester is a star, return all reviews received for the star
-    // If the requester is a fan, return reviews submitted by the fan
+    // Return only visible reviews for all users
     const isStar = req.user.role === 'star';
-    const filter = isStar ? { starId: req.user._id } : { reviewerId: req.user._id };
+    const filter = isStar 
+      ? { starId: req.user._id, isVisible: true } // Only show visible reviews for stars
+      : { reviewerId: req.user._id, isVisible: true }; // Only show visible reviews for fans
 
     const reviews = await Review.find(filter)
-      .populate(isStar ? 'reviewerId' : 'starId', 'name pseudo profilePic')
+      .populate(isStar ? 'reviewerId' : 'starId', 'name pseudo profilePic agoraKey')
       .sort({ createdAt: -1 });
 
     return res.json({
       success: true,
+      message: 'User reviews retrieved successfully',
       data: {
         reviews: reviews.map(review => ({
           id: review._id,
@@ -332,20 +408,11 @@ export const getMyReviews = async (req, res) => {
           // If star is requesting, include reviewer details; otherwise include star details
           ...(isStar
             ? {
-                reviewer: {
-                  id: review.reviewerId._id,
-                  name: review.reviewerId.name,
-                  pseudo: review.reviewerId.pseudo,
-                  profilePic: review.reviewerId.profilePic
-                }
+                reviewer: review.reviewerId ? sanitizeUserData(review.reviewerId) : null,
+                isDefaultRating: review.isDefaultRating
               }
             : {
-                star: {
-                  id: review.starId._id,
-                  name: review.starId.name,
-                  pseudo: review.starId.pseudo,
-                  profilePic: review.starId.profilePic
-                }
+                star: review.starId ? sanitizeUserData(review.starId) : null
               }),
           reviewType: review.reviewType,
           createdAt: review.createdAt
@@ -362,7 +429,8 @@ export const updateReview = async (req, res) => {
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      return res.status(400).json({ success: false, errors: errors.array() });
+      const errorMessage = getFirstValidationError(errors);
+      return res.status(400).json({ success: false, message: errorMessage || 'Validation failed' });
     }
 
     const { reviewId } = req.params;
@@ -392,10 +460,12 @@ export const updateReview = async (req, res) => {
       success: true,
       message: 'Review updated successfully',
       data: {
-        id: review._id,
-        rating: review.rating,
-        comment: review.comment,
-        updatedAt: review.updatedAt
+        review: {
+          id: review._id,
+          rating: review.rating,
+          comment: review.comment,
+          updatedAt: review.updatedAt
+        }
       }
     });
   } catch (err) {
@@ -434,6 +504,8 @@ export const deleteReview = async (req, res) => {
     return res.status(500).json({ success: false, message: err.message });
   }
 };
+
+
 
 
 

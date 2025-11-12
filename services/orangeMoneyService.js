@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { preparePhoneForExternalAPI } from '../utils/normalizeContact.js';
 
 const ORANGE_MONEY_BASE_URL = process.env.ORANGE_MONEY_BASE_URL || 'http://35.242.129.85:80';
 const PROJECT_CODE = 'BR';
@@ -10,9 +11,54 @@ class OrangeMoneyService {
   }
 
   /**
-   * Get access token from Orange Money API
-   * @returns {Promise<string>} Access token
+   * Test connection to Orange Money API
+   * @returns {Promise<Object>} Connection test result
    */
+  async testConnection() {
+    try {
+      console.log('Testing Orange Money API connection...');
+      console.log('Base URL:', ORANGE_MONEY_BASE_URL);
+      
+      // Test token endpoint
+      const tokenResponse = await axios.get(`${ORANGE_MONEY_BASE_URL}/token`, {
+        timeout: 10000 // 10 second timeout
+      });
+      
+      console.log('Token endpoint test:', {
+        status: tokenResponse.status,
+        data: tokenResponse.data,
+        dataType: typeof tokenResponse.data
+      });
+      
+      return {
+        success: true,
+        message: 'Orange Money API connection successful',
+        tokenEndpoint: {
+          status: tokenResponse.status,
+          dataType: typeof tokenResponse.data,
+          hasData: !!tokenResponse.data
+        }
+      };
+    } catch (error) {
+      console.error('Orange Money API connection test failed:', {
+        message: error.message,
+        code: error.code,
+        status: error.response?.status,
+        data: error.response?.data
+      });
+      
+      return {
+        success: false,
+        message: 'Orange Money API connection failed',
+        error: {
+          message: error.message,
+          code: error.code,
+          status: error.response?.status,
+          data: error.response?.data
+        }
+      };
+    }
+  }
   async getAccessToken() {
     try {
       // Check if we have a cached token
@@ -21,7 +67,12 @@ class OrangeMoneyService {
       }
 
       const response = await axios.get(`${ORANGE_MONEY_BASE_URL}/token`);
-      console.log("response",response);
+      console.log("Orange Money Token Response:", {
+        status: response.status,
+        data: response.data,
+        dataType: typeof response.data
+      });
+      
       if (response.status !== 200) {
         throw new Error(`Token request failed with status ${response.status}`);
       }
@@ -55,8 +106,18 @@ class OrangeMoneyService {
       const token = await this.getAccessToken();
 
       const { msisdn, montant, motif, nameStar, marchand } = paymentData;
+      
+      // Remove + prefix from phone number for Orange Money API (same as OTP flow)
+      const cleanMsisdn = preparePhoneForExternalAPI(msisdn);
+      
+      console.log('Orange Money Payment - Phone Number Processing:', {
+        originalMsisdn: msisdn,
+        cleanMsisdn: cleanMsisdn,
+        hasPlusPrefix: msisdn.startsWith('+')
+      });
+      
       const params = new URLSearchParams({
-        msisdn,
+        msisdn: cleanMsisdn,
         montant: montant.toString(),
         prefixe: PROJECT_CODE,
         motif
@@ -70,6 +131,22 @@ class OrangeMoneyService {
         params.append('marchand', marchand);
       }
 
+      console.log('Orange Money Payment Request:', {
+        url: `${ORANGE_MONEY_BASE_URL}/initierPaiementBaroniV2?${params.toString()}`,
+        headers: {
+          'Authorization': token?.toLowerCase?.().startsWith('bearer ') ? token : `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        params: {
+          msisdn: cleanMsisdn,
+          montant: montant.toString(),
+          prefixe: PROJECT_CODE,
+          motif,
+          nameStar: nameStar || 'N/A',
+          marchand: marchand || 'N/A'
+        }
+      });
+
       const response = await axios.post(
         `${ORANGE_MONEY_BASE_URL}/initierPaiementBaroniV2?${params.toString()}`,
         {},
@@ -82,6 +159,12 @@ class OrangeMoneyService {
         }
       );
 
+      console.log('Orange Money Payment Response:', {
+        status: response.status,
+        data: response.data,
+        headers: response.headers
+      });
+
       if (response.status === 200 && (response.data.code === '200' || response.data.code === 200)) {
         return {
           success: true,
@@ -90,6 +173,11 @@ class OrangeMoneyService {
         };
       } else {
         const errMsg = response.data?.error || response.data?.message || `Payment initiation failed with status ${response.status}`;
+        console.error('Orange Money Payment Error Details:', {
+          status: response.status,
+          data: response.data,
+          errorMessage: errMsg
+        });
         throw new Error(errMsg);
       }
     } catch (error) {
@@ -128,22 +216,47 @@ class OrangeMoneyService {
    * @returns {Object} Validated callback data
    */
   validateCallbackData(callbackData) {
+    console.log('=== ORANGE MONEY VALIDATION ===');
+    console.log('Input callback data:', JSON.stringify(callbackData, null, 2));
+    
     const { transactionId, status, motif, montant } = callbackData;
+    
+    console.log('Extracted fields:', {
+      transactionId,
+      status,
+      motif,
+      montant,
+      transactionIdType: typeof transactionId,
+      statusType: typeof status,
+      motifType: typeof motif,
+      montantType: typeof montant
+    });
 
     if (!transactionId || !status || !montant) {
+      console.log('Missing required fields:', {
+        hasTransactionId: !!transactionId,
+        hasStatus: !!status,
+        hasMontant: !!montant
+      });
       throw new Error('Missing required callback data');
     }
 
     if (!['OK', 'KO'].includes(status)) {
+      console.log('Invalid status:', status);
       throw new Error('Invalid payment status');
     }
 
-    return {
+    const validatedResult = {
       transactionId,
       status: status === 'OK' ? 'completed' : 'failed',
       motif: motif || 'NA',
       amount: parseFloat(montant)
     };
+    
+    console.log('Validated result:', JSON.stringify(validatedResult, null, 2));
+    console.log('================================');
+    
+    return validatedResult;
   }
 }
 

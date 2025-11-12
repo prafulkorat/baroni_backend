@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import User from '../models/User.js';
 import Category from '../models/Category.js';
 import Dedication from '../models/Dedication.js';
@@ -7,19 +8,12 @@ import Appointment from '../models/Appointment.js';
 import Availability from '../models/Availability.js';
 import LiveShow from '../models/LiveShow.js';
 import Transaction from "../models/Transaction.js";
+import { getOrCreateStarWallet } from '../services/starWalletService.js';
+import StarTransaction from '../models/StarTransaction.js';
 import Review from '../models/Review.js';
+import { createSanitizedUserResponse, sanitizeUserData } from '../utils/userDataHelper.js';
 
-const sanitizeUser = (user) => ({
-  id: user._id,
-  name: user.name,
-  pseudo: user.pseudo,
-  profilePic: user.profilePic,
-  about: user.about,
-  profession: user.profession,
-  role: user.role,
-  availableForBookings: user.availableForBookings,
-  baroniId: user.baroniId,
-});
+const sanitizeUser = (user) => createSanitizedUserResponse(user);
 
 export const getDashboard = async (req, res) => {
   try {
@@ -30,30 +24,9 @@ export const getDashboard = async (req, res) => {
       // Fan dashboard: stars with filled details, categories, and upcoming shows
       const { country } = req.query || {};
 
-      // Build star criteria
-      const starCriteria = {
-        role: 'star',
-        // Only include stars that have filled up their details
-        $and: [
-          { name: { $exists: true, $ne: null } },
-          { name: { $ne: '' } },
-          { pseudo: { $exists: true, $ne: null } },
-          { pseudo: { $ne: '' } },
-          { about: { $exists: true, $ne: null } },
-          { about: { $ne: '' } },
-          { profession: { $exists: true, $ne: null } }
-        ]
-      };
+      // Removed starCriteria - no longer needed
 
-      if (country) {
-        starCriteria.country = country;
-      }
-
-      const starsQuery = User.find(starCriteria)
-        .populate('profession')
-        .select('name pseudo profilePic about profession availableForBookings baroniId')
-        .sort({ createdAt: -1 })
-        .limit(20);
+      // Removed stars query - no longer needed
 
       const categoriesQuery = Category.find().sort({ name: 1 });
 
@@ -65,52 +38,114 @@ export const getDashboard = async (req, res) => {
 
       let starIdsForCountry = [];
       if (country) {
-        const starIdsDocs = await User.find({ role: 'star', country }).select('_id');
+        const starIdsDocs = await User.find({ role: 'star', country, isDeleted: { $ne: true } }).select('_id');
         starIdsForCountry = starIdsDocs.map(s => s._id);
         // If no stars in that country, ensure no shows are returned quickly
         liveShowFilter.starId = { $in: starIdsForCountry.length ? starIdsForCountry : [null] };
       }
 
       const liveShowsQuery = LiveShow.find(liveShowFilter)
-        .populate('starId', 'name pseudo profilePic availableForBookings baroniId')
+        .populate({ path: 'starId', select: '-password -passwordResetToken -passwordResetExpires' })
         .sort({ date: 1 })
         .limit(10);
 
-      // Query for top 5 popular stars (based on profile impressions) with random sorting
-      const popularStarsQuery = User.find({
-        role: 'star',
-        profileImpressions: { $gt: 0 }, // Only stars with some profile views
-        $and: [
-          { name: { $exists: true, $ne: null } },
-          { name: { $ne: '' } },
-          { pseudo: { $exists: true, $ne: null } },
-          { pseudo: { $ne: '' } },
-          { about: { $exists: true, $ne: null } },
-          { about: { $ne: '' } },
-          { profession: { $exists: true, $ne: null } }
-        ]
-      })
-        .populate('profession')
-        .select('name pseudo profilePic about profession availableForBookings baroniId profileImpressions')
-        .sort({ profileImpressions: -1 })
-        .limit(20); // Get more than 5 to allow for random selection
+      // Removed popularStars query - no longer needed
 
-      const [stars, categories, upcomingShows, popularStars] = await Promise.all([
-        starsQuery,
+      // Query for featured stars specifically - more flexible criteria
+      const featuredStarsCriteria = {
+        role: 'star',
+        feature_star: true,
+        isDeleted: { $ne: true },
+        // Basic requirements - only check for essential fields like getAllStars
+        name: { $exists: true, $ne: null, $ne: '' },
+        pseudo: { $exists: true, $ne: null, $ne: '' }
+      };
+
+      if (country) {
+        featuredStarsCriteria.country = country;
+      }
+
+      const featuredStarsQuery = User.find(featuredStarsCriteria)
+        .populate('profession')
+        .select('name pseudo profilePic about profession availableForBookings baroniId feature_star')
+        .sort({ profileImpressions: -1, createdAt: -1 })
+        .limit(10);
+
+      // Query for available stars from same country
+      const availableStarsCriteria = {
+        role: 'star',
+        isDeleted: { $ne: true },
+        availableForBookings: true,
+        hidden: { $ne: true },
+        // Basic requirements - only check for essential fields
+        name: { $exists: true, $ne: null, $ne: '' },
+        pseudo: { $exists: true, $ne: null, $ne: '' }
+      };
+
+      // Only filter by country if user has a country
+      if (country && country.trim()) {
+        availableStarsCriteria.country = country;
+      }
+
+      const availableStarsQuery = User.find(availableStarsCriteria)
+        .populate('profession')
+        .select('name pseudo profilePic about profession availableForBookings baroniId feature_star country')
+        .sort({ feature_star: -1, profileImpressions: -1, createdAt: -1 })
+        .limit(15);
+
+      const [categories, upcomingShows, featuredStars, availableStars] = await Promise.all([
         categoriesQuery,
         liveShowsQuery,
-        popularStarsQuery
+        featuredStarsQuery,
+        availableStarsQuery
       ]);
 
-      // Randomly select top 5 popular stars from the fetched results
-      const shuffledPopularStars = [...popularStars].sort(() => Math.random() - 0.5);
-      const top5PopularStars = shuffledPopularStars.slice(0, 5).map(sanitizeUser);
+      // Debug: Log counts
+      console.log('Featured stars found:', featuredStars.length);
+      console.log('Available stars found:', availableStars.length);
+
+      // Calculate ratings for featured and available stars only
+      const allStars = [...featuredStars, ...availableStars];
+      const starIds = [...new Set(allStars.map(star => star._id.toString()))];
+      
+      // Get ratings for all stars in one query
+      const ratingsAgg = await Review.aggregate([
+        { $match: { starId: { $in: starIds.map(id => new mongoose.Types.ObjectId(id)) } } },
+        { $group: { _id: '$starId', avg: { $avg: '$rating' }, count: { $sum: 1 } } }
+      ]);
+      
+      // Create ratings map
+      const ratingsMap = {};
+      ratingsAgg.forEach(rating => {
+        ratingsMap[rating._id.toString()] = {
+          average: Number((rating.avg || 0).toFixed(1)), // Round to 1 decimal place (e.g., 3.9 instead of 3.99)
+          count: rating.count || 0
+        };
+      });
+
+      // Removed top5PopularStars code - no longer needed
 
       return res.json({
         success: true,
         data: {
-          stars: stars.map(sanitizeUser),
-          popularStars: top5PopularStars,
+          featuredStars: featuredStars.map(star => {
+            const sanitized = sanitizeUser(star);
+            const starRating = ratingsMap[star._id.toString()] || { average: 0, count: 0 };
+            return {
+              ...sanitized,
+              averageRating: starRating.average,
+              totalReviews: starRating.count
+            };
+          }),
+          availableStars: availableStars.map(star => {
+            const sanitized = sanitizeUser(star);
+            const starRating = ratingsMap[star._id.toString()] || { average: 0, count: 0 };
+            return {
+              ...sanitized,
+              averageRating: starRating.average,
+              totalReviews: starRating.count
+            };
+          }),
           categories: categories.map(cat => ({
             id: cat._id,
             name: cat.name,
@@ -130,14 +165,7 @@ export const getDashboard = async (req, res) => {
             thumbnail: show.thumbnail,
             likeCount: Array.isArray(show.likes) ? show.likes.length : 0,
             isLiked: Array.isArray(show.likes) && req.user ? show.likes.some(u => u.toString() === req.user._id.toString()) : false,
-            star: show.starId ? {
-              id: show.starId._id,
-              name: show.starId.name,
-              pseudo: show.starId.pseudo,
-              profilePic: show.starId.profilePic,
-              availableForBookings: show.starId.availableForBookings,
-              baroniId: show.starId.baroniId
-            } : null
+            star: show.starId ? sanitizeUserData(show.starId) : null
           }))
         },
       });
@@ -145,22 +173,16 @@ export const getDashboard = async (req, res) => {
 
     if (role === 'star') {
       // Star dashboard: upcoming bookings, earnings, engaged fans, and live shows
-      const [upcomingBookings, earnings, engagedFans, upcomingLiveShows, liveShowEarnings, escrowCoins, ratingAgg] = await Promise.all([
+      const [upcomingBookings, engagedFans, upcomingLiveShows, ratingAgg] = await Promise.all([
         // Upcoming approved appointments
         Appointment.find({
           starId: user._id,
           status: 'approved',
           date: { $gte: new Date().toISOString().split('T')[0] } // Today and future dates
         })
-        .populate('fanId', 'name pseudo profilePic')
+        .populate('fanId', 'name pseudo profilePic agoraKey')
         .sort({ date: 1, time: 1 })
         .limit(10),
-
-        // Calculate earnings from completed appointments
-        Appointment.aggregate([
-          { $match: { starId: user._id, status: 'approved' } },
-          { $group: { _id: null, totalEarnings: { $sum: 100 } } } // Assuming fixed price per appointment
-        ]),
 
         // Get unique fans who have booked appointments
         Appointment.distinct('fanId', {
@@ -176,24 +198,25 @@ export const getDashboard = async (req, res) => {
         })
         .sort({ date: 1 })
         .limit(10),
-
-        // Calculate earnings from live shows
-        LiveShow.aggregate([
-          { $match: { starId: user._id, status: 'pending' } },
-          { $group: { _id: null, totalEarnings: { $sum: '$hostingPrice' } } }
-        ]),
-        // Escrow coins: pending transactions where receiver is the star
-        Transaction.aggregate([
-          { $match: { receiverId: user._id, status: 'pending' } },
-          { $group: { _id: null, escrow: { $sum: '$amount' } } }
-        ]),
-
         // Star rating: average rating across all reviews for this star
         Review.aggregate([
           { $match: { starId: user._id } },
           { $group: { _id: '$starId', avg: { $avg: '$rating' }, count: { $sum: 1 } } }
         ])
       ]);
+
+      // Fetch star wallet for accurate escrow and jackpot balances
+      const starWallet = await getOrCreateStarWallet(user._id);
+      try {
+        console.log('[Dashboard][Star] Wallet lookup', {
+          starId: String(user._id),
+          walletFound: Boolean(starWallet),
+          escrow: starWallet?.escrow,
+          jackpot: starWallet?.jackpot,
+          totalEarned: starWallet?.totalEarned,
+          totalWithdrawn: starWallet?.totalWithdrawn
+        });
+      } catch (_e) {}
 
       // Get fan details for engaged fans
       const fanDetails = await User.find({
@@ -202,13 +225,20 @@ export const getDashboard = async (req, res) => {
       .select('name pseudo profilePic')
       .limit(20);
 
-      const appointmentEarnings = earnings.length > 0 ? earnings[0].totalEarnings : 0;
-      const liveShowEarningsTotal = liveShowEarnings.length > 0 ? liveShowEarnings[0].totalEarnings : 0;
-      const totalEarnings = appointmentEarnings + liveShowEarningsTotal;
-      const pendingEscrow = escrowCoins.length > 0 ? escrowCoins[0].escrow : 0;
+      // Compute earnings breakdown from StarTransaction (pending + completed = earned, exclude refunded)
+      const txnAgg = await StarTransaction.aggregate([
+        { $match: { starId: user._id, status: { $in: ['pending', 'completed'] } } },
+        { $group: { _id: '$type', amount: { $sum: '$amount' } } }
+      ]);
+      const aggMap = txnAgg.reduce((m, r) => { m[r._id] = r.amount; return m; }, {});
+      const appointmentEarnings = Number(aggMap['appointment'] || 0);
+      const liveShowEarningsTotal = Number(aggMap['live_show'] || aggMap['live_show_hosting'] || 0);
+      const totalEarnings = Number(starWallet?.totalEarned || (appointmentEarnings + liveShowEarningsTotal));
+      const pendingEscrow = Number(starWallet?.escrow || 0);
+      const jackpotFunds = Number(starWallet?.jackpot || 0);
 
       const starRating = ratingAgg && ratingAgg.length > 0
-        ? { average: Number((ratingAgg[0].avg || 0).toFixed(2)), count: ratingAgg[0].count || 0 }
+        ? { average: Number((ratingAgg[0].avg || 0).toFixed(1)), count: ratingAgg[0].count || 0 }
         : { average: 0, count: 0 };
 
       return res.json({
@@ -216,15 +246,11 @@ export const getDashboard = async (req, res) => {
         data: {
           upcomingBookings: upcomingBookings.map(booking => ({
             id: booking._id,
-            fan: {
-              id: booking.fanId._id,
-              name: booking.fanId.name,
-              pseudo: booking.fanId.pseudo,
-              profilePic: booking.fanId.profilePic
-            },
+            fan: booking.fanId ? sanitizeUserData(booking.fanId) : null,
             date: booking.date,
             time: booking.time,
-            status: booking.status
+            status: booking.status,
+            ...(booking.paymentStatus ? { paymentStatus: booking.paymentStatus } : {})
           })),
           upcomingLiveShows: upcomingLiveShows.map(show => ({
             id: show._id,
@@ -238,6 +264,8 @@ export const getDashboard = async (req, res) => {
             showCode: show.showCode,
             description: show.description,
             thumbnail: show.thumbnail,
+            status: show.status,
+            ...(show.paymentStatus ? { paymentStatus: show.paymentStatus } : {}),
             likeCount: Array.isArray(show.likes) ? show.likes.length : 0,
             isLiked: Array.isArray(show.likes) && req.user ? show.likes.some(u => u.toString() === req.user._id.toString()) : false
           })),
@@ -246,14 +274,10 @@ export const getDashboard = async (req, res) => {
             appointmentEarnings,
             liveShowEarnings: liveShowEarningsTotal,
             currency: 'USD',
-            escrowFunds: pendingEscrow
+            escrowFunds: pendingEscrow,
+            jackpotFunds
           },
-          engagedFans: fanDetails.map(fan => ({
-            id: fan._id,
-            name: fan.name,
-            pseudo: fan.pseudo,
-            profilePic: fan.profilePic
-          })),
+          engagedFans: fanDetails.map(fan => sanitizeUserData(fan)),
           rating: starRating,
           stats: {
             totalBookings: upcomingBookings.length,
@@ -280,8 +304,8 @@ export const getDashboard = async (req, res) => {
         .limit(10);
 
       const recentAppointments = await Appointment.find()
-        .populate('starId', 'name pseudo baroniId')
-        .populate('fanId', 'name pseudo')
+        .populate({ path: 'starId', select: '-password -passwordResetToken -passwordResetExpires' })
+        .populate('fanId', 'name pseudo agoraKey')
         .sort({ createdAt: -1 })
         .limit(10);
 
@@ -295,17 +319,11 @@ export const getDashboard = async (req, res) => {
             totalCategories,
             totalAppointments,
           },
-          recentUsers: recentUsers.map(u => ({
-            id: u._id,
-            name: u.name,
-            pseudo: u.pseudo,
-            role: u.role,
-            createdAt: u.createdAt,
-          })),
+          recentUsers: recentUsers.map(u => sanitizeUserData(u)),
           recentAppointments: recentAppointments.map(apt => ({
             id: apt._id,
-            star: apt.starId ? { id: apt.starId._id, name: apt.starId.name, pseudo: apt.starId.pseudo, baroniId: apt.starId.baroniId } : null,
-            fan: apt.fanId ? { id: apt.fanId._id, name: apt.fanId.name, pseudo: apt.fanId.pseudo } : null,
+            star: apt.starId ? sanitizeUserData(apt.starId) : null,
+            fan: apt.fanId ? sanitizeUserData(apt.fanId) : null,
             date: apt.date,
             time: apt.time,
             status: apt.status,

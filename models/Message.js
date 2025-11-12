@@ -14,8 +14,16 @@ const messageSchema = new mongoose.Schema({
     },
     message: String,
     type: {type: String, default: "text"},
-    imageUrl: String
+    imageUrl: {
+        type: String,
+        default: null
+    },
+    isRead: {
+        type: Boolean,
+        default: false
+    }
 }, {timestamps: true});
 
 const MessageModel = mongoose.model('Message', messageSchema);
 export default MessageModel;
+

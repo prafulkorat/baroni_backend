@@ -8,13 +8,26 @@ const appointmentSchema = new mongoose.Schema(
     timeSlotId: { type: mongoose.Schema.Types.ObjectId, required: true },
     date: { type: String, required: true, trim: true },
     time: { type: String, required: true, trim: true },
+    utcStartTime: { type: Date, index: true }, // UTC time for appointment start (calculated from local time based on country)
     price: { type: Number, required: true, min: 0 },
-    status: { type: String, enum: ['pending', 'approved', 'rejected', 'cancelled', 'completed'], default: 'pending', index: true },
+    status: { type: String, enum: ['pending', 'approved', 'in_progress', 'rejected', 'cancelled', 'completed', 'rescheduled'], default: 'pending', index: true },
+    // Tracks the lifecycle of the payment linked to this appointment
+    // initiated -> hybrid external part initiated
+    // pending -> full payment (coin only) or external part completed and funds in escrow
+    // completed -> payment released upon appointment completion
+    // refunded -> coins refunded due to cancellation/timeout
+    paymentStatus: { type: String, enum: ['initiated', 'pending', 'completed', 'refunded'], default: 'pending', index: true },
     transactionId: { type: mongoose.Schema.Types.ObjectId, ref: 'Transaction' },
     externalPaymentId: { type: String, index: true },
     coinAmountReserved: { type: Number, min: 0, default: 0 },
     completedAt: { type: Date },
-    callDuration: { type: Number, min: 0 }, // Duration in minutes
+    callDuration: { type: Number, min: 0 }, // Duration in seconds
+    // Reminder tracking
+    reminderSent: { type: Boolean, default: false, index: true },
+    reminderSentAt: { type: Date },
+    // Reschedule fields
+    isRescheduled: { type: Boolean, default: false, index: true },
+    parentAppointment: { type: mongoose.Schema.Types.ObjectId, ref: 'Appointment', default: null, index: true },
   },
   { timestamps: true }
 );

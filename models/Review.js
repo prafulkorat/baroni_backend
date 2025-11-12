@@ -5,7 +5,7 @@ const reviewSchema = new mongoose.Schema(
     reviewerId: { 
       type: mongoose.Schema.Types.ObjectId, 
       ref: 'User', 
-      required: true, 
+      required: false, // Optional for system reviews
       index: true 
     },
     starId: { 
@@ -42,8 +42,20 @@ const reviewSchema = new mongoose.Schema(
     },
     reviewType: { 
       type: String, 
-      enum: ['appointment', 'dedication', 'live_show'], 
+      enum: ['appointment', 'dedication', 'live_show', 'system'], 
       required: true 
+    },
+    // Visibility flag - false for default/system ratings, true for user-submitted ratings
+    isVisible: {
+      type: Boolean,
+      default: true,
+      index: true
+    },
+    // Flag to identify if this is a default rating given to new stars
+    isDefaultRating: {
+      type: Boolean,
+      default: false,
+      index: true
     }
   },
   { timestamps: true }
@@ -53,6 +65,8 @@ const reviewSchema = new mongoose.Schema(
 reviewSchema.index({ starId: 1, createdAt: -1 });
 reviewSchema.index({ reviewerId: 1, starId: 1 });
 reviewSchema.index({ reviewType: 1, createdAt: -1 });
+reviewSchema.index({ starId: 1, isVisible: 1, createdAt: -1 }); // For visible reviews only
+reviewSchema.index({ isDefaultRating: 1, isVisible: 1 }); // For admin management
 
 // Ensure one review per appointment/dedication/live show per fan
 // Ensure one review per item type by using partial unique indexes
@@ -83,6 +97,10 @@ reviewSchema.index({
 
 const Review = mongoose.model('Review', reviewSchema);
 export default Review;
+
+
+
+
 
 
 

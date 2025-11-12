@@ -2,11 +2,19 @@ import { body, param, query } from 'express-validator';
 
 // Validation for creating a support ticket
 export const createSupportTicketValidator = [
-  body('issueType'),
+  body('issueType')
+    .trim()
+    .notEmpty()
+    .withMessage('Issue type is required'),
   body('description')
     .trim()
-    .isLength({ min: 10, max: 1000 })
-    .withMessage('Description must be between 10 and 1000 characters')
+    .isLength({ min: 1, max: 2000 })
+    .withMessage('Description must be between 1 and 2000 characters'),
+  body('title')
+    .optional()
+    .trim()
+    .isLength({ min: 1, max: 200 })
+    .withMessage('Title must be between 1 and 200 characters')
 ];
 
 // Validation for updating a support ticket
@@ -19,8 +27,6 @@ export const updateSupportTicketValidator = [
   body('description')
     .optional()
     .trim()
-    .isLength({ min: 10, max: 1000 })
-    .withMessage('Description must be between 10 and 1000 characters')
 ];
 
 // Validation for getting a specific support ticket
