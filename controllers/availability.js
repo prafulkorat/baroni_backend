@@ -504,14 +504,27 @@ export const createAvailability = async (req, res) => {
             // Determine the mode for this availability
             const modeIsWeekly = isWeekly === true;
             const modeIsDaily = isDaily === true;
+            const isSpecificDate = !modeIsWeekly && !modeIsDaily;
             
-            // Find existing availability with same mode
-            const existingAvailability = await Availability.findOne({
-                userId: req.user._id,
-                date: String(isoDateStr).trim(),
-                isWeekly: modeIsWeekly,
-                isDaily: modeIsDaily
-            });
+            // Find existing availability
+            // For specific date entries (both false), find any existing entry for that date
+            // For weekly/daily entries, find entry with same mode
+            let existingAvailability;
+            if (isSpecificDate) {
+                // For specific date entries, find any existing entry (weekly, daily, or specific)
+                existingAvailability = await Availability.findOne({
+                    userId: req.user._id,
+                    date: String(isoDateStr).trim(),
+                });
+            } else {
+                // For weekly/daily entries, find entry with same mode
+                existingAvailability = await Availability.findOne({
+                    userId: req.user._id,
+                    date: String(isoDateStr).trim(),
+                    isWeekly: modeIsWeekly,
+                    isDaily: modeIsDaily
+                });
+            }
 
             if (existingAvailability) {
                 // Check if there are any active appointments for this availability
@@ -582,21 +595,28 @@ export const createAvailability = async (req, res) => {
                 // Preserve all existing slots - don't replace, just merge
                 existingAvailability.timeSlots = existingSlots;
                 
-                // Update mode flags - preserve existing flags if new flags are not provided
-                // Only update flags if explicitly provided in request
-                if (isWeekly !== undefined && isWeekly !== null) {
-                    existingAvailability.isWeekly = Boolean(isWeekly);
-                    if (isWeekly) {
-                        existingAvailability.isDaily = false;
+                // Update mode flags - preserve existing flags for specific date entries
+                // For specific date entries (both false), preserve existing mode flags
+                // For weekly/daily entries, update flags if explicitly provided
+                if (isSpecificDate) {
+                    // For specific date entries, preserve existing mode flags
+                    // Don't change isWeekly or isDaily flags
+                    console.log(`[Availability] Preserving existing mode flags for specific date entry: isWeekly=${existingAvailability.isWeekly}, isDaily=${existingAvailability.isDaily}`);
+                } else {
+                    // For weekly/daily entries, update flags if explicitly provided
+                    if (isWeekly !== undefined && isWeekly !== null) {
+                        existingAvailability.isWeekly = Boolean(isWeekly);
+                        if (isWeekly) {
+                            existingAvailability.isDaily = false;
+                        }
+                    }
+                    if (isDaily !== undefined && isDaily !== null) {
+                        existingAvailability.isDaily = Boolean(isDaily);
+                        if (isDaily) {
+                            existingAvailability.isWeekly = false;
+                        }
                     }
                 }
-                if (isDaily !== undefined && isDaily !== null) {
-                    existingAvailability.isDaily = Boolean(isDaily);
-                    if (isDaily) {
-                        existingAvailability.isWeekly = false;
-                    }
-                }
-                // If flags are not provided, preserve existing flags
                 
                 const saved = await existingAvailability.save();
                 console.log(`[Availability] Merged slots for date ${isoDateStr}: ${existingSlots.length} total slots (${newSlots.length} new slots added)`);
@@ -656,12 +676,13 @@ export const createAvailability = async (req, res) => {
                             }
                         });
                         
-                        // Preserve existing mode flags - don't change them
-                        // This allows weekly and daily entries to coexist (once new index is applied)
+                        // Always preserve existing mode flags - don't change them
+                        // This allows weekly, daily, and specific date entries to coexist
+                        // Mode flags should only be changed when explicitly updating mode, not when adding slots
                         existingEntry.timeSlots = existingSlots;
                         
                         const saved = await existingEntry.save();
-                        console.log(`[Availability] Merged slots into existing entry for date ${isoDateStr}: ${existingSlots.length} total slots (preserved all existing slots)`);
+                        console.log(`[Availability] Merged slots into existing entry for date ${isoDateStr}: ${existingSlots.length} total slots (preserved all existing slots and mode flags)`);
                         return { action: 'updated', doc: saved };
                     } else {
                         // Entry not found but duplicate key error - this shouldn't happen
