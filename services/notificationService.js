@@ -832,10 +832,10 @@ class NotificationService {
         );
         const isVoipForAndroid = isVoipExplicit && isAndroid && !isAppointmentReject && !isRejectType;
         
-        // For reject type on Android, send normal notification (not silent)
-        // But ensure it doesn't trigger call UI by filtering call-related data
+        // For reject type on Android, send background/silent notification (data-only, no alert)
+        // This is a background notification that should wake up the app without showing a notification banner
         if (isRejectType) {
-          console.log(`[FCM] Reject type notification for Android - sending normal notification (with title/body, NO call UI)`);
+          console.log(`[FCM] Reject type notification for Android - sending SILENT background notification (data-only, NO alert, NO title/body)`);
         } else if (isAppointmentReject && isAndroid) {
           console.log(`[FCM] Appointment reject notification for Android - sending normal notification (NOT VoIP call notification)`);
         }
@@ -889,14 +889,14 @@ class NotificationService {
           } : {}),
         };
         
-        // Build message - for reject type on Android, send normal notification (not silent)
+        // Build message - for reject type on Android, send background/silent notification (data-only, no alert)
         // For VoIP on Android, exclude notification parameter (data-only for call handling)
         const message = {
           token: user.fcmToken,
-          // For reject type: Include notification (Android needs visible notification)
+          // For reject type: NO notification parameter (silent background notification)
           // For VoIP: NO notification parameter (data-only for call handling)
           // Otherwise: Include notification with title and body
-          ...(isVoipForAndroid ? {} : {
+          ...(isRejectType || isVoipForAndroid ? {} : {
             notification: {
               title: notificationData.title,
               body: notificationData.body,
@@ -904,13 +904,12 @@ class NotificationService {
           }),
           data: dataPayload,
           android: {
-            // For reject type: Include notification (Android needs visible notification)
+            // For reject type: NO notification parameter (silent background notification)
             // For VoIP: NO notification parameter (data-only for call handling)
             // Otherwise: Include notification with sound, icon, etc.
-            ...(isVoipForAndroid ? {} : {
+            ...(isRejectType || isVoipForAndroid ? {} : {
               notification: {
-                // For reject type, use a lower priority sound or no sound
-                ...(isRejectType ? {} : { sound: 'default' }),
+                sound: 'default',
                 channelId: 'baroni_notifications', // Use a specific channel instead of 'default'
                 priority: 'high',
                 visibility: 'public',
@@ -975,11 +974,11 @@ class NotificationService {
         
         console.log(`[FCM DEBUG] Complete message structure for user ${userId}:`, JSON.stringify(message, null, 2));
         
-        console.log(`[FCM] Sending ${isRejectType ? 'REJECT (normal notification, no call UI)' : isVoipForAndroid ? 'VoIP (data-only)' : 'notification'} to Android user ${userId}`, {
+        console.log(`[FCM] Sending ${isRejectType ? 'REJECT (silent background, data-only)' : isVoipForAndroid ? 'VoIP (data-only)' : 'notification'} to Android user ${userId}`, {
           isRejectType,
           isVoip: isVoipForAndroid,
-          title: isVoipForAndroid ? 'N/A (data-only)' : notificationData.title,
-          body: isVoipForAndroid ? 'N/A (data-only)' : notificationData.body,
+          title: (isRejectType || isVoipForAndroid) ? 'N/A (data-only)' : notificationData.title,
+          body: (isRejectType || isVoipForAndroid) ? 'N/A (data-only)' : notificationData.body,
           channelId: isVoipForAndroid ? 'N/A (data-only)' : 'baroni_notifications',
           priority: 'high',
           fcmTokenPreview: user.fcmToken ? user.fcmToken.substring(0, 20) + '...' : 'null',
