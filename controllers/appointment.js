@@ -213,8 +213,14 @@ export const createAppointment = async (req, res) => {
 
     const slot = availability.timeSlots.find((s) => String(s._id) === String(timeSlotId));
     if (!slot) return res.status(404).json({ success: false, message: 'Time slot unavailable' });
+    // Check if slot is unavailable (booked) or locked (payment link sent, waiting for payment)
     if (slot.status === 'unavailable' || slot.status === 'locked') {
-      return res.status(409).json({ success: false, message: 'Time slot unavailable' });
+      return res.status(409).json({ 
+        success: false, 
+        message: slot.status === 'locked' 
+          ? 'Time slot is temporarily locked. Please wait for the previous booking to complete or timeout.' 
+          : 'Time slot unavailable' 
+      });
     }
 
     // Create hybrid transaction before creating appointment
@@ -306,14 +312,19 @@ export const createAppointment = async (req, res) => {
     try {
       if (transactionResult.paymentMode === 'coin') {
         // For coin-only payments, mark slot as unavailable (booked) immediately
-        await Availability.updateOne(
+        const coinUpdateResult = await Availability.updateOne(
           { _id: availabilityId, userId: starId, 'timeSlots._id': timeSlotId, 'timeSlots.status': 'available' },
           { $set: { 'timeSlots.$.status': 'unavailable' } }
         );
-        console.log(`[CreateAppointment] Slot marked as unavailable for coin-only payment`);
+        if (coinUpdateResult.matchedCount === 0) {
+          console.warn(`[CreateAppointment] ⚠ Slot not found or already booked for coin-only payment - appointment ${created._id}`);
+        } else {
+          console.log(`[CreateAppointment] ✓ Slot marked as unavailable for coin-only payment - appointment ${created._id}, updateResult:`, coinUpdateResult);
+        }
       } else if (transactionResult.paymentMode === 'hybrid' && transaction.externalPaymentId) {
-        // For hybrid payments with external payment link, lock the slot
-        await Availability.updateOne(
+        // For hybrid payments with external payment link, lock the slot for 10 minutes
+        // Slot will be unlocked if payment not completed within 10 minutes, or marked unavailable if payment completes
+        const lockUpdateResult = await Availability.updateOne(
           { _id: availabilityId, userId: starId, 'timeSlots._id': timeSlotId, 'timeSlots.status': 'available' },
           { 
             $set: { 
@@ -323,28 +334,37 @@ export const createAppointment = async (req, res) => {
             } 
           }
         );
-        console.log(`[CreateAppointment] Slot locked for external payment: ${transaction.externalPaymentId}`);
+        if (lockUpdateResult.matchedCount === 0) {
+          console.warn(`[CreateAppointment] ⚠ Slot not found or already booked/locked for hybrid payment - appointment ${created._id}`);
+        } else {
+          console.log(`[CreateAppointment] ✓ Slot locked for external payment (10 min timeout) - appointment ${created._id}, payment ${transaction.externalPaymentId}, updateResult:`, lockUpdateResult);
+        }
+      } else {
+        console.warn(`[CreateAppointment] ⚠ No slot status update - paymentMode: ${transactionResult.paymentMode}, externalPaymentId: ${transaction.externalPaymentId || 'none'}`);
       }
     } catch (slotError) {
-      console.error('[CreateAppointment] Error updating slot status:', slotError);
+      console.error('[CreateAppointment] ✗ Error updating slot status:', slotError);
+      // Don't fail the appointment creation if slot update fails, but log the error
     }
 
     // Handle coin-only payments immediately
     if (transactionResult.paymentMode === 'coin') {
       try {
         // Complete the transaction immediately for coin-only payments
+        // NOTE: completeTransaction does NOT send notification (removed to avoid duplicates)
         await completeTransaction(transaction._id);
         
-        // Send notification to star for coin-only payments
+        // Send notification to star for coin-only payments (only once, here)
         console.log(`[AppointmentCreated] Sending notification for coin-only payment - appointment ${created._id}`);
         await NotificationHelper.sendAppointmentNotification('APPOINTMENT_CREATED', created, { currentUserId: req.user._id });
         
-        console.log(`[AppointmentCreated] Coin-only payment completed, notification sent for appointment ${created._id}`);
+        console.log(`[AppointmentCreated] ✓ Coin-only payment completed, notification sent for appointment ${created._id}`);
       } catch (error) {
-        console.error('Error handling coin-only payment:', error);
+        console.error('[AppointmentCreated] ✗ Error handling coin-only payment:', error);
       }
     }
     // For hybrid payments, notification will be sent after payment completion in paymentCallbackService
+    // (only for hybrid payments, not coin-only, to avoid duplicates)
 
     const responseBody = { 
       success: true, 

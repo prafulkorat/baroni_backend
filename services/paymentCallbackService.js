@@ -128,11 +128,16 @@ export const processPaymentCallback = async (callbackData) => {
           const Availability = (await import('../models/Availability.js')).default;
           for (const appointment of appointments) {
             try {
-              await Availability.updateOne(
+              // Update slot to unavailable when payment completes
+              // Match by availabilityId, timeSlotId, and either paymentReferenceId OR locked status
+              const updateResult = await Availability.updateOne(
                 { 
                   _id: appointment.availabilityId, 
                   'timeSlots._id': appointment.timeSlotId,
-                  'timeSlots.paymentReferenceId': transaction.externalPaymentId
+                  $or: [
+                    { 'timeSlots.paymentReferenceId': transaction.externalPaymentId },
+                    { 'timeSlots.status': 'locked' }
+                  ]
                 },
                 { 
                   $set: { 
@@ -142,7 +147,14 @@ export const processPaymentCallback = async (callbackData) => {
                   } 
                 }
               );
-              console.log(`[PaymentCallback] Slot booked for appointment ${appointment._id}, payment ${transaction.externalPaymentId}`);
+              
+              if (updateResult.matchedCount === 0) {
+                console.warn(`[PaymentCallback] No slot matched for appointment ${appointment._id}, payment ${transaction.externalPaymentId} - slot may already be updated or not found`);
+              } else if (updateResult.modifiedCount === 0) {
+                console.log(`[PaymentCallback] Slot already unavailable for appointment ${appointment._id}`);
+              } else {
+                console.log(`[PaymentCallback] ✓ Slot marked as unavailable for appointment ${appointment._id}, payment ${transaction.externalPaymentId}, updateResult:`, updateResult);
+              }
             } catch (slotError) {
               console.error(`[PaymentCallback] Error updating slot for appointment ${appointment._id}:`, slotError);
             }
