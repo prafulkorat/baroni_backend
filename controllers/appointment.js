@@ -436,56 +436,10 @@ export const listAppointments = async (req, res) => {
       }
     }
     
-    // Default list filtering: If no date filter is applied, restrict completed appointments
-    // Only show completed appointments from today onwards, hide completed appointments from yesterday or before
-    // Example: If today is 10/11, don't show completed appointments from 9/10 or before
-    if (!hasDateFilter) {
-      // No date filter - apply default restrictions for completed appointments
-      // Get today's date in YYYY-MM-DD format (start of today)
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const todayStr = today.toISOString().split('T')[0]; // YYYY-MM-DD format
-      
-      console.log(`[ListAppointments] Today's date: ${todayStr} - filtering out completed appointments before this date`);
-      
-      // If status filter is 'completed', only show completed from today onwards
-      if (filter.status === 'completed') {
-        // Add date restriction for completed appointments - only today and future
-        if (filter.date) {
-          // If date filter already exists, combine with $and to ensure date >= today
-          filter.$and = [
-            { date: filter.date },
-            { date: { $gte: todayStr } }
-          ];
-          delete filter.date;
-        } else {
-          // Only show completed appointments from today onwards (exclude yesterday and before)
-          filter.date = { $gte: todayStr };
-        }
-      } else {
-        // For other statuses or no status filter, exclude old completed appointments
-        // Add condition: either status is not 'completed', or if it is 'completed', date must be >= today
-        const existingStatus = filter.status;
-        if (existingStatus) {
-          // Status filter exists and it's not 'completed' - no need to filter out old completed
-          // Just keep the status filter as is (pending, approved, etc. will show all dates)
-        } else {
-          // No status filter - exclude old completed appointments (yesterday and before)
-          // Show: all non-completed appointments OR completed appointments from today onwards
-          filter.$or = [
-            { status: { $ne: 'completed' } },
-            { 
-              status: 'completed',
-              date: { $gte: todayStr } // Only today and future dates
-            }
-          ];
-        }
-      }
-      
-      console.log(`[ListAppointments] No date filter applied - restricting completed appointments to ${todayStr} onwards (excluding yesterday and before)`);
-    } else {
-      console.log(`[ListAppointments] Date filter applied - showing all appointments based on date filter (no restriction on completed)`);
-    }
+    // Include all appointments regardless of completion status
+    // Sorting will handle the order: pending -> approved -> completed -> cancelled/rejected
+    // Within each status, sorted by date ascending (nearest to furthest)
+    console.log(`[ListAppointments] Including all appointments - sorting will handle order by status priority and date`);
     
     // Pagination - fetch all first for proper global sorting, then paginate
     // Parse page and limit from query parameters

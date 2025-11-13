@@ -529,11 +529,26 @@ class NotificationService {
           note.pushType = 'voip'; // Use VoIP push type for call rejection
           note.expiry = Math.floor(Date.now() / 1000) + 3600;
           // No alert, sound, or badge for call rejection
+          // Include userId and ownUserID in payload (same as reject type)
+          const rejectCallPayload = {
+            status: "decline"
+          };
+          // Include userId and ownUserID if present in data
+          if (data.userId) {
+            rejectCallPayload.userId = String(data.userId);
+          } else if (data.userid) {
+            rejectCallPayload.userId = String(data.userid);
+          }
+          if (data.ownUserID) {
+            rejectCallPayload.ownUserID = String(data.ownUserID);
+          } else if (data.ownuserid) {
+            rejectCallPayload.ownUserID = String(data.ownuserid);
+          }
           note.payload = {
             aps: {
               "content-available": 1
             },
-            status: "decline"
+            ...rejectCallPayload
           };
           console.log(`[APNs] Sending call rejection notification to iOS user ${userId} with payload:`, note.payload);
         } else if (isRejectType || isAppointmentReject) {
@@ -637,15 +652,46 @@ class NotificationService {
         // For reject type or appointment reject, payload is already set above, so skip here
         if (!isRejectType && !isAppointmentReject) {
           if (isVoip && !isRejectCall) {
+            // For VoIP: Include userId and ownUserID in payload (same as reject type)
+            const voipPayload = {
+              ...data,
+              ...(options.customPayload ? { customPayload: options.customPayload } : {}),
+              clickAction: 'FLUTTER_NOTIFICATION_CLICK'
+            };
+            // Ensure userId is included (from data or explicitly)
+            if (data.userId) {
+              voipPayload.userId = String(data.userId);
+            } else if (data.userid) {
+              voipPayload.userId = String(data.userid);
+            }
+            // Ensure ownUserID is included
+            if (data.ownUserID) {
+              voipPayload.ownUserID = String(data.ownUserID);
+            } else if (data.ownuserid) {
+              voipPayload.ownUserID = String(data.ownuserid);
+            }
             note.payload = {
-              extra: {
-                ...data,
-                ...(options.customPayload ? { customPayload: options.customPayload } : {}),
-                clickAction: 'FLUTTER_NOTIFICATION_CLICK'
-              }
+              extra: voipPayload
             };
           } else if (!isRejectCall) {
-            note.payload = { ...data, ...(options.customPayload ? { customPayload: options.customPayload } : {}) };
+            // For regular push notifications: Include userId and ownUserID in payload (same as reject type)
+            const pushPayload = { 
+              ...data, 
+              ...(options.customPayload ? { customPayload: options.customPayload } : {}) 
+            };
+            // Ensure userId is included (from data or explicitly)
+            if (data.userId) {
+              pushPayload.userId = String(data.userId);
+            } else if (data.userid) {
+              pushPayload.userId = String(data.userid);
+            }
+            // Ensure ownUserID is included
+            if (data.ownUserID) {
+              pushPayload.ownUserID = String(data.ownUserID);
+            } else if (data.ownuserid) {
+              pushPayload.ownUserID = String(data.ownuserid);
+            }
+            note.payload = pushPayload;
           }
         }
 
@@ -801,13 +847,27 @@ class NotificationService {
           voipNote.expiry = Math.floor(Date.now() / 1000) + 3600;
 
           // VoIP notifications don't support alert, sound, or badge
+          // Include userId and ownUserID in VoIP payload (same as reject type)
+          const voipPayloadData = {
+            ...data,
+            ...(options.customPayload ? { customPayload: options.customPayload } : {}),
+            clickAction: 'FLUTTER_NOTIFICATION_CLICK',
+            pushType: 'VoIP'
+          };
+          // Ensure userId is included (from data or explicitly)
+          if (data.userId) {
+            voipPayloadData.userId = String(data.userId);
+          } else if (data.userid) {
+            voipPayloadData.userId = String(data.userid);
+          }
+          // Ensure ownUserID is included
+          if (data.ownUserID) {
+            voipPayloadData.ownUserID = String(data.ownUserID);
+          } else if (data.ownuserid) {
+            voipPayloadData.ownUserID = String(data.ownuserid);
+          }
           voipNote.payload = {
-            extra: {
-              ...data,
-              ...(options.customPayload ? { customPayload: options.customPayload } : {}),
-              clickAction: 'FLUTTER_NOTIFICATION_CLICK',
-              pushType: 'VoIP'
-            }
+            extra: voipPayloadData
           };
 
           console.log(`Using ${user.isDev ? 'sandbox' : 'production'} APNs for VoIP user ${userId}`)
@@ -932,7 +992,7 @@ class NotificationService {
               ...(filteredData.ownuserid ? { ownUserID: String(filteredData.ownuserid) } : {})
             }
           : {
-              // For non-reject types: Include all filtered data
+              // For non-reject types: Include all filtered data + ensure userId and ownUserID are included
               ...Object.fromEntries(
                 Object.entries(filteredData).map(([key, value]) => [
                   key, 
@@ -944,7 +1004,13 @@ class NotificationService {
               // Add notification type for Android handling
               notificationType: notificationData.type || 'general',
               // Add timestamp for Android
-              timestamp: Date.now().toString()
+              timestamp: Date.now().toString(),
+              // Ensure userId is included (same as reject type)
+              ...(filteredData.userId ? { userId: String(filteredData.userId) } : {}),
+              ...(filteredData.userid ? { userId: String(filteredData.userid) } : {}),
+              // Ensure ownUserID is included (same as reject type)
+              ...(filteredData.ownUserID ? { ownUserID: String(filteredData.ownUserID) } : {}),
+              ...(filteredData.ownuserid ? { ownUserID: String(filteredData.ownuserid) } : {})
             };
         
         // Build message - for reject type on Android, send background/silent notification (data-only, no alert)
@@ -1023,7 +1089,13 @@ class NotificationService {
                   ...(options.customPayload ? { customPayload: JSON.stringify(options.customPayload) } : {}),
                   clickAction: 'FLUTTER_NOTIFICATION_CLICK',
                   notificationType: notificationData.type || 'general',
-                  timestamp: Date.now().toString()
+                  timestamp: Date.now().toString(),
+                  // Ensure userId is explicitly included (same as reject type)
+                  ...(filteredData.userId ? { userId: String(filteredData.userId) } : {}),
+                  ...(filteredData.userid ? { userId: String(filteredData.userid) } : {}),
+                  // Ensure ownUserID is explicitly included (same as reject type)
+                  ...(filteredData.ownUserID ? { ownUserID: String(filteredData.ownUserID) } : {}),
+                  ...(filteredData.ownuserid ? { ownUserID: String(filteredData.ownuserid) } : {})
                 },
             // Add Android priority
             priority: 'high',
