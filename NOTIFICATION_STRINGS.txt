@@ -1,0 +1,87 @@
+=== NOTIFICATION STRINGS FOR FRENCH TRANSLATION ===
+
+1. BECOME STARS - New Star Congratulation Message
+Title: Congratulations! You are now a Baroni Star 🌟
+Body: Welcome to the stars, {userName}! You can now receive bookings and create content for your fans.
+
+2. BOOK VIDEO CALL - New Incoming Appointment to Star after Pay
+Title: New Appointment Request
+Body: You have a new appointment request from {fanName}.
+
+3. BOOK VIDEO CALL - Appointment Approval to Fan
+Title: Appointment Approved
+Body: {starName} has approved your appointment request.
+
+4. BOOK VIDEO CALL - Appointment Reminder (10 min before the Call)
+Title: Appointment Reminder
+Body: Your appointment with {fanName/starName} starts in {minutesUntil} minutes.
+
+5. BOOK VIDEO CALL - Appointment Starting Now
+Title: Appointment Starting Now
+Body: Your appointment with {fanName/starName} is starting now! Please join.
+
+6. BOOK VIDEO CALL - Appointment Cancellation to Star from Fan
+Title: Appointment Cancelled
+Body: {fanName} has cancelled the appointment.
+
+7. BOOK VIDEO CALL - Appointment Cancellation to Fan from Star
+Title: Appointment Cancelled
+Body: {starName} has cancelled your appointment.
+
+8. BOOK VIDEO CALL - Appointment Rejection from Star to Fan
+Title: Appointment Rejected
+Body: {starName} has rejected your appointment request.
+
+9. BOOK VIDEO CALL - Appointment Rescheduled from Fan to Star
+Title: Appointment Rescheduled
+Body: {fanName} has rescheduled the appointment to {newDate} {newTime}.
+
+10. REQUEST DEDICATION - New Incoming Request to Star from Fan after Pay
+Title: New Dedication Request
+Body: You have a new dedication request.
+
+11. REQUEST DEDICATION - Request Approval from Star to Fan
+Title: Dedication Request Accepted
+Body: Your dedication Request was accepted by {starName}
+
+12. REQUEST DEDICATION - Request Rejection from Star to Fan
+Title: Dedication Request Rejected
+Body: Your dedication request was rejected.
+
+13. REQUEST DEDICATION - Request Cancellation from Fan to Star
+Title: Dedication Cancelled
+Body: The fan cancelled their dedication request.
+
+14. REQUEST DEDICATION - Request Cancellation from Star to Fan
+Title: Dedication Cancelled
+Body: Your dedication request was cancelled by the star.
+
+15. REQUEST DEDICATION - Dedication Video Upload from Star to Fan
+Title: Dedication Video Uploaded
+Body: Your dedication video was uploaded by {starName}.
+
+16. REQUEST DEDICATION - Dedication Completed
+Title: Dedication Completed
+Body: Your dedication request has been completed by {starName}
+
+17. REVIEWS - Call Video Review from Fan
+Title: New Review Received
+Body: {fanName} has left you a {rating}-star review for your appointment{with a comment}.
+
+18. REVIEWS - Dedication Review from Fan
+Title: New Review Received
+Body: {fanName} has left you a {rating}-star review for your dedication{with a comment}.
+
+=== ADDITIONAL NOTIFICATION STRINGS ===
+
+19. Appointment Request Sent to Fan
+Body: Your appointment request has been sent to {starName}.
+
+20. Video Call Reminder
+Title: Video Call Reminder
+Body: Your video call begins in 10 minutes. Please check your network and be ready to join.
+
+21. Thanks for Rating
+Title: Thanks for Rating!
+Body: Thanks for rating your last call!
+

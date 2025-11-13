@@ -473,21 +473,38 @@ export const listAppointments = async (req, res) => {
       .populate('availabilityId');
 
     const parseStartDate = (dateStr, timeStr) => {
-      const [year, month, day] = (dateStr || '').split('-').map((v) => parseInt(v, 10));
-      let hours = 0;
-      let minutes = 0;
-      if (typeof timeStr === 'string') {
-        const m = timeStr.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
-        if (m) {
-          hours = parseInt(m[1], 10);
-          minutes = parseInt(m[2], 10);
-          const ampm = m[3].toUpperCase();
-          if (ampm === 'PM' && hours !== 12) hours += 12;
-          if (ampm === 'AM' && hours === 12) hours = 0;
+      try {
+        if (!dateStr || typeof dateStr !== 'string') {
+          return new Date(0); // Invalid date
         }
+        
+        const [year, month, day] = dateStr.split('-').map((v) => parseInt(v, 10));
+        if (isNaN(year) || isNaN(month) || isNaN(day)) {
+          return new Date(0); // Invalid date
+        }
+        
+        let hours = 0;
+        let minutes = 0;
+        
+        if (typeof timeStr === 'string') {
+          // Handle time ranges like "09:30 - 09:50" by taking first part
+          const timePart = timeStr.split('-')[0].trim();
+          const m = timePart.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)?$/i);
+          if (m) {
+            hours = parseInt(m[1], 10);
+            minutes = parseInt(m[2], 10);
+            const ampm = (m[3] || '').toUpperCase();
+            if (ampm === 'PM' && hours !== 12) hours += 12;
+            if (ampm === 'AM' && hours === 12) hours = 0;
+          }
+        }
+        
+        const d = new Date(year, month - 1, day, hours, minutes, 0, 0);
+        return isNaN(d.getTime()) ? new Date(0) : d;
+      } catch (error) {
+        console.error(`[ListAppointments] Error parsing date/time: date=${dateStr}, time=${timeStr}`, error);
+        return new Date(0); // Return invalid date on error
       }
-      const d = new Date(year || 0, (month || 1) - 1, day || 1, hours, minutes, 0, 0);
-      return d;
     };
 
     // Pre-fetch all conversations between fan-star pairs for better performance
@@ -567,7 +584,9 @@ export const listAppointments = async (req, res) => {
       }
     };
     
-    // Sort by status priority first, then by UTC time ascending
+    // Sort by status priority first, then by date ascending (nearest to furthest)
+    // Status priority: (1) pending, (2) approved, (3) completed, (4) cancelled/rejected
+    // Within each status group, sort by appointment date/time ascending (nearest to furthest)
     const data = withComputed.sort((a, b) => {
       // First, compare by status priority
       const statusPriorityA = getStatusPriority(a.status);
@@ -577,26 +596,53 @@ export const listAppointments = async (req, res) => {
         return statusPriorityA - statusPriorityB;
       }
       
-      // If same status, sort by UTC time ascending (nearest to furthest)
-      // Use utcStartTime if available (preferred), otherwise fallback to parsing date/time
+      // If same status, sort by appointment date/time ascending (nearest to furthest)
+      // Use startAt if available (already computed), otherwise use utcStartTime or parse from date/time
       let timeA, timeB;
       
-      // Get UTC time for appointment A
-      if (a.utcStartTime) {
-        timeA = new Date(a.utcStartTime).getTime();
-      } else {
+      // Get appointment time for A - handle all edge cases
+      if (a.startAt && typeof a.startAt === 'string') {
+        // Use computed startAt (preferred - already in ISO format)
+        const parsed = new Date(a.startAt);
+        timeA = isNaN(parsed.getTime()) ? 0 : parsed.getTime();
+      } else if (a.utcStartTime) {
+        // Fallback to utcStartTime (can be Date object or string)
+        const parsed = new Date(a.utcStartTime);
+        timeA = isNaN(parsed.getTime()) ? 0 : parsed.getTime();
+      } else if (a.date && a.time) {
         // Fallback: parse from date and time (for backward compatibility)
         const parsedA = parseStartDate(a.date, a.time);
         timeA = isNaN(parsedA.getTime()) ? 0 : parsedA.getTime();
+      } else {
+        // No valid date/time - put at end (use very large number)
+        timeA = Number.MAX_SAFE_INTEGER;
       }
       
-      // Get UTC time for appointment B
-      if (b.utcStartTime) {
-        timeB = new Date(b.utcStartTime).getTime();
-      } else {
+      // Get appointment time for B - handle all edge cases
+      if (b.startAt && typeof b.startAt === 'string') {
+        // Use computed startAt (preferred - already in ISO format)
+        const parsed = new Date(b.startAt);
+        timeB = isNaN(parsed.getTime()) ? 0 : parsed.getTime();
+      } else if (b.utcStartTime) {
+        // Fallback to utcStartTime (can be Date object or string)
+        const parsed = new Date(b.utcStartTime);
+        timeB = isNaN(parsed.getTime()) ? 0 : parsed.getTime();
+      } else if (b.date && b.time) {
         // Fallback: parse from date and time (for backward compatibility)
         const parsedB = parseStartDate(b.date, b.time);
         timeB = isNaN(parsedB.getTime()) ? 0 : parsedB.getTime();
+      } else {
+        // No valid date/time - put at end (use very large number)
+        timeB = Number.MAX_SAFE_INTEGER;
+      }
+      
+      // Sort ascending: nearest date first (smaller time value = earlier date = comes first)
+      // If times are equal, maintain stable sort by using _id as tiebreaker
+      if (timeA === timeB) {
+        // Stable sort: use _id to maintain consistent order for same-time appointments
+        const idA = a._id ? String(a._id) : '';
+        const idB = b._id ? String(b._id) : '';
+        return idA.localeCompare(idB);
       }
       
       return timeA - timeB;
@@ -605,6 +651,34 @@ export const listAppointments = async (req, res) => {
     // Apply pagination after sorting
     const skip = (finalPageNum - 1) * finalLimitNum;
     const paginatedData = data.slice(skip, skip + finalLimitNum);
+
+    // Log sorting verification (first few items to verify order)
+    if (data.length > 0) {
+      console.log(`[ListAppointments] ===== SORTING VERIFICATION =====`);
+      console.log(`[ListAppointments] Total appointments: ${data.length}`);
+      console.log(`[ListAppointments] First 10 items (sorted order):`);
+      data.slice(0, 10).forEach((item, idx) => {
+        const statusPriority = getStatusPriority(item.status);
+        let timeValue = 'N/A';
+        if (item.startAt) {
+          timeValue = new Date(item.startAt).toISOString();
+        } else if (item.utcStartTime) {
+          timeValue = new Date(item.utcStartTime).toISOString();
+        } else if (item.date && item.time) {
+          const parsed = parseStartDate(item.date, item.time);
+          timeValue = isNaN(parsed.getTime()) ? 'Invalid' : parsed.toISOString();
+        }
+        console.log(`  [${idx + 1}] Status: ${item.status} (priority: ${statusPriority}), Date: ${item.date}, Time: ${item.time}, StartAt: ${timeValue}`);
+      });
+      
+      // Log status distribution
+      const statusCounts = {};
+      data.forEach(item => {
+        statusCounts[item.status] = (statusCounts[item.status] || 0) + 1;
+      });
+      console.log(`[ListAppointments] Status distribution:`, statusCounts);
+      console.log(`[ListAppointments] ================================`);
+    }
 
     console.log(`[ListAppointments] Pagination result:`, {
       totalCount,
