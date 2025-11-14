@@ -354,11 +354,16 @@ export const createAppointment = async (req, res) => {
         // NOTE: completeTransaction does NOT send notification (removed to avoid duplicates)
         await completeTransaction(transaction._id);
         
-        // Send notification to star for coin-only payments (only once, here)
-        console.log(`[AppointmentCreated] Sending notification for coin-only payment - appointment ${created._id}`);
-        await NotificationHelper.sendAppointmentNotification('APPOINTMENT_CREATED', created, { currentUserId: req.user._id });
-        
-        console.log(`[AppointmentCreated] ✓ Coin-only payment completed, notification sent for appointment ${created._id}`);
+        // Verify transaction is completed before sending notification
+        const completedTransaction = await Transaction.findById(transaction._id);
+        if (completedTransaction && completedTransaction.status === 'completed') {
+          // Send notification to star for coin-only payments (only once, here)
+          console.log(`[AppointmentCreated] Sending notification for coin-only payment - appointment ${created._id}, transaction ${transaction._id}`);
+          await NotificationHelper.sendAppointmentNotification('APPOINTMENT_CREATED', created, { currentUserId: req.user._id });
+          console.log(`[AppointmentCreated] ✓ Coin-only payment completed, notification sent for appointment ${created._id}`);
+        } else {
+          console.warn(`[AppointmentCreated] ⚠ Transaction ${transaction._id} not completed yet, skipping notification to avoid duplicates`);
+        }
       } catch (error) {
         console.error('[AppointmentCreated] ✗ Error handling coin-only payment:', error);
       }
@@ -752,23 +757,11 @@ export const listAppointments = async (req, res) => {
       }
     };
     
-    // Sort by status priority first, then by date ascending (nearest to furthest)
-    // Status priority: (1) pending, (2) approved, (3) completed, (4) cancelled/rejected
-    // Within each status group, sort by appointment date/time ascending (nearest to furthest)
+    // Sort by date/time descending (newest first), then by status priority as secondary sort
+    // This ensures newest appointments appear first, regardless of status
     const data = withComputed.sort((a, b) => {
-      // First, compare by status priority
-      const statusPriorityA = getStatusPriority(a.status);
-      const statusPriorityB = getStatusPriority(b.status);
-      
-      if (statusPriorityA !== statusPriorityB) {
-        return statusPriorityA - statusPriorityB;
-      }
-      
-      // If same status, sort by appointment date/time ascending (nearest to furthest)
-      // Use startAt if available (already computed), otherwise use utcStartTime or parse from date/time
-      let timeA, timeB;
-      
       // Get appointment time for A - handle all edge cases
+      let timeA;
       if (a.startAt && typeof a.startAt === 'string') {
         // Use computed startAt (preferred - already in ISO format)
         const parsed = new Date(a.startAt);
@@ -782,11 +775,12 @@ export const listAppointments = async (req, res) => {
         const parsedA = parseStartDate(a.date, a.time);
         timeA = isNaN(parsedA.getTime()) ? 0 : parsedA.getTime();
       } else {
-        // No valid date/time - put at end (use very large number)
-        timeA = Number.MAX_SAFE_INTEGER;
+        // No valid date/time - put at end (use 0 to put at beginning of invalid dates)
+        timeA = 0;
       }
       
       // Get appointment time for B - handle all edge cases
+      let timeB;
       if (b.startAt && typeof b.startAt === 'string') {
         // Use computed startAt (preferred - already in ISO format)
         const parsed = new Date(b.startAt);
@@ -800,20 +794,28 @@ export const listAppointments = async (req, res) => {
         const parsedB = parseStartDate(b.date, b.time);
         timeB = isNaN(parsedB.getTime()) ? 0 : parsedB.getTime();
       } else {
-        // No valid date/time - put at end (use very large number)
-        timeB = Number.MAX_SAFE_INTEGER;
+        // No valid date/time - put at end (use 0 to put at beginning of invalid dates)
+        timeB = 0;
       }
       
-      // Sort ascending: nearest date first (smaller time value = earlier date = comes first)
-      // If times are equal, maintain stable sort by using _id as tiebreaker
-      if (timeA === timeB) {
-        // Stable sort: use _id to maintain consistent order for same-time appointments
-        const idA = a._id ? String(a._id) : '';
-        const idB = b._id ? String(b._id) : '';
-        return idA.localeCompare(idB);
+      // Primary sort: by date/time descending (newest first)
+      // If times are equal, use status priority as secondary sort
+      if (timeA !== timeB) {
+        return timeB - timeA; // Descending order (newest first)
       }
       
-      return timeA - timeB;
+      // Secondary sort: by status priority (if same date/time)
+      const statusPriorityA = getStatusPriority(a.status);
+      const statusPriorityB = getStatusPriority(b.status);
+      
+      if (statusPriorityA !== statusPriorityB) {
+        return statusPriorityA - statusPriorityB;
+      }
+      
+      // Tertiary sort: use _id as tiebreaker for stable sorting
+      const idA = a._id ? String(a._id) : '';
+      const idB = b._id ? String(b._id) : '';
+      return idA.localeCompare(idB);
     });
     
     // Apply pagination after sorting

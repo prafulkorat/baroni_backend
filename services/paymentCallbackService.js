@@ -511,6 +511,12 @@ const sendAppointmentNotificationAfterPayment = async (transaction, session) => 
         // Check if this is a hybrid payment (external payment completed)
         // Coin-only payments are handled immediately in appointment creation
         const isHybridPayment = transaction.externalAmount && transaction.externalAmount > 0;
+        const isCoinOnlyPayment = !isHybridPayment;
+        
+        // Additional safeguard: Check if appointment was created very recently (within last 5 seconds)
+        // and paymentStatus is already 'pending' - this indicates coin-only payment was already processed
+        const appointmentAge = Date.now() - new Date(appointment.createdAt).getTime();
+        const isRecentlyCreatedCoinOnly = isCoinOnlyPayment && appointmentAge < 5000 && appointment.paymentStatus === 'pending';
         
         if (isHybridPayment) {
           console.log(`[PaymentCallback] Sending appointment notification for hybrid payment - transaction ${transaction._id}, appointment ${appointment._id}`);
@@ -518,6 +524,8 @@ const sendAppointmentNotificationAfterPayment = async (transaction, session) => 
           await NotificationHelper.sendAppointmentNotification('APPOINTMENT_CREATED', appointment, { 
             currentUserId: appointment.fanId 
           });
+        } else if (isRecentlyCreatedCoinOnly) {
+          console.log(`[PaymentCallback] Skipping notification - coin-only payment already processed (created ${appointmentAge}ms ago, paymentStatus: ${appointment.paymentStatus}) - transaction ${transaction._id}, appointment ${appointment._id}`);
         } else {
           console.log(`[PaymentCallback] Skipping notification for coin-only payment - transaction ${transaction._id}, appointment ${appointment._id}`);
         }
