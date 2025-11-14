@@ -478,6 +478,9 @@ export const listAppointments = async (req, res) => {
       const existingDateFilter = filter.date;
       const hasStatusFilter = !!filter.status;
       
+      // Check if it's an exact date match (string) or a range (object with $gte/$lte)
+      const isExactDate = typeof existingDateFilter === 'string';
+      
       // If we have a date filter and no status filter, we need to handle cancelled appointments specially
       if (existingDateFilter && !hasStatusFilter) {
         // Extract base filters (everything except date and status)
@@ -497,6 +500,16 @@ export const listAppointments = async (req, res) => {
           andConditions.push({ [key]: baseFilters[key] });
         });
         
+        // Determine the date condition for cancelled appointments
+        let cancelledDateCondition;
+        if (isExactDate) {
+          // For exact date matches, cancelled appointments must match the exact date
+          cancelledDateCondition = existingDateFilter;
+        } else {
+          // For date ranges, cancelled appointments must be >= minFilterDate
+          cancelledDateCondition = { $gte: minFilterDate };
+        }
+        
         // Add date/status condition using $or
         andConditions.push({
           $or: [
@@ -507,11 +520,11 @@ export const listAppointments = async (req, res) => {
                 { date: existingDateFilter }
               ]
             },
-            // Cancelled appointments: only if date >= minFilterDate
+            // Cancelled appointments: use the appropriate date condition
             {
               $and: [
                 { status: 'cancelled' },
-                { date: { $gte: minFilterDate } }
+                { date: cancelledDateCondition }
               ]
             }
           ]
@@ -520,7 +533,7 @@ export const listAppointments = async (req, res) => {
         // Build the filter with $and
         filter = { $and: andConditions };
         
-        console.log(`[ListAppointments] Applied date filter with cancelled exclusion using $and. Date filter:`, existingDateFilter, `minFilterDate:`, minFilterDate);
+        console.log(`[ListAppointments] Applied date filter with cancelled exclusion using $and. Date filter:`, existingDateFilter, `minFilterDate:`, minFilterDate, `isExactDate:`, isExactDate, `cancelledDateCondition:`, cancelledDateCondition);
       } else if (existingDateFilter) {
         // Date filter exists and status filter is set - date filter should work as-is
         // Just ensure it's properly set
@@ -529,6 +542,60 @@ export const listAppointments = async (req, res) => {
         // No date filter yet, add it
         filter.date = { $gte: minFilterDate };
         console.log(`[ListAppointments] Applied date filter:`, filter.date);
+      }
+    } else {
+      // No date filter applied - exclude cancelled appointments from past dates (before today)
+      // Get today's date in YYYY-MM-DD format
+      const today = new Date();
+      const todayStr = today.toISOString().split('T')[0];
+      
+      // Calculate yesterday's date (to show appointments from yesterday onwards)
+      const yesterday = new Date(today);
+      yesterday.setDate(yesterday.getDate() - 1);
+      const yesterdayStr = yesterday.toISOString().split('T')[0];
+      
+      // When no date filter, exclude cancelled appointments from before yesterday
+      // This means cancelled appointments must be from yesterday or today onwards
+      const hasStatusFilter = !!filter.status;
+      
+      if (!hasStatusFilter) {
+        // Extract base filters (everything except status)
+        const baseFilters = {};
+        Object.keys(filter).forEach(key => {
+          if (key !== 'status') {
+            baseFilters[key] = filter[key];
+          }
+        });
+        
+        // Use $and to combine base filters with status/date conditions
+        const andConditions = [];
+        
+        // Add all base filters
+        Object.keys(baseFilters).forEach(key => {
+          andConditions.push({ [key]: baseFilters[key] });
+        });
+        
+        // Add condition: (non-cancelled) OR (cancelled AND date >= yesterday)
+        andConditions.push({
+          $or: [
+            // Non-cancelled appointments: no date restriction
+            {
+              status: { $ne: 'cancelled' }
+            },
+            // Cancelled appointments: only from yesterday onwards
+            {
+              $and: [
+                { status: 'cancelled' },
+                { date: { $gte: yesterdayStr } }
+              ]
+            }
+          ]
+        });
+        
+        // Build the filter with $and
+        filter = { $and: andConditions };
+        
+        console.log(`[ListAppointments] No date filter - excluding cancelled appointments before:`, yesterdayStr);
       }
     }
     
