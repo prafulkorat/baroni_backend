@@ -418,12 +418,16 @@ export const listAppointments = async (req, res) => {
     console.log(`[ListAppointments] After destructuring - page:`, page, `limit:`, limit);
     console.log(`[ListAppointments] Date filter params - date:`, date, `startDate:`, startDate, `endDate:`, endDate);
     
+    // Track the minimum date for filtering (to exclude cancelled appointments from before this date)
+    let minFilterDate = null;
+    
     // Apply date filter - this should properly exclude appointments from dates before the filter
     if (date && typeof date === 'string' && date.trim()) {
       // Exact date match - ensure proper format (YYYY-MM-DD)
       const trimmedDate = date.trim();
       if (/^\d{4}-\d{2}-\d{2}$/.test(trimmedDate)) {
         filter.date = trimmedDate;
+        minFilterDate = trimmedDate;
         console.log(`[ListAppointments] Applied exact date filter:`, trimmedDate);
       }
     } else if (startDate || endDate) {
@@ -438,12 +442,14 @@ export const listAppointments = async (req, res) => {
       if (normalizedStartDate && normalizedEndDate && normalizedStartDate === normalizedEndDate && isValidDate(normalizedStartDate)) {
         // Exact date match when both are same
         filter.date = normalizedStartDate;
+        minFilterDate = normalizedStartDate;
         console.log(`[ListAppointments] Applied exact date filter (from range):`, normalizedStartDate);
       } else {
         // Range filtering - ensure both dates are valid strings
         const range = {};
         if (normalizedStartDate && isValidDate(normalizedStartDate)) {
           range.$gte = normalizedStartDate;
+          minFilterDate = normalizedStartDate;
           console.log(`[ListAppointments] Applied startDate filter:`, normalizedStartDate);
         }
         if (normalizedEndDate && isValidDate(normalizedEndDate)) {
@@ -464,6 +470,65 @@ export const listAppointments = async (req, res) => {
       if (validStatuses.includes(status.trim())) {
         filter.status = status.trim();
         console.log(`[ListAppointments] Applied status filter:`, status.trim());
+      }
+    }
+    
+    // Ensure date filter is properly applied and exclude cancelled appointments from before the filter date
+    if (minFilterDate) {
+      const existingDateFilter = filter.date;
+      const hasStatusFilter = !!filter.status;
+      
+      // If we have a date filter and no status filter, we need to handle cancelled appointments specially
+      if (existingDateFilter && !hasStatusFilter) {
+        // Extract base filters (everything except date and status)
+        const baseFilters = {};
+        Object.keys(filter).forEach(key => {
+          if (key !== 'date' && key !== 'status') {
+            baseFilters[key] = filter[key];
+          }
+        });
+        
+        // Use $and to combine base filters with date/status conditions
+        // This ensures the date filter works correctly
+        const andConditions = [];
+        
+        // Add all base filters
+        Object.keys(baseFilters).forEach(key => {
+          andConditions.push({ [key]: baseFilters[key] });
+        });
+        
+        // Add date/status condition using $or
+        andConditions.push({
+          $or: [
+            // Non-cancelled appointments: apply the date filter as-is
+            {
+              $and: [
+                { status: { $ne: 'cancelled' } },
+                { date: existingDateFilter }
+              ]
+            },
+            // Cancelled appointments: only if date >= minFilterDate
+            {
+              $and: [
+                { status: 'cancelled' },
+                { date: { $gte: minFilterDate } }
+              ]
+            }
+          ]
+        });
+        
+        // Build the filter with $and
+        filter = { $and: andConditions };
+        
+        console.log(`[ListAppointments] Applied date filter with cancelled exclusion using $and. Date filter:`, existingDateFilter, `minFilterDate:`, minFilterDate);
+      } else if (existingDateFilter) {
+        // Date filter exists and status filter is set - date filter should work as-is
+        // Just ensure it's properly set
+        console.log(`[ListAppointments] Date filter applied:`, existingDateFilter);
+      } else {
+        // No date filter yet, add it
+        filter.date = { $gte: minFilterDate };
+        console.log(`[ListAppointments] Applied date filter:`, filter.date);
       }
     }
     
