@@ -416,45 +416,61 @@ export const listAppointments = async (req, res) => {
     const { date, startDate, endDate, status, page, limit } = req.query || {};
     
     console.log(`[ListAppointments] After destructuring - page:`, page, `limit:`, limit);
+    console.log(`[ListAppointments] Date filter params - date:`, date, `startDate:`, startDate, `endDate:`, endDate);
     
+    // Apply date filter - this should properly exclude appointments from dates before the filter
     if (date && typeof date === 'string' && date.trim()) {
-      // Exact date match
-      filter.date = date.trim();
+      // Exact date match - ensure proper format (YYYY-MM-DD)
+      const trimmedDate = date.trim();
+      if (/^\d{4}-\d{2}-\d{2}$/.test(trimmedDate)) {
+        filter.date = trimmedDate;
+        console.log(`[ListAppointments] Applied exact date filter:`, trimmedDate);
+      }
     } else if (startDate || endDate) {
       // Normalize date strings (remove whitespace)
       const normalizedStartDate = startDate && typeof startDate === 'string' ? startDate.trim() : '';
       const normalizedEndDate = endDate && typeof endDate === 'string' ? endDate.trim() : '';
       
+      // Validate date format (YYYY-MM-DD)
+      const isValidDate = (d) => /^\d{4}-\d{2}-\d{2}$/.test(d);
+      
       // Date range filtering - if both are same, it's an exact match
-      if (normalizedStartDate && normalizedEndDate && normalizedStartDate === normalizedEndDate) {
+      if (normalizedStartDate && normalizedEndDate && normalizedStartDate === normalizedEndDate && isValidDate(normalizedStartDate)) {
         // Exact date match when both are same
         filter.date = normalizedStartDate;
+        console.log(`[ListAppointments] Applied exact date filter (from range):`, normalizedStartDate);
       } else {
         // Range filtering - ensure both dates are valid strings
         const range = {};
-        if (normalizedStartDate) {
+        if (normalizedStartDate && isValidDate(normalizedStartDate)) {
           range.$gte = normalizedStartDate;
+          console.log(`[ListAppointments] Applied startDate filter:`, normalizedStartDate);
         }
-        if (normalizedEndDate) {
+        if (normalizedEndDate && isValidDate(normalizedEndDate)) {
           range.$lte = normalizedEndDate;
+          console.log(`[ListAppointments] Applied endDate filter:`, normalizedEndDate);
         }
-        // Only apply range filter if at least one date is provided
+        // Only apply range filter if at least one date is provided and valid
         if (Object.keys(range).length > 0) {
           filter.date = range;
+          console.log(`[ListAppointments] Applied date range filter:`, range);
         }
       }
     }
-    
-    // Check if date filter is applied
-    const hasDateFilter = !!(date || startDate || endDate);
     
     // Status filtering
     if (status && typeof status === 'string' && status.trim()) {
       const validStatuses = ['pending', 'approved', 'rejected', 'cancelled', 'completed'];
       if (validStatuses.includes(status.trim())) {
         filter.status = status.trim();
+        console.log(`[ListAppointments] Applied status filter:`, status.trim());
       }
     }
+    
+    // Log the final filter being applied
+    console.log(`[ListAppointments] ===== FINAL FILTER =====`);
+    console.log(`[ListAppointments] Filter object:`, JSON.stringify(filter, null, 2));
+    console.log(`[ListAppointments] =========================`);
     
     // Include all appointments regardless of completion status
     // Sorting will handle the order: pending -> approved -> completed -> cancelled/rejected
@@ -1252,6 +1268,3 @@ export const completeAppointment = async (req, res) => {
     return res.status(500).json({ success: false, message: err.message });
   }
 };
-
-
-
