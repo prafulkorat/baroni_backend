@@ -88,6 +88,14 @@ class NotificationScheduler {
    * All times are in UTC to avoid timezone mismatches
    */
   async sendAppointmentReminders() {
+    // Check if notification cron is enabled via environment variable
+    const notificationCronEnabled = process.env.NOTIFICATION_CRON === 'true';
+    
+    if (!notificationCronEnabled) {
+      console.log(`[AppointmentReminder] ⚠ Notification cron is disabled (NOTIFICATION_CRON=${process.env.NOTIFICATION_CRON || 'not set'}). Skipping appointment reminders.`);
+      return;
+    }
+    
     // Get current UTC time
     const now = new Date();
     const nowUTC = new Date(now.toISOString());
@@ -149,9 +157,13 @@ class NotificationScheduler {
         
         // Case 1: Send reminder 10 minutes before appointment (exactly 9-11 minutes window)
         // This ensures we catch the appointment in the 10-minute window
-        // Case 2: Send notification at exact appointment time (within ±1 minute window)
+        // Case 2: Send notification at exact appointment time (at start time or after, but NOT 1 minute before)
+        // IMPORTANT: Do NOT send notification 1 minute before - only send at start time (0) or after (negative = already started)
+        // Changed condition to ensure we NEVER send when minutesUntilAppointment > 0 (i.e., before appointment time)
         const shouldSend10MinReminder = minutesUntilAppointment >= 9 && minutesUntilAppointment <= 11 && !appointment.reminderSent;
-        const shouldSendStartNotification = minutesUntilAppointment >= -1 && minutesUntilAppointment <= 1; // Within ±1 minute of start time
+        // Only send when appointment has started (0 or negative minutes), NOT before (positive minutes)
+        // This prevents sending notifications 1 minute before appointment
+        const shouldSendStartNotification = minutesUntilAppointment <= 0 && minutesUntilAppointment >= -5; // At start time (0) or up to 5 minutes after, but NOT before
         
         if (shouldSend10MinReminder) {
           // 10-minute reminder before appointment (UTC-based)

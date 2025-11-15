@@ -42,9 +42,13 @@ export const processLockedSlots = async () => {
               });
 
               if (appointment) {
-                // Mark slot as unavailable (booked)
-                await Availability.updateOne(
-                  { _id: availability._id, 'timeSlots._id': slot._id },
+                // Mark slot as unavailable (booked) - ensure it's updated even if already unavailable
+                const updateResult = await Availability.updateOne(
+                  { 
+                    _id: availability._id, 
+                    'timeSlots._id': slot._id,
+                    'timeSlots.status': { $in: ['locked', 'available'] } // Only update if locked or available
+                  },
                   { 
                     $set: { 
                       'timeSlots.$.status': 'unavailable',
@@ -53,8 +57,17 @@ export const processLockedSlots = async () => {
                     } 
                   }
                 );
-                bookedCount++;
-                console.log(`[SlotLockScheduler] Slot booked - appointment ${appointment._id}, payment ${slot.paymentReferenceId}`);
+                
+                if (updateResult.matchedCount > 0 && updateResult.modifiedCount > 0) {
+                  bookedCount++;
+                  console.log(`[SlotLockScheduler] ✓ Slot marked as unavailable - appointment ${appointment._id}, payment ${slot.paymentReferenceId}, updateResult:`, updateResult);
+                } else if (updateResult.matchedCount > 0) {
+                  console.log(`[SlotLockScheduler] Slot already unavailable for appointment ${appointment._id}`);
+                } else {
+                  console.warn(`[SlotLockScheduler] No slot matched for appointment ${appointment._id} - slot may already be unavailable`);
+                }
+              } else {
+                console.warn(`[SlotLockScheduler] No appointment found for transaction ${transaction._id}, slot ${slot._id}`);
               }
             } else {
               // Check if payment timeout (more than SLOT_LOCK_TIMEOUT_MINUTES since locked)

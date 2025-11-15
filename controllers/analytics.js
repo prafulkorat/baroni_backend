@@ -83,9 +83,25 @@ export const getStarAnalytics = async (req, res) => {
       ]),
       
       // Video Minutes Analytics
+      // Note: callDuration is stored in SECONDS, so we need to convert to minutes by dividing by 60
       Appointment.aggregate([
         { $match: { starId: new mongoose.Types.ObjectId(starId), status: 'completed', callDuration: { $exists: true, $ne: null }, ...dateFilter } },
-        { $group: { _id: null, totalMinutes: { $sum: '$callDuration' }, avgDuration: { $avg: '$callDuration' } } }
+        { 
+          $group: { 
+            _id: null, 
+            totalSeconds: { $sum: '$callDuration' }, 
+            avgSeconds: { $avg: '$callDuration' },
+            count: { $sum: 1 }
+          } 
+        },
+        {
+          $project: {
+            _id: 0,
+            totalMinutes: { $divide: ['$totalSeconds', 60] },
+            avgMinutes: { $divide: ['$avgSeconds', 60] },
+            count: 1
+          }
+        }
       ]),
       
       // Unique Fans Reached
@@ -138,9 +154,10 @@ export const getStarAnalytics = async (req, res) => {
     const totalAudience = audienceData.length > 0 ? audienceData[0].totalAudience : 0;
     
     // Process video minutes data
-    const videoMinutes = videoMinutesData.length > 0 ? videoMinutesData[0] : { totalMinutes: 0, avgDuration: 0 };
-    const totalVideoMinutes = Math.round(videoMinutes.totalMinutes || 0);
-    const avgDuration = Math.round((videoMinutes.avgDuration || 0) * 10) / 10;
+    // callDuration is in seconds, convert to minutes (divide by 60)
+    const videoMinutes = videoMinutesData.length > 0 ? videoMinutesData[0] : { totalMinutes: 0, avgMinutes: 0 };
+    const totalVideoMinutes = Math.round((videoMinutes.totalMinutes || 0) * 10) / 10; // Round to 1 decimal place
+    const avgDuration = Math.round((videoMinutes.avgMinutes || 0) * 10) / 10; // Round to 1 decimal place
     
     // Process unique fans
     const uniqueFansReached = uniqueFansData.length;

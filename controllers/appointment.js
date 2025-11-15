@@ -213,8 +213,14 @@ export const createAppointment = async (req, res) => {
 
     const slot = availability.timeSlots.find((s) => String(s._id) === String(timeSlotId));
     if (!slot) return res.status(404).json({ success: false, message: 'Time slot unavailable' });
+    // Check if slot is unavailable (booked) or locked (payment link sent, waiting for payment)
     if (slot.status === 'unavailable' || slot.status === 'locked') {
-      return res.status(409).json({ success: false, message: 'Time slot unavailable' });
+      return res.status(409).json({ 
+        success: false, 
+        message: slot.status === 'locked' 
+          ? 'Time slot is temporarily locked. Please wait for the previous booking to complete or timeout.' 
+          : 'Time slot unavailable' 
+      });
     }
 
     // Create hybrid transaction before creating appointment
@@ -306,14 +312,19 @@ export const createAppointment = async (req, res) => {
     try {
       if (transactionResult.paymentMode === 'coin') {
         // For coin-only payments, mark slot as unavailable (booked) immediately
-        await Availability.updateOne(
+        const coinUpdateResult = await Availability.updateOne(
           { _id: availabilityId, userId: starId, 'timeSlots._id': timeSlotId, 'timeSlots.status': 'available' },
           { $set: { 'timeSlots.$.status': 'unavailable' } }
         );
-        console.log(`[CreateAppointment] Slot marked as unavailable for coin-only payment`);
+        if (coinUpdateResult.matchedCount === 0) {
+          console.warn(`[CreateAppointment] ⚠ Slot not found or already booked for coin-only payment - appointment ${created._id}`);
+        } else {
+          console.log(`[CreateAppointment] ✓ Slot marked as unavailable for coin-only payment - appointment ${created._id}, updateResult:`, coinUpdateResult);
+        }
       } else if (transactionResult.paymentMode === 'hybrid' && transaction.externalPaymentId) {
-        // For hybrid payments with external payment link, lock the slot
-        await Availability.updateOne(
+        // For hybrid payments with external payment link, lock the slot for 10 minutes
+        // Slot will be unlocked if payment not completed within 10 minutes, or marked unavailable if payment completes
+        const lockUpdateResult = await Availability.updateOne(
           { _id: availabilityId, userId: starId, 'timeSlots._id': timeSlotId, 'timeSlots.status': 'available' },
           { 
             $set: { 
@@ -323,28 +334,42 @@ export const createAppointment = async (req, res) => {
             } 
           }
         );
-        console.log(`[CreateAppointment] Slot locked for external payment: ${transaction.externalPaymentId}`);
+        if (lockUpdateResult.matchedCount === 0) {
+          console.warn(`[CreateAppointment] ⚠ Slot not found or already booked/locked for hybrid payment - appointment ${created._id}`);
+        } else {
+          console.log(`[CreateAppointment] ✓ Slot locked for external payment (10 min timeout) - appointment ${created._id}, payment ${transaction.externalPaymentId}, updateResult:`, lockUpdateResult);
+        }
+      } else {
+        console.warn(`[CreateAppointment] ⚠ No slot status update - paymentMode: ${transactionResult.paymentMode}, externalPaymentId: ${transaction.externalPaymentId || 'none'}`);
       }
     } catch (slotError) {
-      console.error('[CreateAppointment] Error updating slot status:', slotError);
+      console.error('[CreateAppointment] ✗ Error updating slot status:', slotError);
+      // Don't fail the appointment creation if slot update fails, but log the error
     }
 
     // Handle coin-only payments immediately
     if (transactionResult.paymentMode === 'coin') {
       try {
         // Complete the transaction immediately for coin-only payments
+        // NOTE: completeTransaction does NOT send notification (removed to avoid duplicates)
         await completeTransaction(transaction._id);
         
-        // Send notification to star for coin-only payments
-        console.log(`[AppointmentCreated] Sending notification for coin-only payment - appointment ${created._id}`);
-        await NotificationHelper.sendAppointmentNotification('APPOINTMENT_CREATED', created, { currentUserId: req.user._id });
-        
-        console.log(`[AppointmentCreated] Coin-only payment completed, notification sent for appointment ${created._id}`);
+        // Verify transaction is completed before sending notification
+        const completedTransaction = await Transaction.findById(transaction._id);
+        if (completedTransaction && completedTransaction.status === 'completed') {
+          // Send notification to star for coin-only payments (only once, here)
+          console.log(`[AppointmentCreated] Sending notification for coin-only payment - appointment ${created._id}, transaction ${transaction._id}`);
+          await NotificationHelper.sendAppointmentNotification('APPOINTMENT_CREATED', created, { currentUserId: req.user._id });
+          console.log(`[AppointmentCreated] ✓ Coin-only payment completed, notification sent for appointment ${created._id}`);
+        } else {
+          console.warn(`[AppointmentCreated] ⚠ Transaction ${transaction._id} not completed yet, skipping notification to avoid duplicates`);
+        }
       } catch (error) {
-        console.error('Error handling coin-only payment:', error);
+        console.error('[AppointmentCreated] ✗ Error handling coin-only payment:', error);
       }
     }
     // For hybrid payments, notification will be sent after payment completion in paymentCallbackService
+    // (only for hybrid payments, not coin-only, to avoid duplicates)
 
     const responseBody = { 
       success: true, 
@@ -396,96 +421,198 @@ export const listAppointments = async (req, res) => {
     const { date, startDate, endDate, status, page, limit } = req.query || {};
     
     console.log(`[ListAppointments] After destructuring - page:`, page, `limit:`, limit);
+    console.log(`[ListAppointments] Date filter params - date:`, date, `startDate:`, startDate, `endDate:`, endDate);
     
+    // Track the minimum date for filtering (to exclude cancelled appointments from before this date)
+    let minFilterDate = null;
+    
+    // Apply date filter - this should properly exclude appointments from dates before the filter
     if (date && typeof date === 'string' && date.trim()) {
-      // Exact date match
-      filter.date = date.trim();
+      // Exact date match - ensure proper format (YYYY-MM-DD)
+      const trimmedDate = date.trim();
+      if (/^\d{4}-\d{2}-\d{2}$/.test(trimmedDate)) {
+        filter.date = trimmedDate;
+        minFilterDate = trimmedDate;
+        console.log(`[ListAppointments] Applied exact date filter:`, trimmedDate);
+      }
     } else if (startDate || endDate) {
       // Normalize date strings (remove whitespace)
       const normalizedStartDate = startDate && typeof startDate === 'string' ? startDate.trim() : '';
       const normalizedEndDate = endDate && typeof endDate === 'string' ? endDate.trim() : '';
       
+      // Validate date format (YYYY-MM-DD)
+      const isValidDate = (d) => /^\d{4}-\d{2}-\d{2}$/.test(d);
+      
       // Date range filtering - if both are same, it's an exact match
-      if (normalizedStartDate && normalizedEndDate && normalizedStartDate === normalizedEndDate) {
+      if (normalizedStartDate && normalizedEndDate && normalizedStartDate === normalizedEndDate && isValidDate(normalizedStartDate)) {
         // Exact date match when both are same
         filter.date = normalizedStartDate;
+        minFilterDate = normalizedStartDate;
+        console.log(`[ListAppointments] Applied exact date filter (from range):`, normalizedStartDate);
       } else {
         // Range filtering - ensure both dates are valid strings
         const range = {};
-        if (normalizedStartDate) {
+        if (normalizedStartDate && isValidDate(normalizedStartDate)) {
           range.$gte = normalizedStartDate;
+          minFilterDate = normalizedStartDate;
+          console.log(`[ListAppointments] Applied startDate filter:`, normalizedStartDate);
         }
-        if (normalizedEndDate) {
+        if (normalizedEndDate && isValidDate(normalizedEndDate)) {
           range.$lte = normalizedEndDate;
+          console.log(`[ListAppointments] Applied endDate filter:`, normalizedEndDate);
         }
-        // Only apply range filter if at least one date is provided
+        // Only apply range filter if at least one date is provided and valid
         if (Object.keys(range).length > 0) {
           filter.date = range;
+          console.log(`[ListAppointments] Applied date range filter:`, range);
         }
       }
     }
-    
-    // Check if date filter is applied
-    const hasDateFilter = !!(date || startDate || endDate);
     
     // Status filtering
     if (status && typeof status === 'string' && status.trim()) {
       const validStatuses = ['pending', 'approved', 'rejected', 'cancelled', 'completed'];
       if (validStatuses.includes(status.trim())) {
         filter.status = status.trim();
+        console.log(`[ListAppointments] Applied status filter:`, status.trim());
       }
     }
     
-    // Default list filtering: If no date filter is applied, restrict completed appointments
-    // Only show completed appointments from today onwards, hide completed appointments from yesterday or before
-    // Example: If today is 10/11, don't show completed appointments from 9/10 or before
-    if (!hasDateFilter) {
-      // No date filter - apply default restrictions for completed appointments
-      // Get today's date in YYYY-MM-DD format (start of today)
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const todayStr = today.toISOString().split('T')[0]; // YYYY-MM-DD format
+    // Ensure date filter is properly applied and exclude cancelled appointments from before the filter date
+    if (minFilterDate) {
+      const existingDateFilter = filter.date;
+      const hasStatusFilter = !!filter.status;
       
-      console.log(`[ListAppointments] Today's date: ${todayStr} - filtering out completed appointments before this date`);
+      // Check if it's an exact date match (string) or a range (object with $gte/$lte)
+      const isExactDate = typeof existingDateFilter === 'string';
       
-      // If status filter is 'completed', only show completed from today onwards
-      if (filter.status === 'completed') {
-        // Add date restriction for completed appointments - only today and future
-        if (filter.date) {
-          // If date filter already exists, combine with $and to ensure date >= today
-          filter.$and = [
-            { date: filter.date },
-            { date: { $gte: todayStr } }
-          ];
-          delete filter.date;
+      // If we have a date filter and no status filter, we need to handle cancelled appointments specially
+      if (existingDateFilter && !hasStatusFilter) {
+        // Extract base filters (everything except date and status)
+        const baseFilters = {};
+        Object.keys(filter).forEach(key => {
+          if (key !== 'date' && key !== 'status') {
+            baseFilters[key] = filter[key];
+          }
+        });
+        
+        // Use $and to combine base filters with date/status conditions
+        // This ensures the date filter works correctly
+        const andConditions = [];
+        
+        // Add all base filters
+        Object.keys(baseFilters).forEach(key => {
+          andConditions.push({ [key]: baseFilters[key] });
+        });
+        
+        // Determine the date condition for cancelled appointments
+        let cancelledDateCondition;
+        if (isExactDate) {
+          // For exact date matches, cancelled appointments must match the exact date
+          cancelledDateCondition = existingDateFilter;
         } else {
-          // Only show completed appointments from today onwards (exclude yesterday and before)
-          filter.date = { $gte: todayStr };
+          // For date ranges, cancelled appointments must be >= minFilterDate
+          cancelledDateCondition = { $gte: minFilterDate };
         }
-      } else {
-        // For other statuses or no status filter, exclude old completed appointments
-        // Add condition: either status is not 'completed', or if it is 'completed', date must be >= today
-        const existingStatus = filter.status;
-        if (existingStatus) {
-          // Status filter exists and it's not 'completed' - no need to filter out old completed
-          // Just keep the status filter as is (pending, approved, etc. will show all dates)
-        } else {
-          // No status filter - exclude old completed appointments (yesterday and before)
-          // Show: all non-completed appointments OR completed appointments from today onwards
-          filter.$or = [
-            { status: { $ne: 'completed' } },
-            { 
-              status: 'completed',
-              date: { $gte: todayStr } // Only today and future dates
+        
+        // Add date/status condition using $or
+        andConditions.push({
+          $or: [
+            // Non-cancelled appointments: apply the date filter as-is
+            {
+              $and: [
+                { status: { $ne: 'cancelled' } },
+                { date: existingDateFilter }
+              ]
+            },
+            // Cancelled appointments: use the appropriate date condition
+            {
+              $and: [
+                { status: 'cancelled' },
+                { date: cancelledDateCondition }
+              ]
             }
-          ];
-        }
+          ]
+        });
+        
+        // Build the filter with $and
+        filter = { $and: andConditions };
+        
+        console.log(`[ListAppointments] Applied date filter with cancelled exclusion using $and. Date filter:`, existingDateFilter, `minFilterDate:`, minFilterDate, `isExactDate:`, isExactDate, `cancelledDateCondition:`, cancelledDateCondition);
+      } else if (existingDateFilter) {
+        // Date filter exists and status filter is set - date filter should work as-is
+        // Just ensure it's properly set
+        console.log(`[ListAppointments] Date filter applied:`, existingDateFilter);
+      } else {
+        // No date filter yet, add it
+        filter.date = { $gte: minFilterDate };
+        console.log(`[ListAppointments] Applied date filter:`, filter.date);
       }
-      
-      console.log(`[ListAppointments] No date filter applied - restricting completed appointments to ${todayStr} onwards (excluding yesterday and before)`);
     } else {
-      console.log(`[ListAppointments] Date filter applied - showing all appointments based on date filter (no restriction on completed)`);
+      // No date filter applied - exclude cancelled appointments from past dates (before today)
+      // Get today's date in YYYY-MM-DD format
+      const today = new Date();
+      const todayStr = today.toISOString().split('T')[0];
+      
+      // Calculate yesterday's date (to show appointments from yesterday onwards)
+      const yesterday = new Date(today);
+      yesterday.setDate(yesterday.getDate() - 1);
+      const yesterdayStr = yesterday.toISOString().split('T')[0];
+      
+      // When no date filter, exclude cancelled appointments from before yesterday
+      // This means cancelled appointments must be from yesterday or today onwards
+      const hasStatusFilter = !!filter.status;
+      
+      if (!hasStatusFilter) {
+        // Extract base filters (everything except status)
+        const baseFilters = {};
+        Object.keys(filter).forEach(key => {
+          if (key !== 'status') {
+            baseFilters[key] = filter[key];
+          }
+        });
+        
+        // Use $and to combine base filters with status/date conditions
+        const andConditions = [];
+        
+        // Add all base filters
+        Object.keys(baseFilters).forEach(key => {
+          andConditions.push({ [key]: baseFilters[key] });
+        });
+        
+        // Add condition: (non-cancelled) OR (cancelled AND date >= yesterday)
+        andConditions.push({
+          $or: [
+            // Non-cancelled appointments: no date restriction
+            {
+              status: { $ne: 'cancelled' }
+            },
+            // Cancelled appointments: only from yesterday onwards
+            {
+              $and: [
+                { status: 'cancelled' },
+                { date: { $gte: yesterdayStr } }
+              ]
+            }
+          ]
+        });
+        
+        // Build the filter with $and
+        filter = { $and: andConditions };
+        
+        console.log(`[ListAppointments] No date filter - excluding cancelled appointments before:`, yesterdayStr);
+      }
     }
+    
+    // Log the final filter being applied
+    console.log(`[ListAppointments] ===== FINAL FILTER =====`);
+    console.log(`[ListAppointments] Filter object:`, JSON.stringify(filter, null, 2));
+    console.log(`[ListAppointments] =========================`);
+    
+    // Include all appointments regardless of completion status
+    // Sorting will handle the order: pending -> approved -> completed -> cancelled/rejected
+    // Within each status, sorted by date ascending (nearest to furthest)
+    console.log(`[ListAppointments] Including all appointments - sorting will handle order by status priority and date`);
     
     // Pagination - fetch all first for proper global sorting, then paginate
     // Parse page and limit from query parameters
@@ -519,21 +646,38 @@ export const listAppointments = async (req, res) => {
       .populate('availabilityId');
 
     const parseStartDate = (dateStr, timeStr) => {
-      const [year, month, day] = (dateStr || '').split('-').map((v) => parseInt(v, 10));
-      let hours = 0;
-      let minutes = 0;
-      if (typeof timeStr === 'string') {
-        const m = timeStr.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
-        if (m) {
-          hours = parseInt(m[1], 10);
-          minutes = parseInt(m[2], 10);
-          const ampm = m[3].toUpperCase();
-          if (ampm === 'PM' && hours !== 12) hours += 12;
-          if (ampm === 'AM' && hours === 12) hours = 0;
+      try {
+        if (!dateStr || typeof dateStr !== 'string') {
+          return new Date(0); // Invalid date
         }
+        
+        const [year, month, day] = dateStr.split('-').map((v) => parseInt(v, 10));
+        if (isNaN(year) || isNaN(month) || isNaN(day)) {
+          return new Date(0); // Invalid date
+        }
+        
+        let hours = 0;
+        let minutes = 0;
+        
+        if (typeof timeStr === 'string') {
+          // Handle time ranges like "09:30 - 09:50" by taking first part
+          const timePart = timeStr.split('-')[0].trim();
+          const m = timePart.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)?$/i);
+          if (m) {
+            hours = parseInt(m[1], 10);
+            minutes = parseInt(m[2], 10);
+            const ampm = (m[3] || '').toUpperCase();
+            if (ampm === 'PM' && hours !== 12) hours += 12;
+            if (ampm === 'AM' && hours === 12) hours = 0;
+          }
+        }
+        
+        const d = new Date(year, month - 1, day, hours, minutes, 0, 0);
+        return isNaN(d.getTime()) ? new Date(0) : d;
+      } catch (error) {
+        console.error(`[ListAppointments] Error parsing date/time: date=${dateStr}, time=${timeStr}`, error);
+        return new Date(0); // Return invalid date on error
       }
-      const d = new Date(year || 0, (month || 1) - 1, day || 1, hours, minutes, 0, 0);
-      return d;
     };
 
     // Pre-fetch all conversations between fan-star pairs for better performance
@@ -613,44 +757,113 @@ export const listAppointments = async (req, res) => {
       }
     };
     
-    // Sort by status priority first, then by UTC time ascending
+    // For fans and stars: Sort by status priority first (pending always first), then by date/time
+    // For admin: Sort by date/time descending (newest first), then by status priority
+    const isFan = req.user.role === 'fan';
+    const isStar = req.user.role === 'star';
+    
     const data = withComputed.sort((a, b) => {
-      // First, compare by status priority
-      const statusPriorityA = getStatusPriority(a.status);
-      const statusPriorityB = getStatusPriority(b.status);
-      
-      if (statusPriorityA !== statusPriorityB) {
-        return statusPriorityA - statusPriorityB;
-      }
-      
-      // If same status, sort by UTC time ascending (nearest to furthest)
-      // Use utcStartTime if available (preferred), otherwise fallback to parsing date/time
-      let timeA, timeB;
-      
-      // Get UTC time for appointment A
-      if (a.utcStartTime) {
-        timeA = new Date(a.utcStartTime).getTime();
-      } else {
+      // Get appointment time for A - handle all edge cases
+      let timeA;
+      if (a.startAt && typeof a.startAt === 'string') {
+        // Use computed startAt (preferred - already in ISO format)
+        const parsed = new Date(a.startAt);
+        timeA = isNaN(parsed.getTime()) ? 0 : parsed.getTime();
+      } else if (a.utcStartTime) {
+        // Fallback to utcStartTime (can be Date object or string)
+        const parsed = new Date(a.utcStartTime);
+        timeA = isNaN(parsed.getTime()) ? 0 : parsed.getTime();
+      } else if (a.date && a.time) {
         // Fallback: parse from date and time (for backward compatibility)
         const parsedA = parseStartDate(a.date, a.time);
         timeA = isNaN(parsedA.getTime()) ? 0 : parsedA.getTime();
+      } else {
+        // No valid date/time - put at end (use 0 to put at beginning of invalid dates)
+        timeA = 0;
       }
       
-      // Get UTC time for appointment B
-      if (b.utcStartTime) {
-        timeB = new Date(b.utcStartTime).getTime();
-      } else {
+      // Get appointment time for B - handle all edge cases
+      let timeB;
+      if (b.startAt && typeof b.startAt === 'string') {
+        // Use computed startAt (preferred - already in ISO format)
+        const parsed = new Date(b.startAt);
+        timeB = isNaN(parsed.getTime()) ? 0 : parsed.getTime();
+      } else if (b.utcStartTime) {
+        // Fallback to utcStartTime (can be Date object or string)
+        const parsed = new Date(b.utcStartTime);
+        timeB = isNaN(parsed.getTime()) ? 0 : parsed.getTime();
+      } else if (b.date && b.time) {
         // Fallback: parse from date and time (for backward compatibility)
         const parsedB = parseStartDate(b.date, b.time);
         timeB = isNaN(parsedB.getTime()) ? 0 : parsedB.getTime();
+      } else {
+        // No valid date/time - put at end (use 0 to put at beginning of invalid dates)
+        timeB = 0;
       }
       
-      return timeA - timeB;
+      // Get status priorities
+      const statusPriorityA = getStatusPriority(a.status);
+      const statusPriorityB = getStatusPriority(b.status);
+      
+      if (isFan || isStar) {
+        // For fans and stars: Primary sort by status priority (pending first), then by date/time ascending
+        if (statusPriorityA !== statusPriorityB) {
+          return statusPriorityA - statusPriorityB;
+        }
+        
+        // Secondary sort: by date/time ascending (nearest to furthest) within same status
+        if (timeA !== timeB) {
+          return timeA - timeB; // Ascending order (nearest first)
+        }
+      } else {
+        // For admin: Primary sort by date/time descending (newest first), then by status priority
+        if (timeA !== timeB) {
+          return timeB - timeA; // Descending order (newest first)
+        }
+        
+        // Secondary sort: by status priority (if same date/time)
+        if (statusPriorityA !== statusPriorityB) {
+          return statusPriorityA - statusPriorityB;
+        }
+      }
+      
+      // Tertiary sort: use _id as tiebreaker for stable sorting
+      const idA = a._id ? String(a._id) : '';
+      const idB = b._id ? String(b._id) : '';
+      return idA.localeCompare(idB);
     });
     
     // Apply pagination after sorting
     const skip = (finalPageNum - 1) * finalLimitNum;
     const paginatedData = data.slice(skip, skip + finalLimitNum);
+
+    // Log sorting verification (first few items to verify order)
+    if (data.length > 0) {
+      console.log(`[ListAppointments] ===== SORTING VERIFICATION =====`);
+      console.log(`[ListAppointments] Total appointments: ${data.length}`);
+      console.log(`[ListAppointments] First 10 items (sorted order):`);
+      data.slice(0, 10).forEach((item, idx) => {
+        const statusPriority = getStatusPriority(item.status);
+        let timeValue = 'N/A';
+        if (item.startAt) {
+          timeValue = new Date(item.startAt).toISOString();
+        } else if (item.utcStartTime) {
+          timeValue = new Date(item.utcStartTime).toISOString();
+        } else if (item.date && item.time) {
+          const parsed = parseStartDate(item.date, item.time);
+          timeValue = isNaN(parsed.getTime()) ? 'Invalid' : parsed.toISOString();
+        }
+        console.log(`  [${idx + 1}] Status: ${item.status} (priority: ${statusPriority}), Date: ${item.date}, Time: ${item.time}, StartAt: ${timeValue}`);
+      });
+      
+      // Log status distribution
+      const statusCounts = {};
+      data.forEach(item => {
+        statusCounts[item.status] = (statusCounts[item.status] || 0) + 1;
+      });
+      console.log(`[ListAppointments] Status distribution:`, statusCounts);
+      console.log(`[ListAppointments] ================================`);
+    }
 
     console.log(`[ListAppointments] Pagination result:`, {
       totalCount,
@@ -705,13 +918,25 @@ export const approveAppointment = async (req, res) => {
     appt.status = 'approved';
     const updated = await appt.save();
 
-    const availability = await Availability.findOne({ _id: appt.availabilityId, userId: appt.starId });
-    if (availability) {
-      const slot = availability.timeSlots.find((s) => String(s._id) === String(appt.timeSlotId));
-      if (slot) {
-        slot.status = 'unavailable';
-        await availability.save();
-      }
+    // Mark the slot as unavailable when appointment is approved
+    // This ensures the slot is blocked and won't show up for other fans
+    try {
+      const updateResult = await Availability.updateOne(
+        { 
+          _id: appt.availabilityId, 
+          userId: appt.starId, 
+          'timeSlots._id': appt.timeSlotId 
+        },
+        { 
+          $set: { 
+            'timeSlots.$.status': 'unavailable'
+          } 
+        }
+      );
+      console.log(`[ApproveAppointment] Slot marked as unavailable for appointment ${appt._id}, updateResult:`, updateResult);
+    } catch (slotError) {
+      console.error(`[ApproveAppointment] Error updating slot status for appointment ${appt._id}:`, slotError);
+      // Continue even if slot update fails - appointment is already approved
     }
 
     // Send notification to fan about appointment approval
@@ -796,13 +1021,28 @@ export const rejectAppointment = async (req, res) => {
     }
     const updated = await appt.save();
 
-    // Free the reserved slot if it was marked unavailable (pending hybrid reservation)
+    // Free the reserved slot when appointment is rejected
+    // This makes the slot available again for other fans to book
     try {
-      await Availability.updateOne(
-        { _id: appt.availabilityId, userId: appt.starId, 'timeSlots._id': appt.timeSlotId },
-        { $set: { 'timeSlots.$.status': 'available' } }
+      const updateResult = await Availability.updateOne(
+        { 
+          _id: appt.availabilityId, 
+          userId: appt.starId, 
+          'timeSlots._id': appt.timeSlotId 
+        },
+        { 
+          $set: { 
+            'timeSlots.$.status': 'available',
+            'timeSlots.$.paymentReferenceId': null,
+            'timeSlots.$.lockedAt': null
+          } 
+        }
       );
-    } catch (_e) {}
+      console.log(`[RejectAppointment] Slot freed for appointment ${appt._id}, updateResult:`, updateResult);
+    } catch (slotError) {
+      console.error(`[RejectAppointment] Error freeing slot for appointment ${appt._id}:`, slotError);
+      // Continue even if slot update fails - appointment is already rejected
+    }
 
     // Send notification to fan about appointment rejection
     try {
@@ -1177,6 +1417,3 @@ export const completeAppointment = async (req, res) => {
     return res.status(500).json({ success: false, message: err.message });
   }
 };
-
-
-

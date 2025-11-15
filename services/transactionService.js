@@ -337,16 +337,9 @@ const completeTransactionInternal = async (transactionId, session) => {
   transaction.refundTimer = null; // Clear refund timer
   await transaction.save({ session });
 
-  // Fallback: for coin-only appointment payments, ensure star gets booking notification
-  try {
-    if (transaction.type === TRANSACTION_TYPES.APPOINTMENT_PAYMENT && transaction.paymentMode === PAYMENT_MODES.COIN) {
-      const Appointment = (await import('../models/Appointment.js')).default;
-      const appt = await Appointment.findOne({ transactionId: transaction._id }).session(session);
-      if (appt) {
-        await NotificationHelper.sendAppointmentNotification('APPOINTMENT_CREATED', appt, { currentUserId: appt.fanId });
-      }
-    }
-  } catch (_notifyErr) {}
+  // NOTE: Notification for appointment creation is handled in appointment.js (for coin payments)
+  // and paymentCallbackService.js (for hybrid payments) to avoid duplicate notifications
+  // Do NOT send notification here as it would cause duplicates
 };
 
 /**

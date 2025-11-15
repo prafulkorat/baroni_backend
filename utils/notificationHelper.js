@@ -76,6 +76,13 @@ class NotificationHelper {
    * Send appointment-related notifications
    */
   static async sendAppointmentNotification(type, appointment, additionalData = {}) {
+    // Log to track if this function is being called multiple times for the same appointment
+    console.log(`[AppointmentNotification] ===== Sending ${type} notification =====`);
+    console.log(`[AppointmentNotification] Appointment ID: ${appointment._id}`);
+    console.log(`[AppointmentNotification] Star ID: ${appointment.starId}`);
+    console.log(`[AppointmentNotification] Fan ID: ${appointment.fanId}`);
+    console.log(`[AppointmentNotification] Current User ID: ${additionalData.currentUserId || 'not provided'}`);
+    
     const templates = notificationService.constructor.getNotificationTemplates();
     const baseTemplate = templates[type];
 

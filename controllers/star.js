@@ -1042,13 +1042,15 @@ export const getStarById = async (req, res) => {
         // Convert map to array
         const mergedAvailability = Array.from(mergedByDate.values());
 
-        // Filter out unavailable (booked) time slots from availability and sort by nearest
+        // Filter out unavailable (booked) and locked (payment link sent) time slots from availability and sort by nearest
+        // Only show slots with status 'available' - filter out 'unavailable' (booked) and 'locked' (waiting for payment)
         const filteredAvailability = Array.isArray(mergedAvailability)
             ? mergedAvailability
                 .map((item) => {
                     const timeSlots = Array.isArray(item.timeSlots)
                         ? item.timeSlots
                             .filter((s) => {
+                                // Only show available slots - filter out unavailable (booked) and locked (payment pending)
                                 if (!s || s.status !== 'available') return false;
 
                                 // Use UTC time for comparison to work correctly across all timezones

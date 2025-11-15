@@ -261,49 +261,57 @@ export const listDedicationRequests = async (req, res) => {
       };
     });
 
-    const approvedWithoutVideo = [];
-    const pending = [];
-    const approvedWithVideo = [];
-    const future = [];
-    const past = [];
-    const cancelled = [];
+    // Apply proper sorting logic: by status priority, then by date ascending
+    // Status priority: (1) pending, (2) approved, (3) completed, (4) cancelled/rejected
+    // Within each status group, sort by date ascending (nearest to furthest)
     
-    for (const it of withComputed) {
-      if (it.status === 'cancelled' || it.status === 'rejected') {
-        cancelled.push(it);
-      } else if (it.status === 'pending') {
-        pending.push(it);
-      } else if (it.status === 'approved') {
-        // Check if video is uploaded
-        if (!it.videoUrl) {
-          approvedWithoutVideo.push(it);
-        } else {
-          approvedWithVideo.push(it);
-        }
-      } else if (it.status === 'completed') {
-        if (typeof it.timeToNowMs === 'number' && it.timeToNowMs >= 0) {
-          future.push(it);
-        } else {
-          past.push(it);
-        }
+    const getStatusPriority = (status) => {
+      switch (status) {
+        case 'pending': return 1;
+        case 'approved': return 2;
+        case 'completed': return 3;
+        case 'cancelled':
+        case 'rejected': return 4;
+        default: return 5;
       }
-    }
+    };
     
-    // Sort approved without video by approval time (most recent first)
-    approvedWithoutVideo.sort((a, b) => new Date(b.approvedAt || b.createdAt).getTime() - new Date(a.approvedAt || a.createdAt).getTime());
-    // Sort pending by creation time (most recent first)
-    pending.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-    // Sort approved with video by approval time (most recent first)
-    approvedWithVideo.sort((a, b) => new Date(b.approvedAt || b.createdAt).getTime() - new Date(a.approvedAt || a.createdAt).getTime());
-    // Sort future by event time (nearest first)
-    future.sort((a, b) => (a.timeToNowMs ?? Infinity) - (b.timeToNowMs ?? Infinity));
-    // Sort past by event time (most recent first)
-    past.sort((a, b) => Math.abs(b.timeToNowMs ?? 0) - Math.abs(a.timeToNowMs ?? 0));
-    // Sort cancelled by update time (most recent first)
-    cancelled.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
-    
-    // Return: approved without video first, then pending, then approved with video, then future, then past, then cancelled
-    const data = [...approvedWithoutVideo, ...pending, ...approvedWithVideo, ...future, ...past, ...cancelled];
+    // Sort by status priority first, then by event date ascending (nearest to furthest)
+    const data = withComputed.sort((a, b) => {
+      // First, compare by status priority
+      const statusPriorityA = getStatusPriority(a.status);
+      const statusPriorityB = getStatusPriority(b.status);
+      
+      if (statusPriorityA !== statusPriorityB) {
+        return statusPriorityA - statusPriorityB;
+      }
+      
+      // If same status, sort by event date ascending (nearest to furthest)
+      // Use eventDate if available, otherwise fallback to createdAt
+      let timeA, timeB;
+      
+      // Get event time for dedication request A
+      if (a.eventDate) {
+        timeA = new Date(a.eventDate).getTime();
+      } else if (a.eventAt) {
+        timeA = new Date(a.eventAt).getTime();
+      } else {
+        // Fallback to createdAt
+        timeA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      }
+      
+      // Get event time for dedication request B
+      if (b.eventDate) {
+        timeB = new Date(b.eventDate).getTime();
+      } else if (b.eventAt) {
+        timeB = new Date(b.eventAt).getTime();
+      } else {
+        // Fallback to createdAt
+        timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      }
+      
+      return timeA - timeB;
+    });
 
     return res.json({ 
       success: true, 
