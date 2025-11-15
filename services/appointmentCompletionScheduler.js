@@ -108,14 +108,19 @@ export const processCompletedAppointments = async () => {
           appointment.completedAt = new Date();
           await appointment.save();
 
-          // Send completion notification
-          try {
-            await NotificationHelper.sendAppointmentNotification('APPOINTMENT_COMPLETED', appointment, { 
-              currentUserId: appointment.fanId 
-            });
-            console.log(`[AppointmentCompletionScheduler] Sent completion notification for appointment ${appointment._id}`);
-          } catch (notificationError) {
-            console.error(`[AppointmentCompletionScheduler] Error sending completion notification:`, notificationError);
+          // Send completion notification (only if notification cron is enabled)
+          const notificationCronEnabled = process.env.NOTIFICATION_CRON === 'true';
+          if (notificationCronEnabled) {
+            try {
+              await NotificationHelper.sendAppointmentNotification('APPOINTMENT_COMPLETED', appointment, { 
+                currentUserId: appointment.fanId 
+              });
+              console.log(`[AppointmentCompletionScheduler] Sent completion notification for appointment ${appointment._id}`);
+            } catch (notificationError) {
+              console.error(`[AppointmentCompletionScheduler] Error sending completion notification:`, notificationError);
+            }
+          } else {
+            console.log(`[AppointmentCompletionScheduler] ⚠ Notification cron is disabled (NOTIFICATION_CRON=${process.env.NOTIFICATION_CRON || 'not set'}). Skipping completion notification for appointment ${appointment._id}`);
           }
 
           // Cleanup messages between fan and star after completion

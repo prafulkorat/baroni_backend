@@ -500,7 +500,12 @@ class NotificationService {
       // For iOS: If type is "reject" OR it's an appointment rejection, send the reject payload
       const shouldSendRejectPayloadForIOS = isIOS && (isRejectType || isAppointmentReject);
       
-      const isVoipExplicit = !isRejectType && !isAppointmentReject && (
+      // Check if this is an appointment request notification (should NOT use VoIP)
+      const isAppointmentRequestCheck = notificationData.type === 'appointment' || 
+                                        data.eventType === 'APPOINTMENT_CREATED' ||
+                                        (notificationData.title && notificationData.title.toLowerCase().includes('appointment request'));
+      
+      const isVoipExplicit = !isRejectType && !isAppointmentReject && !isAppointmentRequestCheck && (
         options.apnsVoip === true ||
         (typeof data.pushType === 'string' && data.pushType.toLowerCase() === 'voip') ||
         (typeof notificationData.pushType === 'string' && notificationData.pushType.toLowerCase() === 'voip') ||
@@ -512,7 +517,8 @@ class NotificationService {
         if (userApnsProvider) {
           console.log(`[APNs] Provider found for user ${userId}, isDev: ${user.isDev}`);
           const note = new apn.Notification();
-          const isVoip = isVoipExplicit;
+          // For appointment requests, always use regular notifications, never VoIP
+          const isVoip = isVoipExplicit && !isAppointmentRequestCheck;
         
         // Check if this is a reject call notification (for cutting/rejecting calls on iOS)
         // BUT: If type is "reject" or appointment reject, don't treat it as call rejection - it's just a normal reject notification
@@ -823,16 +829,14 @@ class NotificationService {
       // 1. APNs delivery failed AND
       // 2. VoIP is explicitly requested (isVoipExplicit) AND
       // 3. This is NOT an appointment request notification
-      const isAppointmentRequest = notificationData.type === 'appointment' || 
-                                    data.eventType === 'APPOINTMENT_CREATED' ||
-                                    (notificationData.title && notificationData.title.toLowerCase().includes('appointment request'));
+      // Note: isAppointmentRequestCheck is already defined above
       
       // Log if we're skipping VoIP for appointment requests
-      if (isAppointmentRequest && user.voipToken && isVoipExplicit) {
+      if (isAppointmentRequestCheck && user.voipToken && isVoipExplicit) {
         console.log(`[VoIP] Skipping VoIP notification for appointment request to prevent duplicates - user ${userId}`);
       }
       
-      if (!deliverySucceeded && user.voipToken && isVoipExplicit && !isAppointmentRequest) {
+      if (!deliverySucceeded && user.voipToken && isVoipExplicit && !isAppointmentRequestCheck) {
         console.log(`[VoIP] Attempting VoIP notification for user ${userId} (APNs failed, VoIP explicitly requested, not appointment request)`);
         const userApnsProvider = this.getApnsProvider(user.isDev);
         if (userApnsProvider) {

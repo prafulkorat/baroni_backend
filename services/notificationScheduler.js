@@ -88,6 +88,14 @@ class NotificationScheduler {
    * All times are in UTC to avoid timezone mismatches
    */
   async sendAppointmentReminders() {
+    // Check if notification cron is enabled via environment variable
+    const notificationCronEnabled = process.env.NOTIFICATION_CRON === 'true';
+    
+    if (!notificationCronEnabled) {
+      console.log(`[AppointmentReminder] ⚠ Notification cron is disabled (NOTIFICATION_CRON=${process.env.NOTIFICATION_CRON || 'not set'}). Skipping appointment reminders.`);
+      return;
+    }
+    
     // Get current UTC time
     const now = new Date();
     const nowUTC = new Date(now.toISOString());
