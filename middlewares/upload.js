@@ -65,6 +65,26 @@ const mixedFileFilter = (_req, file, cb) => {
 
 export const uploadMixed = multer({ storage, fileFilter: mixedFileFilter, limits: { fileSize: 100 * 1024 * 1024 } });
 
+// For events - allow image upload and all text fields
+// Note: fileFilter only runs for files, text fields are automatically parsed by multer
+const eventFileFilter = (_req, file, cb) => {
+  // Only allow image files for the 'image' field
+  if (file.fieldname === 'image') {
+    if (file.mimetype && file.mimetype.startsWith('image/')) {
+      return cb(null, true);
+    }
+    return cb(new Error('Only image files are allowed for the image field'));
+  }
+  // This shouldn't be called for text fields, but just in case
+  return cb(null, true);
+};
+
+export const uploadEvent = multer({ 
+  storage, 
+  fileFilter: eventFileFilter, 
+  limits: { fileSize: 20 * 1024 * 1024 } // 20MB for event images
+});
+
 
 
 

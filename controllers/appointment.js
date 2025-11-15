@@ -757,8 +757,11 @@ export const listAppointments = async (req, res) => {
       }
     };
     
-    // Sort by date/time descending (newest first), then by status priority as secondary sort
-    // This ensures newest appointments appear first, regardless of status
+    // For fans and stars: Sort by status priority first (pending always first), then by date/time
+    // For admin: Sort by date/time descending (newest first), then by status priority
+    const isFan = req.user.role === 'fan';
+    const isStar = req.user.role === 'star';
+    
     const data = withComputed.sort((a, b) => {
       // Get appointment time for A - handle all edge cases
       let timeA;
@@ -798,18 +801,30 @@ export const listAppointments = async (req, res) => {
         timeB = 0;
       }
       
-      // Primary sort: by date/time descending (newest first)
-      // If times are equal, use status priority as secondary sort
-      if (timeA !== timeB) {
-        return timeB - timeA; // Descending order (newest first)
-      }
-      
-      // Secondary sort: by status priority (if same date/time)
+      // Get status priorities
       const statusPriorityA = getStatusPriority(a.status);
       const statusPriorityB = getStatusPriority(b.status);
       
-      if (statusPriorityA !== statusPriorityB) {
-        return statusPriorityA - statusPriorityB;
+      if (isFan || isStar) {
+        // For fans and stars: Primary sort by status priority (pending first), then by date/time ascending
+        if (statusPriorityA !== statusPriorityB) {
+          return statusPriorityA - statusPriorityB;
+        }
+        
+        // Secondary sort: by date/time ascending (nearest to furthest) within same status
+        if (timeA !== timeB) {
+          return timeA - timeB; // Ascending order (nearest first)
+        }
+      } else {
+        // For admin: Primary sort by date/time descending (newest first), then by status priority
+        if (timeA !== timeB) {
+          return timeB - timeA; // Descending order (newest first)
+        }
+        
+        // Secondary sort: by status priority (if same date/time)
+        if (statusPriorityA !== statusPriorityB) {
+          return statusPriorityA - statusPriorityB;
+        }
       }
       
       // Tertiary sort: use _id as tiebreaker for stable sorting

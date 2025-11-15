@@ -8,6 +8,8 @@ import ReportUser from '../models/ReportUser.js';
 import DeviceChange from '../models/DeviceChange.js';
 import Event from '../models/Event.js';
 import mongoose from 'mongoose';
+import { validationResult } from 'express-validator';
+import { getFirstValidationError } from '../utils/validationHelper.js';
 
 // Helper function to get date range based on period
 const getDateRange = (period) => {
@@ -1192,6 +1194,16 @@ export const getReportedUsersDetails = async (req, res) => {
 // Event Management APIs
 export const createEvent = async (req, res) => {
   try {
+    // Check validation errors first
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      const errorMessage = getFirstValidationError(errors);
+      return res.status(400).json({
+        success: false,
+        message: errorMessage || 'Validation failed'
+      });
+    }
+
     const admin = req.user;
     if (!admin || admin.role !== 'admin') {
       return res.status(403).json({
@@ -1214,22 +1226,65 @@ export const createEvent = async (req, res) => {
       link
     } = req.body;
 
+    // Handle image upload if provided via form-data
+    let imageUrl = image; // Use image from body (if JSON) or will be replaced if file uploaded
+    
+    if (req.file && req.file.fieldname === 'image') {
+      try {
+        const { uploadFile } = await import('../utils/uploadFile.js');
+        imageUrl = await uploadFile(req.file.buffer);
+      } catch (uploadError) {
+        return res.status(400).json({
+          success: false,
+          message: 'Error uploading image: ' + uploadError.message
+        });
+      }
+    }
+
+    // Validate dates
+    if (!startDate || !endDate) {
+      return res.status(400).json({
+        success: false,
+        message: 'Start date and end date are required'
+      });
+    }
+
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+
+    if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid date format. Please use ISO 8601 format (e.g., 2024-01-01T00:00:00.000Z)'
+      });
+    }
+
+    if (end <= start) {
+      return res.status(400).json({
+        success: false,
+        message: 'End date must be after start date'
+      });
+    }
+
     const event = new Event({
       title,
       description,
       type,
-      startDate: new Date(startDate),
-      endDate: new Date(endDate),
-      targetAudience,
+      startDate: start,
+      endDate: end,
+      targetAudience: targetAudience || 'all',
       targetCountry,
-      priority,
-      budget,
-      image,
+      priority: priority || 'medium',
+      budget: budget ? parseFloat(budget) : undefined,
+      image: imageUrl,
       link,
       createdBy: admin._id
     });
 
     await event.save();
+
+    // Populate creator details
+    await event.populate('createdBy', 'name email baroniId');
 
     return res.status(201).json({
       success: true,
@@ -1239,9 +1294,30 @@ export const createEvent = async (req, res) => {
 
   } catch (err) {
     console.error('Create event error:', err);
+    
+    // Handle mongoose validation errors
+    if (err.name === 'ValidationError') {
+      const errorMessages = Object.values(err.errors).map(e => e.message).join(', ');
+      return res.status(400).json({
+        success: false,
+        message: `Validation error: ${errorMessages}`
+      });
+    }
+
+    // Handle duplicate key errors
+    if (err.code === 11000) {
+      return res.status(409).json({
+        success: false,
+        message: 'Event with this information already exists'
+      });
+    }
+
+    // Generic error with more details in development
     return res.status(500).json({
       success: false,
-      message: 'Failed to create event'
+      message: process.env.NODE_ENV === 'development' 
+        ? `Failed to create event: ${err.message}` 
+        : 'Failed to create event'
     });
   }
 };
