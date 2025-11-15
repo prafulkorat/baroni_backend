@@ -24,18 +24,15 @@ export const createAd = async (req, res) => {
 
     let imageUrl = null;
 
-    // Handle image upload
-    if (req.files && req.files.length > 0) {
-      const imageFile = req.files.find(file => file.fieldname === 'image');
-      if (imageFile) {
-        try {
-          imageUrl = await uploadFile(imageFile.buffer);
-        } catch (uploadError) {
-          return res.status(400).json({
-            success: false,
-            message: 'Error uploading image: ' + uploadError.message
-          });
-        }
+    // Handle image upload - using req.file since uploadMixed.single('image') is used
+    if (req.file && req.file.fieldname === 'image') {
+      try {
+        imageUrl = await uploadFile(req.file.buffer);
+      } catch (uploadError) {
+        return res.status(400).json({
+          success: false,
+          message: 'Error uploading image: ' + uploadError.message
+        });
       }
     }
 
@@ -237,18 +234,15 @@ export const updateAd = async (req, res) => {
 
     let imageUrl = ad.image;
 
-    // Handle image upload if new image is provided
-    if (req.files && req.files.length > 0) {
-      const imageFile = req.files.find(file => file.fieldname === 'image');
-      if (imageFile) {
-        try {
-          imageUrl = await uploadFile(imageFile.buffer);
-        } catch (uploadError) {
-          return res.status(400).json({
-            success: false,
-            message: 'Error uploading image: ' + uploadError.message
-          });
-        }
+    // Handle image upload if new image is provided - using req.file since uploadMixed.single('image') is used
+    if (req.file && req.file.fieldname === 'image') {
+      try {
+        imageUrl = await uploadFile(req.file.buffer);
+      } catch (uploadError) {
+        return res.status(400).json({
+          success: false,
+          message: 'Error uploading image: ' + uploadError.message
+        });
       }
     }
 

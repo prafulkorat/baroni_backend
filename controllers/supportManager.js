@@ -19,17 +19,14 @@ export const createSupportTicket = async (req, res) => {
 
     let imageUrl = null;
 
-    if (req.files && req.files.length > 0) {
-      const imageFile = req.files.find(file => file.fieldname === 'image');
-      if (imageFile) {
-        try {
-          imageUrl = await uploadFile(imageFile.buffer);
-        } catch (uploadError) {
-          return res.status(400).json({
-            success: false,
-            message: 'Error uploading image: ' + uploadError.message
-          });
-        }
+    if (req.file) {
+      try {
+        imageUrl = await uploadFile(req.file.buffer);
+      } catch (uploadError) {
+        return res.status(400).json({
+          success: false,
+          message: 'Error uploading image: ' + uploadError.message
+        });
       }
     }
 
@@ -96,23 +93,34 @@ export const getUserSupportTickets = async (req, res) => {
 };
 
 // Get a specific support ticket by ID
+// Supports both MongoDB ObjectId and ticketId format (#AT0000002)
 export const getSupportTicketById = async (req, res) => {
   try {
     const { id } = req.params;
     const userId = req.user.id;
 
-    if (!mongoose.Types.ObjectId.isValid(id)) {
+    let ticket;
+    
+    // Check if it's a MongoDB ObjectId
+    if (mongoose.Types.ObjectId.isValid(id)) {
+      ticket = await ContactSupport.findById(id)
+        .populate('userId', 'name email baroniId profilePic')
+        .populate('assignedTo', 'name email baroniId')
+        .populate('resolvedBy', 'name email baroniId')
+        .populate('messages.sender', 'name email baroniId profilePic');
+    } else if (typeof id === 'string' && id.startsWith('#AT')) {
+      // Search by ticketId format (#AT0000002)
+      ticket = await ContactSupport.findOne({ ticketId: id })
+        .populate('userId', 'name email baroniId profilePic')
+        .populate('assignedTo', 'name email baroniId')
+        .populate('resolvedBy', 'name email baroniId')
+        .populate('messages.sender', 'name email baroniId profilePic');
+    } else {
       return res.status(400).json({
         success: false,
-        message: 'Invalid ticket ID'
+        message: 'Invalid ticket ID format. Must be MongoDB ObjectId or ticketId (#AT0000002)'
       });
     }
-
-    const ticket = await ContactSupport.findById(id)
-      .populate('userId', 'name email baroniId profilePic')
-      .populate('assignedTo', 'name email baroniId')
-      .populate('resolvedBy', 'name email baroniId')
-      .populate('messages.sender', 'name email baroniId profilePic');
 
     if (!ticket || ticket.isDeleted) {
       return res.status(404).json({
@@ -183,17 +191,14 @@ export const updateSupportTicket = async (req, res) => {
     let imageUrl = ticket.image;
 
     // Handle image upload if new image is provided
-    if (req.files && req.files.length > 0) {
-      const imageFile = req.files.find(file => file.fieldname === 'image');
-      if (imageFile) {
-        try {
-          imageUrl = await uploadFile(imageFile.buffer);
-        } catch (uploadError) {
-          return res.status(400).json({
-            success: false,
-            message: 'Error uploading image: ' + uploadError.message
-          });
-        }
+    if (req.file) {
+      try {
+        imageUrl = await uploadFile(req.file.buffer);
+      } catch (uploadError) {
+        return res.status(400).json({
+          success: false,
+          message: 'Error uploading image: ' + uploadError.message
+        });
       }
     }
 
@@ -331,9 +336,9 @@ export const getAllSupportTickets = async (req, res) => {
     sortOptions[sortBy] = sortOrder === 'asc' ? 1 : -1;
 
     const tickets = await ContactSupport.find(query)
-      .populate('userId', 'name email baroniId profilePic')
-      .populate('assignedTo', 'name email baroniId')
-      .populate('resolvedBy', 'name email baroniId')
+      .populate('userId', 'name email baroniId profilePic role _id')
+      .populate('assignedTo', 'name email baroniId role _id')
+      .populate('resolvedBy', 'name email baroniId role _id')
       .sort(sortOptions)
       .limit(limit * 1)
       .skip((page - 1) * limit)

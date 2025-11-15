@@ -239,6 +239,241 @@
 								"url": { "raw": "{{base_url}}/api/admin/jackpot/withdrawals/:id/retry", "host": ["{{base_url}}"], "path": ["api", "admin", "jackpot", "withdrawals", ":id", "retry"], "variable": [ { "key": "id", "value": "WITHDRAWAL_ID_HERE" } ] }
 							},
 							"response": []
+						},
+						{
+							"name": "Jackpot Withdrawal Requests (New)",
+							"item": [
+								{
+									"name": "Get Withdrawal Requests Metrics",
+									"request": {
+										"method": "GET",
+										"header": [ { "key": "Authorization", "value": "Bearer {{admin_token}}" } ],
+										"url": { 
+											"raw": "{{base_url}}/api/admin/jackpot/withdrawal-requests/metrics?date=today", 
+											"host": ["{{base_url}}"], 
+											"path": ["api", "admin", "jackpot", "withdrawal-requests", "metrics"], 
+											"query": [ 
+												{ "key": "date", "value": "today", "description": "Filter: 'today' for today's metrics, or use 'from' and 'to' for date range" },
+												{ "key": "from", "value": "", "description": "ISO 8601 date (e.g., 2025-07-01T00:00:00.000Z)" },
+												{ "key": "to", "value": "", "description": "ISO 8601 date (e.g., 2025-07-31T23:59:59.999Z)" }
+											] 
+										},
+										"description": "Returns metrics: totalCurrentJackpot, paidToday (count & amount), pending (count & amount), failed (count & amount)"
+									},
+									"response": []
+								},
+								{
+									"name": "List Withdrawal Requests - All",
+									"request": {
+										"method": "GET",
+										"header": [ { "key": "Authorization", "value": "Bearer {{admin_token}}" } ],
+										"url": { 
+											"raw": "{{base_url}}/api/admin/jackpot/withdrawal-requests?status=all&today=false&from=&to=&q=&page=1&limit=20", 
+											"host": ["{{base_url}}"], 
+											"path": ["api", "admin", "jackpot", "withdrawal-requests"], 
+											"query": [ 
+												{ "key": "status", "value": "all", "description": "Filter: all, pending, paid, failed" },
+												{ "key": "today", "value": "false", "description": "Boolean: true to filter today's requests only" },
+												{ "key": "from", "value": "", "description": "ISO 8601 date for date range start" },
+												{ "key": "to", "value": "", "description": "ISO 8601 date for date range end" },
+												{ "key": "q", "value": "", "description": "Search by star name or baroniId" },
+												{ "key": "page", "value": "1" },
+												{ "key": "limit", "value": "20" }
+											] 
+										},
+										"description": "List all withdrawal requests. Returns items with: id, status, uiStatus (paid/pending/failed), amount, commissionAmount, netAmount, errorMessage, star details, operatorId, formattedDate"
+									},
+									"response": []
+								},
+								{
+									"name": "List Withdrawal Requests - Pending",
+									"request": {
+										"method": "GET",
+										"header": [ { "key": "Authorization", "value": "Bearer {{admin_token}}" } ],
+										"url": { 
+											"raw": "{{base_url}}/api/admin/jackpot/withdrawal-requests?status=pending&today=false&from=&to=&q=&page=1&limit=20", 
+											"host": ["{{base_url}}"], 
+											"path": ["api", "admin", "jackpot", "withdrawal-requests"], 
+											"query": [ 
+												{ "key": "status", "value": "pending" },
+												{ "key": "today", "value": "false" },
+												{ "key": "from", "value": "" },
+												{ "key": "to", "value": "" },
+												{ "key": "q", "value": "" },
+												{ "key": "page", "value": "1" },
+												{ "key": "limit", "value": "20" }
+											] 
+										},
+										"description": "List only pending withdrawal requests"
+									},
+									"response": []
+								},
+								{
+									"name": "List Withdrawal Requests - Paid",
+									"request": {
+										"method": "GET",
+										"header": [ { "key": "Authorization", "value": "Bearer {{admin_token}}" } ],
+										"url": { 
+											"raw": "{{base_url}}/api/admin/jackpot/withdrawal-requests?status=paid&today=false&from=&to=&q=&page=1&limit=20", 
+											"host": ["{{base_url}}"], 
+											"path": ["api", "admin", "jackpot", "withdrawal-requests"], 
+											"query": [ 
+												{ "key": "status", "value": "paid" },
+												{ "key": "today", "value": "false" },
+												{ "key": "from", "value": "" },
+												{ "key": "to", "value": "" },
+												{ "key": "q", "value": "" },
+												{ "key": "page", "value": "1" },
+												{ "key": "limit", "value": "20" }
+											] 
+										},
+										"description": "List only paid (approved) withdrawal requests"
+									},
+									"response": []
+								},
+								{
+									"name": "List Withdrawal Requests - Failed",
+									"request": {
+										"method": "GET",
+										"header": [ { "key": "Authorization", "value": "Bearer {{admin_token}}" } ],
+										"url": { 
+											"raw": "{{base_url}}/api/admin/jackpot/withdrawal-requests?status=failed&today=false&from=&to=&q=&page=1&limit=20", 
+											"host": ["{{base_url}}"], 
+											"path": ["api", "admin", "jackpot", "withdrawal-requests"], 
+											"query": [ 
+												{ "key": "status", "value": "failed" },
+												{ "key": "today", "value": "false" },
+												{ "key": "from", "value": "" },
+												{ "key": "to", "value": "" },
+												{ "key": "q", "value": "" },
+												{ "key": "page", "value": "1" },
+												{ "key": "limit", "value": "20" }
+											] 
+										},
+										"description": "List only failed (rejected) withdrawal requests with error messages"
+									},
+									"response": []
+								},
+								{
+									"name": "List Withdrawal Requests - Today",
+									"request": {
+										"method": "GET",
+										"header": [ { "key": "Authorization", "value": "Bearer {{admin_token}}" } ],
+										"url": { 
+											"raw": "{{base_url}}/api/admin/jackpot/withdrawal-requests?status=all&today=true&from=&to=&q=&page=1&limit=20", 
+											"host": ["{{base_url}}"], 
+											"path": ["api", "admin", "jackpot", "withdrawal-requests"], 
+											"query": [ 
+												{ "key": "status", "value": "all" },
+												{ "key": "today", "value": "true" },
+												{ "key": "from", "value": "" },
+												{ "key": "to", "value": "" },
+												{ "key": "q", "value": "" },
+												{ "key": "page", "value": "1" },
+												{ "key": "limit", "value": "20" }
+											] 
+										},
+										"description": "List today's withdrawal requests only"
+									},
+									"response": []
+								},
+								{
+									"name": "Get Withdrawal Request Details",
+									"request": {
+										"method": "GET",
+										"header": [ { "key": "Authorization", "value": "Bearer {{admin_token}}" } ],
+										"url": { 
+											"raw": "{{base_url}}/api/admin/jackpot/withdrawal-requests/:id", 
+											"host": ["{{base_url}}"], 
+											"path": ["api", "admin", "jackpot", "withdrawal-requests", ":id"], 
+											"variable": [ { "key": "id", "value": "WITHDRAWAL_REQUEST_ID_HERE", "description": "MongoDB ObjectId of the withdrawal request" } ] 
+										},
+										"description": "Get detailed information about a specific withdrawal request including star details, wallet balance, commission calculations, and error messages"
+									},
+									"response": []
+								},
+								{
+									"name": "Approve Withdrawal Request",
+									"request": {
+										"method": "PATCH",
+										"header": [
+											{ "key": "Authorization", "value": "Bearer {{admin_token}}" },
+											{ "key": "Content-Type", "value": "application/json" }
+										],
+										"body": { 
+											"mode": "raw", 
+											"raw": "{\n  \"note\": \"Approved and processed successfully\"\n}",
+											"options": {
+												"raw": {
+													"language": "json"
+												}
+											}
+										},
+										"url": { 
+											"raw": "{{base_url}}/api/admin/jackpot/withdrawal-requests/:id/approve", 
+											"host": ["{{base_url}}"], 
+											"path": ["api", "admin", "jackpot", "withdrawal-requests", ":id", "approve"], 
+											"variable": [ { "key": "id", "value": "WITHDRAWAL_REQUEST_ID_HERE", "description": "MongoDB ObjectId of the withdrawal request" } ] 
+										},
+										"description": "Approve a pending withdrawal request. This will process the payment and deduct from star's jackpot balance. Only pending requests can be approved."
+									},
+									"response": []
+								},
+								{
+									"name": "Reject Withdrawal Request",
+									"request": {
+										"method": "PATCH",
+										"header": [
+											{ "key": "Authorization", "value": "Bearer {{admin_token}}" },
+											{ "key": "Content-Type", "value": "application/json" }
+										],
+										"body": { 
+											"mode": "raw", 
+											"raw": "{\n  \"reason\": \"Invalid bank details\",\n  \"note\": \"Please update your bank information\"\n}",
+											"options": {
+												"raw": {
+													"language": "json"
+												}
+											}
+										},
+										"url": { 
+											"raw": "{{base_url}}/api/admin/jackpot/withdrawal-requests/:id/reject", 
+											"host": ["{{base_url}}"], 
+											"path": ["api", "admin", "jackpot", "withdrawal-requests", ":id", "reject"], 
+											"variable": [ { "key": "id", "value": "WITHDRAWAL_REQUEST_ID_HERE", "description": "MongoDB ObjectId of the withdrawal request" } ] 
+										},
+										"description": "Reject a pending withdrawal request. Reason is required and will be shown as error message. Only pending requests can be rejected."
+									},
+									"response": []
+								},
+								{
+									"name": "Retry Payment (Failed Request)",
+									"request": {
+										"method": "PATCH",
+										"header": [
+											{ "key": "Authorization", "value": "Bearer {{admin_token}}" },
+											{ "key": "Content-Type", "value": "application/json" }
+										],
+										"body": { 
+											"mode": "raw", 
+											"raw": "{\n  \"note\": \"Retrying payment after fixing bank details\"\n}",
+											"options": {
+												"raw": {
+													"language": "json"
+												}
+											}
+										},
+										"url": { 
+											"raw": "{{base_url}}/api/admin/jackpot/withdrawal-requests/:id/retry", 
+											"host": ["{{base_url}}"], 
+											"path": ["api", "admin", "jackpot", "withdrawal-requests", ":id", "retry"], 
+											"variable": [ { "key": "id", "value": "WITHDRAWAL_REQUEST_ID_HERE", "description": "MongoDB ObjectId of the failed withdrawal request" } ] 
+										},
+										"description": "Retry payment for a failed/rejected withdrawal request. Only rejected requests can be retried. On success, status changes to approved. Validates balance before retry."
+									},
+									"response": []
+								}
+							]
 						}
 					]
 				}

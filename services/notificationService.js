@@ -5,6 +5,7 @@ import Notification from '../models/Notification.js';
 import fs from 'fs';
 import path from 'path';
 import dotenv from 'dotenv';
+import mongoose from 'mongoose';
 
 // Load environment variables
 dotenv.config();
@@ -333,18 +334,56 @@ class NotificationService {
       optionsKeys: Object.keys(options)
     });
 
+    // Validate userId is a valid ObjectId
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      const errorMsg = `Invalid userId format. Expected a valid ObjectId, but received: ${userId}`;
+      console.error(`[NOTIFICATION ERROR] ${errorMsg}`);
+      return {
+        success: false,
+        error: errorMsg,
+        message: errorMsg
+      };
+    }
+
     // Fetch user name to include in notification data
     let userName = 'User';
     try {
       const user = await User.findById(userId).select('name pseudo');
+      if (!user) {
+        const errorMsg = `User not found with id: ${userId}`;
+        console.error(`[NOTIFICATION ERROR] ${errorMsg}`);
+        return {
+          success: false,
+          error: errorMsg,
+          message: errorMsg
+        };
+      }
       userName = user?.name || user?.pseudo || userName;
-    } catch (_e) {}
+    } catch (error) {
+      console.error(`[NOTIFICATION ERROR] Error fetching user ${userId}:`, error);
+      return {
+        success: false,
+        error: error.message || 'Error fetching user',
+        message: error.message || 'Error fetching user'
+      };
+    }
 
     // Add user name to notification data
-    const enrichedData = {
-      ...data,
-      userName
-    };
+    // For reject type, include userId and ownUserID but exclude userName to keep payload minimal
+    const isRejectTypeCheck = (
+      (typeof notificationData.type === 'string' && notificationData.type.toLowerCase() === 'reject') ||
+      (typeof data.type === 'string' && data.type.toLowerCase() === 'reject')
+    );
+    const enrichedData = isRejectTypeCheck
+      ? {
+          // For reject type, keep userId and ownUserID, but exclude userName
+          ...data,
+          // Don't add userName for reject type
+        }
+      : {
+          ...data,
+          userName
+        };
 
     // Create notification record in database first
     // For reject type, use 'general' type in database (since 'reject' is not in enum)
@@ -461,7 +500,12 @@ class NotificationService {
       // For iOS: If type is "reject" OR it's an appointment rejection, send the reject payload
       const shouldSendRejectPayloadForIOS = isIOS && (isRejectType || isAppointmentReject);
       
-      const isVoipExplicit = !isRejectType && !isAppointmentReject && (
+      // Check if this is an appointment request notification (should NOT use VoIP)
+      const isAppointmentRequestCheck = notificationData.type === 'appointment' || 
+                                        data.eventType === 'APPOINTMENT_CREATED' ||
+                                        (notificationData.title && notificationData.title.toLowerCase().includes('appointment request'));
+      
+      const isVoipExplicit = !isRejectType && !isAppointmentReject && !isAppointmentRequestCheck && (
         options.apnsVoip === true ||
         (typeof data.pushType === 'string' && data.pushType.toLowerCase() === 'voip') ||
         (typeof notificationData.pushType === 'string' && notificationData.pushType.toLowerCase() === 'voip') ||
@@ -473,7 +517,8 @@ class NotificationService {
         if (userApnsProvider) {
           console.log(`[APNs] Provider found for user ${userId}, isDev: ${user.isDev}`);
           const note = new apn.Notification();
-          const isVoip = isVoipExplicit;
+          // For appointment requests, always use regular notifications, never VoIP
+          const isVoip = isVoipExplicit && !isAppointmentRequestCheck;
         
         // Check if this is a reject call notification (for cutting/rejecting calls on iOS)
         // BUT: If type is "reject" or appointment reject, don't treat it as call rejection - it's just a normal reject notification
@@ -490,11 +535,26 @@ class NotificationService {
           note.pushType = 'voip'; // Use VoIP push type for call rejection
           note.expiry = Math.floor(Date.now() / 1000) + 3600;
           // No alert, sound, or badge for call rejection
+          // Include userId and ownUserID in payload (same as reject type)
+          const rejectCallPayload = {
+            status: "decline"
+          };
+          // Include userId and ownUserID if present in data
+          if (data.userId) {
+            rejectCallPayload.userId = String(data.userId);
+          } else if (data.userid) {
+            rejectCallPayload.userId = String(data.userid);
+          }
+          if (data.ownUserID) {
+            rejectCallPayload.ownUserID = String(data.ownUserID);
+          } else if (data.ownuserid) {
+            rejectCallPayload.ownUserID = String(data.ownuserid);
+          }
           note.payload = {
             aps: {
               "content-available": 1
             },
-            status: "decline"
+            ...rejectCallPayload
           };
           console.log(`[APNs] Sending call rejection notification to iOS user ${userId} with payload:`, note.payload);
         } else if (isRejectType || isAppointmentReject) {
@@ -530,9 +590,25 @@ class NotificationService {
           // This matches the exact payload structure required: {"aps":{"content-available":1},"status":"decline"}
           // IMPORTANT: Set payload.aps AFTER setting note.contentAvailable to ensure proper merge
           // The library will merge note.contentAvailable into payload.aps, but we explicitly set it to be sure
+          // For reject type, include userId and ownUserID in payload if present in data
           const customPayload = {
             status: "decline"
           };
+          
+          // Include userId and ownUserID if present in data
+          if (data.userId) {
+            customPayload.userId = String(data.userId);
+          }
+          if (data.ownUserID) {
+            customPayload.ownUserID = String(data.ownUserID);
+          }
+          // Also check for lowercase variants
+          if (data.userid) {
+            customPayload.userId = String(data.userid);
+          }
+          if (data.ownuserid) {
+            customPayload.ownUserID = String(data.ownuserid);
+          }
           
           // Merge with existing payload if any, then add aps
           note.payload = {
@@ -582,15 +658,46 @@ class NotificationService {
         // For reject type or appointment reject, payload is already set above, so skip here
         if (!isRejectType && !isAppointmentReject) {
           if (isVoip && !isRejectCall) {
+            // For VoIP: Include userId and ownUserID in payload (same as reject type)
+            const voipPayload = {
+              ...data,
+              ...(options.customPayload ? { customPayload: options.customPayload } : {}),
+              clickAction: 'FLUTTER_NOTIFICATION_CLICK'
+            };
+            // Ensure userId is included (from data or explicitly)
+            if (data.userId) {
+              voipPayload.userId = String(data.userId);
+            } else if (data.userid) {
+              voipPayload.userId = String(data.userid);
+            }
+            // Ensure ownUserID is included
+            if (data.ownUserID) {
+              voipPayload.ownUserID = String(data.ownUserID);
+            } else if (data.ownuserid) {
+              voipPayload.ownUserID = String(data.ownuserid);
+            }
             note.payload = {
-              extra: {
-                ...data,
-                ...(options.customPayload ? { customPayload: options.customPayload } : {}),
-                clickAction: 'FLUTTER_NOTIFICATION_CLICK'
-              }
+              extra: voipPayload
             };
           } else if (!isRejectCall) {
-            note.payload = { ...data, ...(options.customPayload ? { customPayload: options.customPayload } : {}) };
+            // For regular push notifications: Include userId and ownUserID in payload (same as reject type)
+            const pushPayload = { 
+              ...data, 
+              ...(options.customPayload ? { customPayload: options.customPayload } : {}) 
+            };
+            // Ensure userId is included (from data or explicitly)
+            if (data.userId) {
+              pushPayload.userId = String(data.userId);
+            } else if (data.userid) {
+              pushPayload.userId = String(data.userid);
+            }
+            // Ensure ownUserID is included
+            if (data.ownUserID) {
+              pushPayload.ownUserID = String(data.ownUserID);
+            } else if (data.ownuserid) {
+              pushPayload.ownUserID = String(data.ownuserid);
+            }
+            note.payload = pushPayload;
           }
         }
 
@@ -716,7 +823,21 @@ class NotificationService {
       }
 
       // Handle VoIP token separately ONLY when explicitly requested
-      if (!deliverySucceeded && user.voipToken && isVoipExplicit) {
+      // IMPORTANT: For appointment requests and other non-VoIP notifications, 
+      // do NOT send to VoIP token to prevent duplicate notifications on iOS
+      // Only send to VoIP token if:
+      // 1. APNs delivery failed AND
+      // 2. VoIP is explicitly requested (isVoipExplicit) AND
+      // 3. This is NOT an appointment request notification
+      // Note: isAppointmentRequestCheck is already defined above
+      
+      // Log if we're skipping VoIP for appointment requests
+      if (isAppointmentRequestCheck && user.voipToken && isVoipExplicit) {
+        console.log(`[VoIP] Skipping VoIP notification for appointment request to prevent duplicates - user ${userId}`);
+      }
+      
+      if (!deliverySucceeded && user.voipToken && isVoipExplicit && !isAppointmentRequestCheck) {
+        console.log(`[VoIP] Attempting VoIP notification for user ${userId} (APNs failed, VoIP explicitly requested, not appointment request)`);
         const userApnsProvider = this.getApnsProvider(user.isDev);
         if (userApnsProvider) {
         const voipTopic = getApnsTopic(true);
@@ -730,13 +851,27 @@ class NotificationService {
           voipNote.expiry = Math.floor(Date.now() / 1000) + 3600;
 
           // VoIP notifications don't support alert, sound, or badge
+          // Include userId and ownUserID in VoIP payload (same as reject type)
+          const voipPayloadData = {
+            ...data,
+            ...(options.customPayload ? { customPayload: options.customPayload } : {}),
+            clickAction: 'FLUTTER_NOTIFICATION_CLICK',
+            pushType: 'VoIP'
+          };
+          // Ensure userId is included (from data or explicitly)
+          if (data.userId) {
+            voipPayloadData.userId = String(data.userId);
+          } else if (data.userid) {
+            voipPayloadData.userId = String(data.userid);
+          }
+          // Ensure ownUserID is included
+          if (data.ownUserID) {
+            voipPayloadData.ownUserID = String(data.ownUserID);
+          } else if (data.ownuserid) {
+            voipPayloadData.ownUserID = String(data.ownuserid);
+          }
           voipNote.payload = {
-            extra: {
-              ...data,
-              ...(options.customPayload ? { customPayload: options.customPayload } : {}),
-              clickAction: 'FLUTTER_NOTIFICATION_CLICK',
-              pushType: 'VoIP'
-            }
+            extra: voipPayloadData
           };
 
           console.log(`Using ${user.isDev ? 'sandbox' : 'production'} APNs for VoIP user ${userId}`)
@@ -788,23 +923,39 @@ class NotificationService {
         );
         const isVoipForAndroid = isVoipExplicit && isAndroid && !isAppointmentReject && !isRejectType;
         
-        // For reject type, send ONLY silent data-only payload (no notification title/body, no VoIP)
+        // For reject type on Android, send background/silent notification (data-only, no alert)
+        // This is a background notification that should wake up the app without showing a notification banner
         if (isRejectType) {
-          console.log(`[FCM] Reject type notification - sending SILENT data-only payload (NO notification, NO VoIP, NO body)`);
-        } else if ((isAppointmentReject || isRejectType) && isAndroid) {
-          console.log(`[FCM] Reject notification for Android (type: ${notificationData.type || data.type}) - sending normal notification (NOT VoIP call notification)`);
+          console.log(`[FCM] Reject type notification for Android - sending SILENT background notification (data-only, NO alert, NO title/body)`);
+        } else if (isAppointmentReject && isAndroid) {
+          console.log(`[FCM] Appointment reject notification for Android - sending normal notification (NOT VoIP call notification)`);
         }
         
-        // For reject type notifications, exclude ALL call-related data to prevent showing incoming call UI
+        // For reject type notifications, exclude ALL call-related data and unnecessary fields
         // This includes fields that might trigger call UI on client side
+        // Also exclude userId, userName, and other unnecessary fields to keep payload minimal
         const callRelatedFields = [
           'agoraid', 'channelid', 'agorakey', 'callid', 'calltype', 'iscall', 'pushtype', 'voip',
           'name', 'image', 'screen', 'callername', 'callerid', 'callername', 'callerimage',
           'videocall', 'videocallid', 'callstatus', 'callaction', 'incomingcall'
         ];
+        // Fields to exclude for reject type (keep payload minimal - only essential fields)
+        // For reject type, we need: status, isReject flags, type, userId, and ownUserID
+        // Exclude call-related fields and other unnecessary fields, but KEEP userId and ownUserID
+        const fieldsToExcludeForReject = [
+          ...callRelatedFields,
+          'username', 'fanid', 'starid', 'appointmentid', 
+          'navigateto', 'eventtype', 'starname', 'fanname',
+          'clickaction', 'notificationtype', 'timestamp'
+        ];
         const filteredData = isRejectType 
           ? Object.fromEntries(
-              Object.entries(data).filter(([key]) => !callRelatedFields.includes(key.toLowerCase()))
+              Object.entries(data).filter(([key]) => {
+                const keyLower = key.toLowerCase();
+                // Keep userId and ownUserID - don't exclude them
+                // Only exclude fields in the exclusion list
+                return !fieldsToExcludeForReject.includes(keyLower);
+              })
             )
           : data;
         
@@ -812,44 +963,65 @@ class NotificationService {
           isRejectType,
           originalDataKeys: Object.keys(data),
           filteredDataKeys: Object.keys(filteredData),
-          removedKeys: Object.keys(data).filter(key => callRelatedFields.includes(key.toLowerCase()))
+          removedKeys: Object.keys(data).filter(key => {
+            const keyLower = key.toLowerCase();
+            return callRelatedFields.includes(keyLower) || 
+                   keyLower === 'username' ||
+                   fieldsToExcludeForReject.includes(keyLower);
+          }),
+          userIdIncluded: Object.keys(filteredData).some(key => key.toLowerCase() === 'userid'),
+          ownUserIDIncluded: Object.keys(filteredData).some(key => key.toLowerCase() === 'ownuserid')
         });
         
         // Build data payload
-        const dataPayload = {
-          // Convert all data values to strings for Firebase FCM compatibility
-          ...Object.fromEntries(
-            Object.entries(filteredData).map(([key, value]) => [
-              key, 
-              typeof value === 'string' ? value : JSON.stringify(value)
-            ])
-          ),
-          ...(options.customPayload ? { customPayload: JSON.stringify(options.customPayload) } : {}),
-          clickAction: 'FLUTTER_NOTIFICATION_CLICK',
-          // For reject type, don't add sound
-          ...(isRejectType ? {} : { sound: 'default' }),
-          // Add notification type for Android handling
-          notificationType: notificationData.type || 'general',
-          // Add timestamp for Android
-          timestamp: Date.now().toString(),
-          // Explicitly mark as reject to prevent call UI on client side
-          // Add multiple flags to ensure client doesn't show call UI
-          ...(isRejectType ? { 
-            isReject: 'true', 
-            shouldNotShowCall: 'true', 
-            type: 'reject',
-            isCallNotification: 'false',
-            showCallUI: 'false',
-            isVideoCall: 'false',
-            isIncomingCall: 'false'
-          } : {}),
-        };
+        // For reject type, include essential reject flags + userId and ownUserID from filteredData
+        // For other types, include all filtered data
+        const dataPayload = isRejectType
+          ? {
+              // For reject type: Include essential reject flags + userId and ownUserID
+              isReject: 'true',
+              shouldNotShowCall: 'true',
+              type: 'reject',
+              isCallNotification: 'false',
+              showCallUI: 'false',
+              isVideoCall: 'false',
+              isIncomingCall: 'false',
+              // Include status if present (for appointment reject: "decline")
+              ...(filteredData.status ? { status: String(filteredData.status) } : {}),
+              // Include userId and ownUserID from filteredData (convert to strings)
+              ...(filteredData.userId ? { userId: String(filteredData.userId) } : {}),
+              ...(filteredData.ownUserID ? { ownUserID: String(filteredData.ownUserID) } : {}),
+              // Also check for lowercase variants
+              ...(filteredData.userid ? { userId: String(filteredData.userid) } : {}),
+              ...(filteredData.ownuserid ? { ownUserID: String(filteredData.ownuserid) } : {})
+            }
+          : {
+              // For non-reject types: Include all filtered data + ensure userId and ownUserID are included
+              ...Object.fromEntries(
+                Object.entries(filteredData).map(([key, value]) => [
+                  key, 
+                  typeof value === 'string' ? value : JSON.stringify(value)
+                ])
+              ),
+              ...(options.customPayload ? { customPayload: JSON.stringify(options.customPayload) } : {}),
+              clickAction: 'FLUTTER_NOTIFICATION_CLICK',
+              // Add notification type for Android handling
+              notificationType: notificationData.type || 'general',
+              // Add timestamp for Android
+              timestamp: Date.now().toString(),
+              // Ensure userId is included (same as reject type)
+              ...(filteredData.userId ? { userId: String(filteredData.userId) } : {}),
+              ...(filteredData.userid ? { userId: String(filteredData.userid) } : {}),
+              // Ensure ownUserID is included (same as reject type)
+              ...(filteredData.ownUserID ? { ownUserID: String(filteredData.ownUserID) } : {}),
+              ...(filteredData.ownuserid ? { ownUserID: String(filteredData.ownuserid) } : {})
+            };
         
-        // Build message - for reject type, send ONLY data payload (no notification, no VoIP)
-        // For VoIP on Android, exclude notification parameter
+        // Build message - for reject type on Android, send background/silent notification (data-only, no alert)
+        // For VoIP on Android, exclude notification parameter (data-only for call handling)
         const message = {
           token: user.fcmToken,
-          // For reject type: NO notification parameter (silent data-only)
+          // For reject type: NO notification parameter (silent background notification)
           // For VoIP: NO notification parameter (data-only for call handling)
           // Otherwise: Include notification with title and body
           ...(isRejectType || isVoipForAndroid ? {} : {
@@ -860,7 +1032,7 @@ class NotificationService {
           }),
           data: dataPayload,
           android: {
-            // For reject type: NO notification parameter (silent data-only)
+            // For reject type: NO notification parameter (silent background notification)
             // For VoIP: NO notification parameter (data-only for call handling)
             // Otherwise: Include notification with sound, icon, etc.
             ...(isRejectType || isVoipForAndroid ? {} : {
@@ -889,30 +1061,46 @@ class NotificationService {
               }
             }),
             // Add Android-specific data
-            data: {
-              // Convert all data values to strings for Firebase FCM compatibility
-              // For reject type, use filtered data (without call-related fields)
-              ...Object.fromEntries(
-                Object.entries(filteredData).map(([key, value]) => [
-                  key, 
-                  typeof value === 'string' ? value : JSON.stringify(value)
-                ])
-              ),
-              ...(options.customPayload ? { customPayload: JSON.stringify(options.customPayload) } : {}),
-              clickAction: 'FLUTTER_NOTIFICATION_CLICK',
-              notificationType: notificationData.type || 'general',
-              timestamp: Date.now().toString(),
-              // Explicitly mark as reject to prevent call UI on client side
-              // Add multiple flags to ensure client doesn't show call UI
-              ...(isRejectType ? { 
-                isReject: 'true', 
-                shouldNotShowCall: 'true',
-                isCallNotification: 'false',
-                showCallUI: 'false',
-                isVideoCall: 'false',
-                isIncomingCall: 'false'
-              } : {}),
-            },
+            // For reject type, use minimal payload with userId and ownUserID (same as dataPayload)
+            // For other types, include all filtered data
+            data: isRejectType
+              ? {
+                  // For reject type: Essential reject flags + userId and ownUserID
+                  isReject: 'true',
+                  shouldNotShowCall: 'true',
+                  type: 'reject',
+                  isCallNotification: 'false',
+                  showCallUI: 'false',
+                  isVideoCall: 'false',
+                  isIncomingCall: 'false',
+                  // Include status if present (for appointment reject: "decline")
+                  ...(filteredData.status ? { status: String(filteredData.status) } : {}),
+                  // Include userId and ownUserID from filteredData (convert to strings)
+                  ...(filteredData.userId ? { userId: String(filteredData.userId) } : {}),
+                  ...(filteredData.ownUserID ? { ownUserID: String(filteredData.ownUserID) } : {}),
+                  // Also check for lowercase variants
+                  ...(filteredData.userid ? { userId: String(filteredData.userid) } : {}),
+                  ...(filteredData.ownuserid ? { ownUserID: String(filteredData.ownuserid) } : {})
+                }
+              : {
+                  // For non-reject types: Include all filtered data
+                  ...Object.fromEntries(
+                    Object.entries(filteredData).map(([key, value]) => [
+                      key, 
+                      typeof value === 'string' ? value : JSON.stringify(value)
+                    ])
+                  ),
+                  ...(options.customPayload ? { customPayload: JSON.stringify(options.customPayload) } : {}),
+                  clickAction: 'FLUTTER_NOTIFICATION_CLICK',
+                  notificationType: notificationData.type || 'general',
+                  timestamp: Date.now().toString(),
+                  // Ensure userId is explicitly included (same as reject type)
+                  ...(filteredData.userId ? { userId: String(filteredData.userId) } : {}),
+                  ...(filteredData.userid ? { userId: String(filteredData.userid) } : {}),
+                  // Ensure ownUserID is explicitly included (same as reject type)
+                  ...(filteredData.ownUserID ? { ownUserID: String(filteredData.ownUserID) } : {}),
+                  ...(filteredData.ownuserid ? { ownUserID: String(filteredData.ownuserid) } : {})
+                },
             // Add Android priority
             priority: 'high',
             // Add TTL for Android
@@ -930,11 +1118,11 @@ class NotificationService {
         
         console.log(`[FCM DEBUG] Complete message structure for user ${userId}:`, JSON.stringify(message, null, 2));
         
-        console.log(`[FCM] Sending ${isRejectType ? 'REJECT (silent data-only)' : isVoipForAndroid ? 'VoIP (data-only)' : 'notification'} to Android user ${userId}`, {
+        console.log(`[FCM] Sending ${isRejectType ? 'REJECT (silent background, data-only)' : isVoipForAndroid ? 'VoIP (data-only)' : 'notification'} to Android user ${userId}`, {
           isRejectType,
           isVoip: isVoipForAndroid,
-          title: isRejectType || isVoipForAndroid ? 'N/A (data-only)' : notificationData.title,
-          body: isRejectType || isVoipForAndroid ? 'N/A (data-only)' : notificationData.body,
+          title: (isRejectType || isVoipForAndroid) ? 'N/A (data-only)' : notificationData.title,
+          body: (isRejectType || isVoipForAndroid) ? 'N/A (data-only)' : notificationData.body,
           channelId: isVoipForAndroid ? 'N/A (data-only)' : 'baroni_notifications',
           priority: 'high',
           fcmTokenPreview: user.fcmToken ? user.fcmToken.substring(0, 20) + '...' : 'null',

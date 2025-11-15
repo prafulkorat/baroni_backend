@@ -1,4 +1,5 @@
 import { body, param, query } from 'express-validator';
+import mongoose from 'mongoose';
 
 // Common validation rules
 const issueTypeValidation = body('issueType')
@@ -62,10 +63,22 @@ export const updateSupportTicketValidation = [
 ];
 
 // Get Support Ticket Validation
+// Accept either MongoDB ObjectId or ticketId format (#AT0000002)
 export const getSupportTicketValidation = [
   param('id')
-    .isMongoId()
-    .withMessage('Invalid ticket ID')
+    .notEmpty()
+    .withMessage('Ticket ID is required')
+    .custom((value) => {
+      // Accept MongoDB ObjectId format
+      if (mongoose.Types.ObjectId.isValid(value)) {
+        return true;
+      }
+      // Accept ticketId format (#AT0000002)
+      if (typeof value === 'string' && /^#AT\d{7}$/.test(value)) {
+        return true;
+      }
+      throw new Error('Invalid ticket ID format. Must be MongoDB ObjectId or ticketId (#AT0000002)');
+    })
 ];
 
 // Delete Support Ticket Validation

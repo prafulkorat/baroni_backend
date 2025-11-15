@@ -2,6 +2,7 @@ import Notification from '../models/Notification.js';
 import LiveShowAttendance from '../models/LiveShowAttendance.js';
 import LiveShow from '../models/LiveShow.js';
 import notificationService from '../services/notificationService.js';
+import mongoose from 'mongoose';
 
 /**
  * Debug user notification settings
@@ -323,6 +324,14 @@ export const sendNotificationToUser = async (req, res) => {
       return res.status(400).json({ success: false, message: 'userId, title, and body are required' });
     }
 
+    // Validate userId is a valid ObjectId
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({ 
+        success: false, 
+        message: `Invalid userId format. Expected a valid ObjectId, but received: ${userId}` 
+      });
+    }
+
     // Normalize VoIP type to pushType for APNs
     const normalizedType = typeof type === 'string' ? type.toLowerCase() : type;
     const enrichedData = { ...data };
@@ -364,6 +373,15 @@ export const sendNotificationToMultipleUsers = async (req, res) => {
 
     if (!Array.isArray(userIds) || userIds.length === 0 || !title || !body) {
       return res.status(400).json({ success: false, message: 'userIds (non-empty array), title, and body are required' });
+    }
+
+    // Validate all userIds are valid ObjectIds
+    const invalidUserIds = userIds.filter(id => !mongoose.Types.ObjectId.isValid(id));
+    if (invalidUserIds.length > 0) {
+      return res.status(400).json({ 
+        success: false, 
+        message: `Invalid userId format(s). Expected valid ObjectIds, but received invalid values: ${invalidUserIds.join(', ')}` 
+      });
     }
 
     const result = await notificationService.sendToMultipleUsers(
