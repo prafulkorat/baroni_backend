@@ -150,9 +150,12 @@ class NotificationScheduler {
         // Case 1: Send reminder 10 minutes before appointment (exactly 9-11 minutes window)
         // This ensures we catch the appointment in the 10-minute window
         // Case 2: Send notification at exact appointment time (at start time or after, but NOT 1 minute before)
-        // Changed: Do NOT send notification 1 minute before - only send at start time (0) or after (negative = already started)
+        // IMPORTANT: Do NOT send notification 1 minute before - only send at start time (0) or after (negative = already started)
+        // Changed condition to ensure we NEVER send when minutesUntilAppointment > 0 (i.e., before appointment time)
         const shouldSend10MinReminder = minutesUntilAppointment >= 9 && minutesUntilAppointment <= 11 && !appointment.reminderSent;
-        const shouldSendStartNotification = minutesUntilAppointment <= 0 && minutesUntilAppointment >= -1; // At start time (0) or up to 1 minute after, but NOT 1 minute before
+        // Only send when appointment has started (0 or negative minutes), NOT before (positive minutes)
+        // This prevents sending notifications 1 minute before appointment
+        const shouldSendStartNotification = minutesUntilAppointment <= 0 && minutesUntilAppointment >= -5; // At start time (0) or up to 5 minutes after, but NOT before
         
         if (shouldSend10MinReminder) {
           // 10-minute reminder before appointment (UTC-based)
