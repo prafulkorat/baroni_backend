@@ -202,21 +202,40 @@ class NotificationScheduler {
             console.error(`[AppointmentReminder] ✗ Failed to send 10-min reminder for appointment ${appointment._id}:`, notifyError);
           }
         } else if (shouldSendStartNotification) {
-          // Appointment is starting NOW (within ±1 minute window) - UTC-based
-          // Check if we already sent a reminder notification (10 min before)
+          // Appointment is starting NOW (within 0 to -5 minutes window) - UTC-based
+          // IMPORTANT: Check if we already sent a start notification recently to prevent duplicates
           const freshAppointment = await Appointment.findById(appointment._id);
           
-          // Skip start notification if we already sent a 10-minute reminder recently (within last 15 minutes)
-          // This prevents duplicate notifications to fan - they already got notified 10 minutes ago
-          const recentReminder = freshAppointment?.reminderSentAt && 
-            (nowUTC.getTime() - freshAppointment.reminderSentAt.getTime()) < (15 * 60 * 1000); // Within last 15 minutes
+          // Check if a start notification was already sent within the last 6 minutes
+          // This prevents duplicate notifications when cron runs every minute
+          const startNotificationAlreadySent = freshAppointment?.reminderSentAt && 
+            (nowUTC.getTime() - freshAppointment.reminderSentAt.getTime()) < (6 * 60 * 1000); // Within last 6 minutes
           
-          if (recentReminder) {
+          if (startNotificationAlreadySent) {
             skippedAlreadySent++;
-            console.log(`[AppointmentReminder] Skipping start notification for appointment ${appointment._id} - fan already received 10-min reminder`);
-            console.log(`[AppointmentReminder]   - Reminder was sent at: ${freshAppointment.reminderSentAt?.toISOString()}`);
-            console.log(`[AppointmentReminder]   - Time since reminder: ${Math.floor((nowUTC.getTime() - freshAppointment.reminderSentAt.getTime()) / (60 * 1000))} minutes`);
-            // Still send to star only (if needed)
+            const minutesSinceLastNotification = Math.floor((nowUTC.getTime() - freshAppointment.reminderSentAt.getTime()) / (60 * 1000));
+            console.log(`[AppointmentReminder] ⚠ Skipping START notification for appointment ${appointment._id} - already sent ${minutesSinceLastNotification} minute(s) ago`);
+            console.log(`[AppointmentReminder]   - Last notification sent at: ${freshAppointment.reminderSentAt?.toISOString()}`);
+            console.log(`[AppointmentReminder]   - Current time: ${nowUTC.toISOString()}`);
+            continue;
+          }
+          
+          // Check if we sent a 10-minute reminder recently (6-15 minutes ago)
+          // If yes, we might want to send start notification only to star (not fan) to avoid duplicate
+          // But first check if we already sent a start notification (within last 6 min) - if yes, skip entirely
+          const timeSinceLastNotification = freshAppointment?.reminderSentAt ? 
+            (nowUTC.getTime() - freshAppointment.reminderSentAt.getTime()) : Infinity;
+          const recent10MinReminder = timeSinceLastNotification >= (6 * 60 * 1000) && // More than 6 minutes ago
+                                      timeSinceLastNotification < (15 * 60 * 1000); // But within last 15 minutes
+          
+          if (recent10MinReminder) {
+            // A 10-min reminder was sent 6-15 minutes ago
+            // Now we're at start time, so we should send start notification only to star (fan already got 10-min reminder)
+            // But we need to check if we already sent start notification to star in a previous cron run
+            // Since reminderSentAt was set 6-15 minutes ago, we know no start notification was sent yet
+            console.log(`[AppointmentReminder] 10-min reminder was sent ${Math.floor(timeSinceLastNotification / (60 * 1000))} minutes ago`);
+            console.log(`[AppointmentReminder] Sending START notification only to star (fan already got 10-min reminder)`);
+            
             try {
               // Send start notification only to star (not fan) since fan already got reminder
               await NotificationHelper.sendAppointmentNotification('APPOINTMENT_REMINDER', appointment, {
@@ -226,8 +245,15 @@ class NotificationScheduler {
                 isStartingNow: true,
                 skipFan: true // Flag to skip fan notification
               });
+              // Update reminder sent timestamp to prevent duplicate start notifications
+              await Appointment.findByIdAndUpdate(appointment._id, {
+                reminderSent: true,
+                reminderSentAt: nowUTC
+              });
+              remindersSent++;
               console.log(`[AppointmentReminder] ✓ Sent START notification only to star (fan skipped - already notified)`);
             } catch (notifyError) {
+              errors++;
               console.error(`[AppointmentReminder] ✗ Failed to send start notification to star:`, notifyError);
             }
             continue;
@@ -237,10 +263,10 @@ class NotificationScheduler {
           console.log(`[AppointmentReminder]   - Appointment UTC time: ${scheduledStartTimeUTC.toISOString()}`);
           console.log(`[AppointmentReminder]   - Current UTC time: ${nowUTC.toISOString()}`);
           console.log(`[AppointmentReminder]   - Minutes from now: ${minutesUntilAppointment} (appointment ${minutesUntilAppointment >= 0 ? 'starting' : 'started'})`);
-          console.log(`[AppointmentReminder]   - No recent reminder found, sending to both users`);
+          console.log(`[AppointmentReminder]   - No recent notification found, sending to both users`);
           
           try {
-            // Send start notification to both star and fan (only if no recent reminder was sent)
+            // Send start notification to both star and fan (only if no recent notification was sent)
             await NotificationHelper.sendAppointmentNotification('APPOINTMENT_REMINDER', appointment, {
               currentUserId: null, // Send to both users
               minutesUntil: 0, // At start time
@@ -248,7 +274,8 @@ class NotificationScheduler {
               isStartingNow: true
             });
             
-            // Update reminder sent timestamp (reuse the same field) - store UTC time
+            // Update reminder sent timestamp to prevent duplicate notifications
+            // This ensures we don't send another notification for the next 6 minutes
             await Appointment.findByIdAndUpdate(appointment._id, {
               reminderSent: true,
               reminderSentAt: nowUTC
